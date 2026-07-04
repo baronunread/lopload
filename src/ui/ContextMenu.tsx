@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface ContextMenuItem {
   label: string;
@@ -20,6 +20,24 @@ export interface ContextMenuProps {
  */
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  // Menu starts positioned at the requested point, then is nudged back on
+  // screen (in a layout effect, before paint) if it would overflow the
+  // viewport — e.g. opened from a row near the right/bottom edge on a
+  // narrow/touch viewport where there's no room to the point's right.
+  const [pos, setPos] = useState({ x, y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const margin = 8;
+    const maxX = window.innerWidth - rect.width - margin;
+    const maxY = window.innerHeight - rect.height - margin;
+    setPos({ x: Math.max(margin, Math.min(x, maxX)), y: Math.max(margin, Math.min(y, maxY)) });
+    // Re-run only when the requested point changes — items/onClose don't
+    // affect positioning.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [x, y]);
 
   useEffect(() => {
     function handlePointerDown(e: MouseEvent) {
@@ -40,7 +58,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     <div
       ref={ref}
       role="menu"
-      style={{ position: "fixed", top: y, left: x }}
+      style={{ position: "fixed", top: pos.y, left: pos.x }}
       className="z-50 min-w-40 rounded-lg bg-kumo-base p-1 shadow-lg ring-1 ring-kumo-line"
     >
       {items.map((item) => (

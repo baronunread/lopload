@@ -7,7 +7,7 @@ import {
   Input,
   Table,
 } from "@cloudflare/kumo";
-import { FolderPlusIcon, HouseIcon } from "@phosphor-icons/react";
+import { DotsThreeVerticalIcon, FolderPlusIcon, HouseIcon } from "@phosphor-icons/react";
 import type { RemoteEntry } from "../lib/types";
 import { useServices } from "./services";
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
@@ -119,7 +119,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         setMenu({ x: e.clientX, y: e.clientY });
       }}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Breadcrumbs>
           <span
             className="contents"
@@ -171,18 +171,22 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       {!loading && rows.length === 0 ? (
         <Empty title="This folder is empty" description="Drag files in, or use Upload." />
       ) : (
-        <Table>
+        <Table layout="fixed">
           <Table.Header>
             <Table.Row>
-              <Table.Head>Name</Table.Head>
-              <Table.Head>Size</Table.Head>
-              <Table.Head>Modified</Table.Head>
+              <Table.Head className="w-auto p-2 sm:p-3">Name</Table.Head>
+              <Table.Head className="w-16 p-2 sm:w-24 sm:p-3">Size</Table.Head>
+              <Table.Head className="hidden w-32 p-2 sm:table-cell sm:p-3">Modified</Table.Head>
+              <Table.Head className="w-9 p-2 sm:w-12 sm:p-3">
+                <span className="sr-only">Actions</span>
+              </Table.Head>
             </Table.Row>
           </Table.Header>
           <Table.Body>
             {rows.map((entry) => (
               <Table.Row
                 key={entry.key}
+                className="h-12 sm:h-auto"
                 onDoubleClick={() => {
                   if (entry.kind === "folder") navigate(entry.key);
                 }}
@@ -192,20 +196,35 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                   setMenu({ x: e.clientX, y: e.clientY, entry });
                 }}
               >
-                <Table.Cell className="flex items-center gap-2">
+                <Table.Cell className="flex min-w-0 items-center gap-2 p-2 sm:p-3">
                   <Thumbnail
                     connectionId={connectionId}
                     entryKey={entry.key}
                     name={entry.name}
                     kind={entry.kind}
                   />
-                  <span className="lopload-body">{entry.name}</span>
+                  <span className="lopload-body truncate">{entry.name}</span>
                 </Table.Cell>
-                <Table.Cell className="lopload-body text-kumo-subtle">
+                <Table.Cell className="lopload-body whitespace-nowrap p-2 text-kumo-subtle sm:p-3">
                   {entry.kind === "file" ? formatBytes(entry.size ?? 0) : "—"}
                 </Table.Cell>
-                <Table.Cell className="lopload-body text-kumo-subtle">
+                <Table.Cell className="hidden whitespace-nowrap p-2 lopload-body text-kumo-subtle sm:table-cell sm:p-3">
                   {formatDate(entry.lastModified)}
+                </Table.Cell>
+                <Table.Cell className="p-1 text-right sm:p-2">
+                  <Button
+                    variant="ghost"
+                    shape="square"
+                    size="sm"
+                    aria-label={`Actions for ${entry.name}`}
+                    icon={DotsThreeVerticalIcon}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setMenu({ x: rect.left, y: rect.bottom, entry });
+                    }}
+                  />
                 </Table.Cell>
               </Table.Row>
             ))}

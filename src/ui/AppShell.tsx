@@ -63,20 +63,22 @@ function AppShellInner() {
 
   return (
     <div className="flex h-screen flex-col bg-kumo-canvas">
-      <header className="flex items-center justify-between border-b border-kumo-line bg-kumo-base px-4 py-3">
-        <h1 className="lopload-heading text-xl font-semibold">Lopload</h1>
-        <ConnectionSwitcher
-          connections={connections}
-          currentId={currentId}
-          onSwitch={switchTo}
-          onAddStorage={() => setShowSetup(true)}
-        />
+      <header className="flex items-center justify-between gap-3 border-b border-kumo-line bg-kumo-base px-4 py-3">
+        <h1 className="lopload-heading shrink-0 text-xl font-semibold">Lopload</h1>
+        <div className="min-w-0">
+          <ConnectionSwitcher
+            connections={connections}
+            currentId={currentId}
+            onSwitch={switchTo}
+            onAddStorage={() => setShowSetup(true)}
+          />
+        </div>
       </header>
-      <main className="grid min-h-0 flex-1 grid-cols-2 gap-4 p-4">
-        <section className="min-h-0 overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line">
+      <main className="grid flex-1 grid-cols-1 gap-4 overflow-auto p-4 md:grid-cols-2 md:overflow-hidden">
+        <section className="min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line md:min-h-0">
           <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
         </section>
-        <section className="min-h-0 overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line">
+        <section className="min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line md:min-h-0">
           <TransferPanel
             connectionId={current.id}
             prefix={prefix}

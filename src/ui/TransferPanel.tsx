@@ -104,7 +104,7 @@ export function TransferPanel({ connectionId, prefix, onBatchFinished }: Transfe
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => e.preventDefault()}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="lopload-heading text-lg font-semibold">Transfers</h2>
         <Button variant="primary" icon={UploadSimpleIcon} onClick={() => void handlePick()}>
           Upload
@@ -118,13 +118,13 @@ export function TransferPanel({ connectionId, prefix, onBatchFinished }: Transfe
           {visible.map((t) => (
             <li
               key={t.id}
-              className="lopload-settle flex items-center justify-between gap-3 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
+              className="lopload-settle flex flex-col gap-3 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="min-w-0 lopload-body">
                 <p className="truncate font-medium">{t.key.split("/").pop()}</p>
                 <p className="text-xs text-kumo-subtle">{formatBytes(t.size)}</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <StatusChip
                   state={t.state}
                   onRetry={t.state.kind === "failed" ? () => void services.engine.retry(t.id) : undefined}
@@ -133,7 +133,7 @@ export function TransferPanel({ connectionId, prefix, onBatchFinished }: Transfe
                   <button
                     type="button"
                     aria-label={`Dismiss ${t.key}`}
-                    className="text-kumo-subtle hover:text-kumo-default"
+                    className="flex h-8 w-8 items-center justify-center text-kumo-subtle hover:text-kumo-default"
                     onClick={() => {
                       setDismissed((prev) => new Set(prev).add(t.id));
                       void services.engine.dismiss(t.id);

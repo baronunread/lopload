@@ -21,10 +21,13 @@ export function ConnectionSwitcher({
     <Select
       aria-label="Storage connection"
       placeholder="Choose a storage connection"
+      className="w-full min-w-0 max-w-full sm:max-w-xs"
       value={currentId ?? undefined}
-      renderValue={(value) =>
-        connections.find((c) => c.id === value)?.name ?? String(value)
-      }
+      renderValue={(value) => (
+        <span className="block truncate">
+          {connections.find((c) => c.id === value)?.name ?? String(value)}
+        </span>
+      )}
       onValueChange={(value) => {
         if (value === ADD_STORAGE) {
           onAddStorage();

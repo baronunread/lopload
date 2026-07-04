@@ -62,4 +62,30 @@ describe("RemoteBrowser", () => {
     );
     await screen.findByText("This folder is empty");
   });
+
+  test("the per-row '⋯' touch trigger opens the same context menu as right-click", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+
+    await screen.findByText("readme.txt");
+
+    // No menu open yet.
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Actions for readme.txt" }));
+
+    const menu = await screen.findByRole("menu");
+    expect(menu).toBeInTheDocument();
+    // Entry-specific actions (only shown when a row entry is targeted).
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+  });
 });
