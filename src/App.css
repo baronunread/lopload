@@ -13,7 +13,11 @@
 
 body {
   margin: 0;
-  background-color: var(--color-kumo-canvas, #f7f8fa);
+  /* No hardcoded fallback hex here: --color-kumo-canvas is always defined
+     by src/ui/theme.css (imported before this file takes effect via Kumo's
+     cascade), and a flat fallback would defeat the light-dark() switch
+     the moment the var briefly isn't resolved. */
+  background-color: var(--color-kumo-canvas);
 }
 
 h1,

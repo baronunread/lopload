@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-mode="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
@@ -12,6 +12,13 @@
       @fontsource-nunito / @fontsource-inter package and a <link> or
       @font-face here instead of relying on a public CDN (Tauri webviews
       are offline-capable and CSP may block remote font fetches).
+
+      data-mode="dark" is static (not JS-injected) so dark is the default
+      look with zero flash-of-light-mode on load. Kumo switches its
+      light-dark() token pairs (see src/ui/theme.css) off this attribute's
+      effect on the computed `color-scheme` property, set in
+      node_modules/@cloudflare/kumo/dist/styles/kumo-binding.css. A future
+      light/dark toggle can just flip this attribute at runtime.
     -->
     <title>Lopload</title>
   </head>
