@@ -52,10 +52,9 @@
 }
 
 /* Typography per spec: rounded/friendly for headings, Inter for file
-   names/sizes where small-size legibility matters. No bundled font files
-   in this workstream (no new deps) — system fallbacks declared here so
-   the integration agent can drop in real font files later without
-   touching component code. */
+   names/sizes where small-size legibility matters. Font files are
+   self-hosted via @fontsource/nunito and @fontsource/inter, imported in
+   main.tsx; the system-ui fallbacks below still apply before those load. */
 :root {
   --font-heading: "Nunito", ui-rounded, system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;

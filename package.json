@@ -17,6 +17,8 @@
     "@aws-sdk/client-s3": "^3.1079.0",
     "@aws-sdk/s3-request-presigner": "^3.1079.0",
     "@cloudflare/kumo": "^2.6.0",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/nunito": "^5.2.7",
     "@phosphor-icons/react": "^2.1.10",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
