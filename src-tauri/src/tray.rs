@@ -22,13 +22,17 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .expect("bundle must configure a default window icon");
+    // Menu bar icons follow a different convention than the Dock icon: a
+    // minimal monochrome "template image" (solid black glyph, transparent
+    // background, no backdrop) that macOS re-tints for light/dark menu bars.
+    // Reusing the colorful Dock icon here would look out of place next to
+    // other apps' menu-bar glyphs, so load a dedicated silhouette asset and
+    // mark it as a template via `icon_as_template`.
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon-template.png"))?;
 
     TrayIconBuilder::with_id("main-tray")
         .icon(icon)
+        .icon_as_template(true)
         .menu(&menu)
         .tooltip("Lopload")
         .show_menu_on_left_click(true)
