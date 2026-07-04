@@ -6,20 +6,21 @@
  *
  * Implementation: a `body::before` pseudo-element (no new DOM node, so it
  * can't interfere with layout, hit-testing, or any concurrent AppShell.tsx
- * work) painted with an inline SVG `feTurbulence` + `feColorMatrix` filter
- * encoded as a data URI `background-image` — fully self-contained, no new
- * assets or dependencies. It's fixed + full-viewport + `pointer-events: none`
- * + `aria-hidden`-equivalent (no text/content, decorative only) and tiled at
- * a modest 200px so the repeat isn't perceptible.
+ * work) painted with an inline SVG `feTurbulence` filter encoded as a data
+ * URI `background-image` — fully self-contained, no new assets or
+ * dependencies. It's fixed + full-viewport + `pointer-events: none` +
+ * decorative only (no text/content) and tiled at a modest size so the
+ * repeat isn't perceptible.
  *
- * Opacity is intentionally tiny (6%) and blend mode is `overlay`, which lets
- * the grain darken/lighten relative to whatever's underneath rather than
- * sitting on top as a flat translucent haze — this is what keeps it in
- * "tactile paper" territory instead of "visible static" territory. `overlay`
- * behaves reasonably in both the dark (default) and light palettes defined
- * in theme.css, since it scales its effect off the local pixel value in the
- * layers below rather than assuming one canvas color; no per-theme branch
- * is needed for a bar this subtle.
+ * The turbulence output is converted straight to an *alpha* mask
+ * (`feColorMatrix type="luminanceToAlpha"`) painted as plain white speckle,
+ * rather than relying on `mix-blend-mode: overlay` against the page
+ * background. Overlay's effect collapses toward zero at extreme luminances
+ * (it's designed to punch up midtones), so against our near-black default
+ * canvas the earlier version was mathematically almost invisible — visible
+ * math, not a rendering bug, but the wrong blend mode for a dark-by-default
+ * app. An alpha-mask speckle is visible at a flat, predictable strength
+ * regardless of what's underneath, light or dark.
  */
 
 body::before {
@@ -28,9 +29,8 @@ body::before {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='luminanceToAlpha'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='2.2' intercept='-0.55'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' fill='white' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
-  background-size: 200px 200px;
-  mix-blend-mode: overlay;
-  opacity: 0.06;
+  background-size: 160px 160px;
+  opacity: 0.09;
 }
