@@ -1,0 +1,8 @@
+/* Tailwind + Kumo entry point. Order matters (per @cloudflare/kumo's README):
+   1. @source so Tailwind's scanner sees the utility classes Kumo's
+      compiled components reference (it doesn't scan node_modules by default)
+   2. Kumo's tailwind stylesheet, which registers its @theme tokens
+   3. Tailwind itself, so those tokens exist before utilities are generated */
+@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "@cloudflare/kumo/styles/tailwind";
+@import "tailwindcss";

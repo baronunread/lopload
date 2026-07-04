@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import "@cloudflare/kumo/styles";
+import "./index.css";
 // Self-hosted font files backing the --font-heading/--font-body stacks in
 // ui/theme.css (per warren-app-spec.md's Nunito/Inter typography pairing).
 import "@fontsource/nunito/600.css";
