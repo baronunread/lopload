@@ -324,7 +324,7 @@ class RealServices implements AppServices {
     return files;
   }
 
-  onFileDrop(cb: (paths: string[]) => void): () => void {
+  onFileDrop(cb: (files: PickedFile[]) => void): () => void {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
 
@@ -344,7 +344,10 @@ class RealServices implements AppServices {
     };
   }
 
-  private async expandAndEmit(paths: string[], cb: (paths: string[]) => void): Promise<void> {
+  private async expandAndEmit(
+    paths: string[],
+    cb: (files: PickedFile[]) => void,
+  ): Promise<void> {
     const isDirectory = async (path: string): Promise<boolean> => {
       const info = await stat(path);
       return info.isDirectory;
@@ -357,12 +360,11 @@ class RealServices implements AppServices {
       size: (path: string) => fileSize(path),
       joinPath: (dirPath: string, childName: string) => `${dirPath}/${childName}`,
     });
-    // The UI's onFileDrop contract only carries paths; enqueueFiles rebuilds
-    // PickedFile from them and loses the relative-name prefix computed by
-    // expandDroppedPaths. Drop expansion for nested folders is therefore
-    // only fully faithful when driven through enqueueDropped() below —
-    // TransferPanel calls the plain paths-callback for flat drops.
-    cb(expanded.map((f) => f.path));
+    // `name` here is the "/"-joined relative path computed by
+    // expandDroppedPaths (includes the dropped folder's own name for
+    // nested files), so the remote key built as `prefix + name` preserves
+    // folder structure. `size` is the real file size, not a placeholder.
+    cb(expanded.map((f) => ({ path: f.path, name: f.name, size: f.size })));
   }
 
   setBadgeCount(count: number): void {

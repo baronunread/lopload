@@ -72,14 +72,9 @@ export function TransferPanel({ connectionId, prefix, onBatchFinished }: Transfe
   }, [transfers, dismissed, services]);
 
   useEffect(() => {
-    return services.onFileDrop((paths) => {
+    return services.onFileDrop((files) => {
       setDragging(false);
       dragCounter.current = 0;
-      const files = paths.map((path) => ({
-        path,
-        name: path.split(/[/\\]/).pop() ?? path,
-        size: 0,
-      }));
       void services.engine.enqueueFiles(connectionId, prefix, files);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

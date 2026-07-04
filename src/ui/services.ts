@@ -74,8 +74,10 @@ export interface AppServices {
   keychain: KeychainService;
   /** Opens the native file picker; resolves with the files chosen (recursive for folders). */
   pickFiles(): Promise<PickedFile[]>;
-  /** Subscribes to OS-level drag-and-drop of files onto the window. */
-  onFileDrop(cb: (paths: string[]) => void) : () => void;
+  /** Subscribes to OS-level drag-and-drop of files onto the window. Folders
+   * are expanded recursively; each resulting file carries its size and a
+   * name that preserves the relative path under any dropped folder. */
+  onFileDrop(cb: (files: PickedFile[]) => void): () => void;
   /** Updates the dock/taskbar badge to reflect the current failed-transfer count. */
   setBadgeCount(count: number): void;
   /** Fires a native OS notification. */
