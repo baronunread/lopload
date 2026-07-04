@@ -4,6 +4,7 @@ import type { Connection } from "../lib/types";
 import { useServices } from "./services";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { SetupScreen } from "./SetupScreen";
+import { WelcomeScreen } from "./WelcomeScreen";
 import { RemoteBrowser } from "./RemoteBrowser";
 import { TransferPanel } from "./TransferPanel";
 
@@ -21,8 +22,6 @@ function AppShellInner() {
       if (list.length > 0) {
         setCurrentId(list[0].id);
         setPrefix(list[0].lastPrefix);
-      } else {
-        setShowSetup(true);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -47,6 +46,10 @@ function AppShellInner() {
     setCurrentId(conn.id);
     setPrefix(conn.lastPrefix);
     setShowSetup(false);
+  }
+
+  if (!showSetup && connections.length === 0) {
+    return <WelcomeScreen onGetStarted={() => setShowSetup(true)} />;
   }
 
   if (showSetup || !current) {

@@ -55,6 +55,34 @@ const documentsTransfer: Transfer = {
   updatedAt: 0,
 };
 
+describe("AppShell first run", () => {
+  test("zero connections shows the welcome screen, then the setup form after the CTA", async () => {
+    const services = createFakeServices({ connections: [] });
+
+    render(
+      <ServicesProvider value={services}>
+        <AppShell />
+      </ServicesProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Drag files in, watch them upload, know for certain they arrived."),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add a storage connection" }));
+
+    expect(screen.getByLabelText("Endpoint URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("Access key")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Drag files in, watch them upload, know for certain they arrived."),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("AppShell connection switcher", () => {
   test("switching connections resets the browser to that connection's lastPrefix and isolates transfers", async () => {
     const services = createFakeServices({

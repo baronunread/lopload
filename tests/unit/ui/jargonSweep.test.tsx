@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import { SetupScreen } from "../../../src/ui/SetupScreen";
+import { WelcomeScreen } from "../../../src/ui/WelcomeScreen";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { TransferPanel } from "../../../src/ui/TransferPanel";
 import { ConnectionSwitcher } from "../../../src/ui/ConnectionSwitcher";
@@ -55,6 +56,10 @@ describe("jargon sweep", () => {
       entriesByPrefix: { "conn-1::": entries },
       transfersByConnection: { "conn-1": transfers },
     });
+
+    const welcome = render(<WelcomeScreen onGetStarted={() => {}} />);
+    assertNoJargon(welcome.container);
+    welcome.unmount();
 
     const setup = render(
       <ServicesProvider value={services}>
