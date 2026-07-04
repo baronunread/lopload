@@ -18,7 +18,14 @@ export async function keychainSet(
 }
 
 export async function keychainGet(connectionId: string): Promise<Credentials | null> {
-  return invoke<Credentials | null>("keychain_get", { connectionId });
+  try {
+    return await invoke<Credentials>("keychain_get", { connectionId });
+  } catch {
+    // The Rust command rejects (rather than resolving null) when no entry
+    // exists for this connection — normalize that to null so callers can
+    // treat "no credentials yet" as a value, not an exception to unwrap.
+    return null;
+  }
 }
 
 export async function keychainDelete(connectionId: string): Promise<void> {
