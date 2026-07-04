@@ -94,13 +94,75 @@ tests/
 
 ## Spec fidelity checklist (verify at the end)
 
-- [ ] exact five status states with labels from spec table
-- [ ] failed state sticky in list + dock badge + native notification
-- [ ] resumable across process restart (persisted uploadId + part ETags)
-- [ ] silent orphan sweep
-- [ ] test-connection = small write + delete, plain-language result
-- [ ] per-connection last-folder memory
-- [ ] breadcrumbs, right-click menu (rename/delete/new folder/copy link)
-- [ ] no storage jargon anywhere in UI strings
-- [ ] pastel token overrides + Nunito/Inter fonts
-- [ ] thumbnails for images/videos
+- [x] exact five status states with labels from spec table — `src/ui/format.ts`'s
+      `STATUS_LABELS`/`chipInfo` map every `TransferState` to the spec's exact
+      wording ("Queued", "Sending — N%", "Checking", "Uploaded ✓", "Couldn't
+      send — tap to retry"); rendered by `src/ui/StatusChip.tsx` and asserted
+      by `tests/unit/ui/StatusChip.test.tsx`.
+- [x] failed state sticky in list + dock badge + native notification —
+      `TransferPanel.tsx` never auto-removes a failed transfer (only
+      `dismiss()` does, on explicit user action); its badge-count effect
+      counts undismissed failures into `services.setBadgeCount()`
+      (`src-tauri/src/tray.rs::set_badge_count`); `RealServices.onEngineEvent`
+      fires a native notification on `batch-finished` when `failed > 0`.
+- [x] resumable across process restart (persisted uploadId + part ETags) —
+      `TransferEngine.resumePending()` reloads queued/sending/checking rows
+      from `TransferStore` on startup; `uploadMultipart` persists the
+      uploadId and each part's ETag as it goes and reconciles against
+      `ListParts` before re-uploading anything. Verified against a *real*
+      MinIO container in `tests/integration/upload.test.ts` (a reader that
+      throws mid-upload simulates the crash; a fresh `TransferEngine`
+      instance from the same store resumes and completes with byte-exact
+      output). While building that test, found and fixed a real bug: the
+      uploadId was persisted via a spread copy but never mutated onto the
+      shared `transfer` object the engine holds, so any subsequent
+      `store.save()` (e.g. marking the transfer failed) silently erased it —
+      see `src/lib/s3/multipart.ts`.
+- [x] silent orphan sweep — `sweepOrphans()` never throws/logs to the
+      caller; `RealServices.startOrphanSweep()` runs it once at startup and
+      every 24h for every saved connection, swallowing all errors.
+      `tests/integration/upload.test.ts` confirms against real MinIO that
+      only the untracked multipart session gets aborted, not the tracked one.
+- [x] test-connection = small write + delete, plain-language result —
+      `src/lib/s3/client.ts::testConnection` does Put→Head→Delete of a probe
+      key and never throws; `RealServices.keychain.testConnection` always
+      returns a plain sentence. Verified against real MinIO with both good
+      and bad credentials in `tests/integration/upload.test.ts`.
+- [x] per-connection last-folder memory — `RemoteBrowser.navigate()` calls
+      `services.connections.setLastPrefix()` on every navigation;
+      `ConnectionStore`/`SqliteConnectionStore` persist `last_prefix` per
+      connection row.
+- [x] breadcrumbs, right-click menu (rename/delete/new folder/copy link) —
+      all four actions present in `RemoteBrowser.tsx`'s context menu, wired
+      to `BrowserService.{rename,delete,createFolder,copyLink}`.
+- [x] no storage jargon anywhere in UI strings —
+      `tests/unit/ui/jargonSweep.test.tsx` renders every screen and every
+      status chip and asserts none of bucket/object key/prefix/multipart/ETag
+      ever appears in rendered text.
+- [x] pastel token overrides + Nunito/Inter fonts — `src/ui/theme.css`
+      overrides Kumo's semantic color tokens to the spec's palette; Nunito
+      and Inter are now self-hosted via `@fontsource/nunito` and
+      `@fontsource/inter` (imported in `main.tsx`) backing `--font-heading`/
+      `--font-body`, not just a system-font fallback.
+- [x] thumbnails for images/videos — `RemoteBrowser.tsx` renders
+      `<Thumbnail>` per row; `BrowserService.getThumbnailUrl` (real impl in
+      `src/services/real.ts`) returns a presigned URL only for names that
+      pass `isImageName`/`isVideoName`, else `null`.
+
+All ten items are true against the actual code as of this checkpoint, not
+assumption — verified by reading the implementation and, where the item is
+about runtime behavior against real storage (resume, orphan sweep,
+test-connection), by the MinIO integration tests in
+`tests/integration/upload.test.ts`, not just by unit tests with mocks.
+
+No known remaining gaps in this list. Two adjacent things worth flagging
+for whoever picks this up next, not blocking:
+- Chunk-size warning from `vite build` (`dist/assets/index-*.js` ~810 kB
+  pre-gzip) — not a correctness issue, just an opportunity for
+  `manualChunks` code-splitting later.
+- `src/ui/services.ts::AppServices.onFileDrop` was changed from
+  `(paths: string[]) => void` to `(files: PickedFile[]) => void` during this
+  workstream — the original shape couldn't carry real file size or nested
+  relative paths, so a folder drop's files would previously have been
+  enqueued as 0-byte files with a flattened name. Fixed in `real.ts`,
+  `TransferPanel.tsx`, and the interface itself; all call sites updated.
