@@ -129,6 +129,12 @@ async function uploadMultipart(
       throw new Error("CreateMultipartUpload did not return an UploadId");
     }
     uploadId = created.UploadId;
+    // Mutate the shared transfer object in place (not just a spread copy) —
+    // the engine holds this same reference and will `store.save(transfer)`
+    // again on later state transitions (e.g. marking it failed); if
+    // `uploadId` weren't set here too, that later save would silently wipe
+    // the uploadId we're about to persist, breaking resume.
+    transfer.uploadId = uploadId;
     // Persist immediately — this is what makes resume possible after a crash.
     await store.save({ ...transfer, uploadId });
   }
