@@ -1,0 +1,81 @@
+/*
+ * Lopload pastel theme — overrides Kumo's semantic color tokens.
+ *
+ * Must be imported *after* "@cloudflare/kumo/styles" so these `:root`
+ * declarations win the cascade (same selector specificity, later wins).
+ *
+ * Token names were found by inspecting
+ * node_modules/@cloudflare/kumo/dist/styles/theme-kumo.css — Kumo defines
+ * them under `:root, [data-theme="kumo"] { ... }` and re-declares them
+ * inside `@media (prefers-color-scheme: dark)` / `[data-theme="dark"]`
+ * blocks for dark mode. We only style the light palette per the spec;
+ * dark mode falls back to Kumo's defaults until a dark palette is
+ * specified in warren-app-spec.md.
+ *
+ * NOTE for the integration agent: Nunito/Quicksand and Inter are not
+ * bundled (no new deps allowed in this workstream) — the font-family
+ * stacks below fall back to system UI fonts. If pixel-perfect brand
+ * fonts are required, add @fontsource-* packages and reference them here.
+ */
+
+:root,
+[data-theme="kumo"] {
+  /* Canvas / surfaces */
+  --color-kumo-canvas: #f7f8fa;
+  --color-kumo-base: #ffffff;
+  --color-kumo-elevated: #ffffff;
+  --color-kumo-control: #ffffff;
+
+  /* Primary accent */
+  --color-kumo-brand: #a9c9f5;
+  --color-kumo-brand-hover: #8fb6ee;
+
+  /* Success (mint) */
+  --color-kumo-success-tint: #bfe8ce;
+  --color-kumo-success: #1f5c36;
+  --text-color-kumo-success: #1f5c36;
+
+  /* In-progress (amber) */
+  --color-kumo-warning-tint: #fce3a0;
+  --color-kumo-warning: #7a5a0c;
+  --text-color-kumo-warning: #7a5a0c;
+
+  /* Danger (coral) */
+  --color-kumo-danger-tint: #f5c3c0;
+  --color-kumo-danger: #8a2e28;
+  --text-color-kumo-danger: #8a2e28;
+
+  /* Text */
+  --text-color-kumo-default: #31353d;
+  --text-color-kumo-strong: #31353d;
+  --text-color-kumo-subtle: #6c717c;
+}
+
+/* Typography per spec: rounded/friendly for headings, Inter for file
+   names/sizes where small-size legibility matters. No bundled font files
+   in this workstream (no new deps) — system fallbacks declared here so
+   the integration agent can drop in real font files later without
+   touching component code. */
+:root {
+  --font-heading: "Nunito", ui-rounded, system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+}
+
+.lopload-heading {
+  font-family: var(--font-heading);
+}
+
+.lopload-body {
+  font-family: var(--font-body);
+}
+
+/* Motion: gentle progress fill + soft settle only, no spinners/bouncing. */
+.lopload-settle {
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
+}
+
+.lopload-drop-overlay {
+  transition: opacity 150ms ease-out;
+}

@@ -1,0 +1,64 @@
+import { useEffect, useRef } from "react";
+
+export interface ContextMenuItem {
+  label: string;
+  onSelect: () => void;
+  danger?: boolean;
+}
+
+export interface ContextMenuProps {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+  onClose: () => void;
+}
+
+/**
+ * A minimal right-click menu positioned at the cursor. Kumo's DropdownMenu
+ * anchors to a trigger element rather than a point, so a small bespoke
+ * popup (styled with the same Kumo semantic tokens) is used here instead.
+ */
+export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handlePointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      style={{ position: "fixed", top: y, left: x }}
+      className="z-50 min-w-40 rounded-lg bg-kumo-base p-1 shadow-lg ring-1 ring-kumo-line"
+    >
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          role="menuitem"
+          className={`block w-full rounded px-3 py-1.5 text-left text-sm hover:bg-kumo-tint ${
+            item.danger ? "text-kumo-danger" : "text-kumo-default"
+          }`}
+          onClick={() => {
+            item.onSelect();
+            onClose();
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}

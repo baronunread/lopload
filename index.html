@@ -4,7 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <!--
+      Nunito (headings) and Inter (file names/sizes) per warren-app-spec.md.
+      No font files are bundled in this workstream (no new deps allowed);
+      src/ui/theme.css declares the font-family stacks with system
+      fallbacks. If pixel-perfect brand fonts matter, add a self-hosted
+      @fontsource-nunito / @fontsource-inter package and a <link> or
+      @font-face here instead of relying on a public CDN (Tauri webviews
+      are offline-capable and CSP may block remote font fetches).
+    -->
+    <title>Lopload</title>
   </head>
 
   <body>
