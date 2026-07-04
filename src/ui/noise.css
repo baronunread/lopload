@@ -1,0 +1,36 @@
+/*
+ * Lopload film-grain texture — a purely decorative background layer that
+ * keeps the flat dark canvas from reading as dead/flat (per PLAN.md /
+ * warren-app-spec.md: "soft, calm, uncluttered... clarity beats personality
+ * everywhere status is communicated; personality is fine everywhere else").
+ *
+ * Implementation: a `body::before` pseudo-element (no new DOM node, so it
+ * can't interfere with layout, hit-testing, or any concurrent AppShell.tsx
+ * work) painted with an inline SVG `feTurbulence` + `feColorMatrix` filter
+ * encoded as a data URI `background-image` — fully self-contained, no new
+ * assets or dependencies. It's fixed + full-viewport + `pointer-events: none`
+ * + `aria-hidden`-equivalent (no text/content, decorative only) and tiled at
+ * a modest 200px so the repeat isn't perceptible.
+ *
+ * Opacity is intentionally tiny (6%) and blend mode is `overlay`, which lets
+ * the grain darken/lighten relative to whatever's underneath rather than
+ * sitting on top as a flat translucent haze — this is what keeps it in
+ * "tactile paper" territory instead of "visible static" territory. `overlay`
+ * behaves reasonably in both the dark (default) and light palettes defined
+ * in theme.css, since it scales its effect off the local pixel value in the
+ * layers below rather than assuming one canvas color; no per-theme branch
+ * is needed for a bar this subtle.
+ */
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  mix-blend-mode: overlay;
+  opacity: 0.06;
+}
