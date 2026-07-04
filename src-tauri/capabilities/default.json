@@ -5,6 +5,31 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "sql:default",
+    "sql:allow-execute",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://**" }, { "url": "http://**" }]
+    },
+    "fs:default",
+    "fs:read-all",
+    "fs:read-dirs",
+    "fs:read-meta",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "/Volumes/**" },
+        { "path": "/Users/**" },
+        { "path": "/mnt/**" },
+        { "path": "/media/**" },
+        { "path": "/tmp/**" },
+        { "path": "/private/**" }
+      ]
+    },
+    "dialog:default",
+    "notification:default",
+    "store:default"
   ]
 }
