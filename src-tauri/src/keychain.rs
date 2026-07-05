@@ -1,13 +1,24 @@
 //! OS keychain access for storage connection credentials.
 //!
-//! Access key + secret key are stored as a single JSON secret under the
-//! service name `com.lopload.app`, keyed by the connection id (the
-//! "account" in keychain terms). No secrets ever touch SQLite or disk in
-//! plaintext — see PLAN.md item 4.
+//! Two backends, selected at build time:
+//!
+//! - **Native keychain** (`native_keychain` cfg): OS keychain via the `keyring`
+//!   crate — macOS Keychain, Windows Credential Manager, Linux Secret Service.
+//! - **Development store** (no cfg): file-based JSON store under the app data
+//!   directory, permissions 0o600 on Unix. No OS keychain is ever touched.
+//!
+//! Backend selection (priority order):
+//! 1. `LOPLOAD_KEYCHAIN_BACKEND=native|dev` env var at runtime (testing override).
+//! 2. Build-time cfg: `native_keychain` set by [`build.rs`] for release builds
+//!    or when `LOPLOAD_NATIVE_KEYCHAIN=1` is set.
+//! 3. Default: dev store (always safe).
+//!
+//! No secrets ever touch SQLite or disk in plaintext in production — see
+//! PLAN.md item 4.
 
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
+#[cfg(native_keychain)]
 const SERVICE: &str = "com.lopload.app";
 
 /// Credentials for a single storage connection, as handed to/from the
@@ -21,26 +32,139 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// Serialize to the JSON blob stored as the keychain secret.
-    /// Isolated from the keyring crate so it can be unit tested without
-    /// touching the real OS keychain.
+    #[cfg(any(native_keychain, test))]
     fn to_secret_json(&self) -> Result<String, String> {
         serde_json::to_string(self).map_err(|e| e.to_string())
     }
 
-    /// Deserialize the JSON blob read back from the keychain secret.
+    #[cfg(any(native_keychain, test))]
     fn from_secret_json(json: &str) -> Result<Self, String> {
         serde_json::from_str(json).map_err(|e| e.to_string())
     }
 }
 
-fn entry_for(connection_id: &str) -> Result<Entry, String> {
-    Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())
+// ── Backend selection ──────────────────────────────────────────────────
+
+/// Returns `true` when the native OS keychain should be used.
+///
+/// Priority:
+///   1. Runtime env var `LOPLOAD_KEYCHAIN_BACKEND` (for testing)
+///   2. Build-time `#[cfg(native_keychain)]` (set by build.rs)
+///   3. Default: `false` (dev store)
+fn use_native_keychain() -> bool {
+    if let Ok(val) = std::env::var("LOPLOAD_KEYCHAIN_BACKEND") {
+        match val.as_str() {
+            "native" => return true,
+            "dev" => return false,
+            _ => {}
+        }
+    }
+    #[cfg(native_keychain)]
+    return true;
+    #[cfg(not(native_keychain))]
+    return false;
 }
+
+// ── Native keychain backend (production) ───────────────────────────────
+//
+// This module is only compiled when `#[cfg(native_keychain)]` is set, which
+// happens automatically for release builds or when `LOPLOAD_NATIVE_KEYCHAIN=1`
+// is present in the environment at build time (see build.rs).
+
+#[cfg(native_keychain)]
+mod native {
+    use super::*;
+    use keyring::Entry;
+
+    pub fn set(connection_id: &str, creds: &Credentials) -> Result<(), String> {
+        let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
+        let json = creds.to_secret_json()?;
+        entry.set_password(&json).map_err(|e| e.to_string())
+    }
+
+    pub fn get(connection_id: &str) -> Result<Credentials, String> {
+        let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
+        let json = entry.get_password().map_err(|e| e.to_string())?;
+        Credentials::from_secret_json(&json)
+    }
+
+    pub fn delete(connection_id: &str) -> Result<(), String> {
+        let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+// ── Development store (file-based, no OS keychain) ─────────────────────
+//
+// Always compiled as a fallback. On macOS, this avoids the repeated Keychain
+// prompts that appear with ad-hoc signed development binaries.
+
+mod dev {
+    use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use tauri::Manager;
+
+    fn file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        Ok(dir.join("dev-credentials.json"))
+    }
+
+    fn load(app: &tauri::AppHandle) -> Result<HashMap<String, Credentials>, String> {
+        let path = file_path(app)?;
+        match fs::read_to_string(&path) {
+            Ok(json) => serde_json::from_str(&json).map_err(|e| e.to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn save(app: &tauri::AppHandle, map: &HashMap<String, Credentials>) -> Result<(), String> {
+        let path = file_path(app)?;
+        let json = serde_json::to_string(map).map_err(|e| e.to_string())?;
+        fs::write(&path, json).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn set(app: &tauri::AppHandle, id: &str, creds: &Credentials) -> Result<(), String> {
+        let mut map = load(app)?;
+        map.insert(id.to_string(), creds.clone());
+        save(app, &map)
+    }
+
+    pub fn get(app: &tauri::AppHandle, id: &str) -> Result<Credentials, String> {
+        load(app)?
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("no stored credentials for: {id}"))
+    }
+
+    pub fn delete(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+        let mut map = load(app)?;
+        if map.remove(id).is_some() {
+            save(app, &map)?;
+        }
+        Ok(())
+    }
+}
+
+// ── Tauri commands ─────────────────────────────────────────────────────
 
 /// Store the access key + secret key for a connection as one JSON secret.
 #[tauri::command]
 pub fn keychain_set(
+    app: tauri::AppHandle,
     connection_id: String,
     access_key: String,
     secret_key: String,
@@ -49,25 +173,53 @@ pub fn keychain_set(
         access_key,
         secret_key,
     };
-    let json = creds.to_secret_json()?;
-    let entry = entry_for(&connection_id)?;
-    entry.set_password(&json).map_err(|e| e.to_string())
+
+    if use_native_keychain() {
+        #[cfg(native_keychain)]
+        return native::set(&connection_id, &creds);
+        #[cfg(not(native_keychain))]
+        return Err("Native keychain not compiled. Rebuild with LOPLOAD_NATIVE_KEYCHAIN=1.".into());
+    }
+
+    dev::set(&app, &connection_id, &creds)
 }
 
 /// Retrieve the access key + secret key for a connection.
 #[tauri::command]
-pub fn keychain_get(connection_id: String) -> Result<Credentials, String> {
-    let entry = entry_for(&connection_id)?;
-    let json = entry.get_password().map_err(|e| e.to_string())?;
-    Credentials::from_secret_json(&json)
+pub fn keychain_get(
+    app: tauri::AppHandle,
+    connection_id: String,
+) -> Result<Credentials, String> {
+    if use_native_keychain() {
+        #[cfg(native_keychain)]
+        return native::get(&connection_id);
+        #[cfg(not(native_keychain))]
+        return Err("Native keychain not compiled. Rebuild with LOPLOAD_NATIVE_KEYCHAIN=1.".into());
+    }
+
+    dev::get(&app, &connection_id)
 }
 
 /// Delete the stored credentials for a connection.
+///
+/// A missing entry is treated as success so that deleting a connection whose
+/// credentials never reached the keychain does not block the operation.
 #[tauri::command]
-pub fn keychain_delete(connection_id: String) -> Result<(), String> {
-    let entry = entry_for(&connection_id)?;
-    entry.delete_credential().map_err(|e| e.to_string())
+pub fn keychain_delete(
+    app: tauri::AppHandle,
+    connection_id: String,
+) -> Result<(), String> {
+    if use_native_keychain() {
+        #[cfg(native_keychain)]
+        return native::delete(&connection_id);
+        #[cfg(not(native_keychain))]
+        return Err("Native keychain not compiled. Rebuild with LOPLOAD_NATIVE_KEYCHAIN=1.".into());
+    }
+
+    dev::delete(&app, &connection_id)
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -109,28 +261,29 @@ mod tests {
         assert!(!err.is_empty());
     }
 
-    /// This test touches the real OS keychain and cannot run headlessly in
-    /// CI (no keychain/secret-service available) or via a plain `cargo test`
-    /// invocation on a dev machine either — macOS shows an interactive
-    /// "<app> wants to use your confidential information" prompt on first
-    /// access from a new/unsigned binary, which has no session to answer it
-    /// outside a real (signed or at least interactively-launched) app. Run
-    /// manually with `cargo test -- --ignored` and approve the OS prompt if
-    /// one appears, or rely on manual verification through the running app.
+    /// This test touches the real OS keychain and is ignored by default.
     #[test]
     #[ignore]
     fn round_trips_through_real_keychain() {
-        let connection_id = "lopload-test-connection-do-not-use";
-        keychain_set(
-            connection_id.to_string(),
-            "AKIATEST".to_string(),
-            "secret".to_string(),
-        )
-        .expect("set");
-        let creds = keychain_get(connection_id.to_string()).expect("get");
-        assert_eq!(creds.access_key, "AKIATEST");
-        assert_eq!(creds.secret_key, "secret");
-        keychain_delete(connection_id.to_string()).expect("delete");
-        assert!(keychain_get(connection_id.to_string()).is_err());
+        // The native module is only compiled with `cfg(native_keychain)`.
+        // Without it this test can't compile, so we guard the entire body.
+        #[cfg(not(native_keychain))]
+        panic!("This test requires a build with native_keychain cfg (LOPLOAD_NATIVE_KEYCHAIN=1).");
+
+        #[cfg(native_keychain)]
+        {
+            let connection_id = "lopload-test-connection-do-not-use";
+            let creds = Credentials {
+                access_key: "AKIATEST".to_string(),
+                secret_key: "secret".to_string(),
+            };
+
+            native::set(connection_id, &creds).expect("set");
+            let back = native::get(connection_id).expect("get");
+            assert_eq!(back.access_key, "AKIATEST");
+            assert_eq!(back.secret_key, "secret");
+            native::delete(connection_id).expect("delete");
+            assert!(native::get(connection_id).is_err());
+        }
     }
 }
