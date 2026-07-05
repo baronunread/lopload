@@ -20,8 +20,8 @@ Selected at build time — never changed at runtime without a recompile:
 
 | `cfg(native_keychain)` | Backend | What happens |
 |---|---|---|
-| **not set** (default debug, or `LOPLOAD_NATIVE_KEYCHAIN=0`) | Dev store: `$APPDATA/dev-credentials.json` (0600) | No OS keychain touched. No popups. |
-| **set** (release, or `LOPLOAD_NATIVE_KEYCHAIN=1`) | `keyring` crate → macOS Keychain / Windows Credential Manager / Linux Secret Service | Full OS secure storage. |
+| **not set** (default for all profiles) | Dev store: `$APPDATA/dev-credentials.json` (0600) | No OS keychain touched. No popups. |
+| **set** (only when `LOPLOAD_NATIVE_KEYCHAIN=1`) | `keyring` crate → macOS Keychain / Windows Credential Manager / Linux Secret Service | Full OS secure storage. |
 
 Override at runtime for **testing only**: set `LOPLOAD_KEYCHAIN_BACKEND=native|dev`.
 

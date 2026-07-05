@@ -9,9 +9,9 @@
 //!
 //! Backend selection (priority order):
 //! 1. `LOPLOAD_KEYCHAIN_BACKEND=native|dev` env var at runtime (testing override).
-//! 2. Build-time cfg: `native_keychain` set by [`build.rs`] for release builds
-//!    or when `LOPLOAD_NATIVE_KEYCHAIN=1` is set.
-//! 3. Default: dev store (always safe).
+//! 2. Build-time cfg: `native_keychain` set by [`build.rs`] when
+//!    `LOPLOAD_NATIVE_KEYCHAIN=1` is set.
+//! 3. Default: dev store (always safe, no keychain prompts).
 //!
 //! No secrets ever touch SQLite or disk in plaintext in production — see
 //! PLAN.md item 4.
@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(native_keychain)]
-const SERVICE: &str = "com.lopload.app";
+const SERVICE: &str = "com.lopload";
 
 /// Credentials for a single storage connection, as handed to/from the
 /// frontend. Field names are camelCase on the JS side.
@@ -74,26 +74,74 @@ fn use_native_keychain() -> bool {
 #[cfg(native_keychain)]
 mod native {
     use super::*;
-    use keyring::Entry;
+
+    // macOS uses Security.framework directly to avoid keychain password prompts.
+    // We use the data-protection keychain (no dialog) via the `passwords` module.
+    #[cfg(target_os = "macos")]
+    mod platform {
+        use super::*;
+        use security_framework::passwords::*;
+
+        pub fn set(connection_id: &str, creds: &Credentials) -> Result<(), String> {
+            let json = creds.to_secret_json()?;
+
+            let mut opts = PasswordOptions::new_generic_password(SERVICE, connection_id);
+            opts.use_protected_keychain();
+            opts.set_label("Lopload storage credentials");
+
+            set_generic_password_options(json.as_bytes(), opts).map_err(|e| e.to_string())
+        }
+
+        pub fn get(connection_id: &str) -> Result<Credentials, String> {
+            let pw = get_generic_password(SERVICE, connection_id)
+                .map_err(|_| format!("no stored credentials for: {connection_id}"))?;
+            let s = String::from_utf8(pw).map_err(|e| e.to_string())?;
+            Credentials::from_secret_json(&s)
+        }
+
+        pub fn delete(connection_id: &str) -> Result<(), String> {
+            // Treat missing as success
+            let _ = delete_generic_password(SERVICE, connection_id);
+            Ok(())
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    mod platform {
+        use super::*;
+        use keyring::Entry;
+
+        pub fn set(connection_id: &str, creds: &Credentials) -> Result<(), String> {
+            let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
+            let json = creds.to_secret_json()?;
+            entry.set_password(&json).map_err(|e| e.to_string())
+        }
+
+        pub fn get(connection_id: &str) -> Result<Credentials, String> {
+            let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
+            let json = entry.get_password().map_err(|e| e.to_string())?;
+            Credentials::from_secret_json(&json)
+        }
+
+        pub fn delete(connection_id: &str) -> Result<(), String> {
+            let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    }
 
     pub fn set(connection_id: &str, creds: &Credentials) -> Result<(), String> {
-        let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
-        let json = creds.to_secret_json()?;
-        entry.set_password(&json).map_err(|e| e.to_string())
+        platform::set(connection_id, creds)
     }
 
     pub fn get(connection_id: &str) -> Result<Credentials, String> {
-        let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
-        let json = entry.get_password().map_err(|e| e.to_string())?;
-        Credentials::from_secret_json(&json)
+        platform::get(connection_id)
     }
 
     pub fn delete(connection_id: &str) -> Result<(), String> {
-        let entry = Entry::new(SERVICE, connection_id).map_err(|e| e.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        platform::delete(connection_id)
     }
 }
 

@@ -30,5 +30,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Backend features are opt-in in keyring v3; without them it silently uses an
 # in-memory mock store and every set/get pair fails to round-trip.
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+keyring = { version = "3", features = ["windows-native", "sync-secret-service"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3", features = ["OSX_10_15"] }
 
