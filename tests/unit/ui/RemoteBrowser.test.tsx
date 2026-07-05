@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import { Toasty } from "@cloudflare/kumo";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { ServicesProvider } from "../../../src/ui/services";
 import { createFakeServices } from "./fakeServices";
-import type { RemoteEntry } from "../../../src/lib/types";
+import type { RemoteEntry, Transfer } from "../../../src/lib/types";
 
 afterEach(cleanup);
 
@@ -16,10 +17,39 @@ const ROOT_ENTRIES: RemoteEntry[] = [
 const PHOTOS_ENTRIES: RemoteEntry[] = [
   { kind: "file", name: "cat.png", key: "photos/cat.png", size: 2048, lastModified: 0 },
 ];
+const MANY_ENTRIES: RemoteEntry[] = [
+  { kind: "folder", name: "photos", key: "photos/" },
+  { kind: "file", name: "a.txt", key: "a.txt", size: 1, lastModified: 0 },
+  { kind: "file", name: "b.txt", key: "b.txt", size: 1, lastModified: 0 },
+  { kind: "file", name: "c.txt", key: "c.txt", size: 1, lastModified: 0 },
+];
 
 function Harness() {
   const [prefix, setPrefix] = useState("");
-  return <RemoteBrowser connectionId="conn-1" prefix={prefix} onNavigate={setPrefix} />;
+  return (
+    <Toasty>
+      <RemoteBrowser connectionId="conn-1" prefix={prefix} onNavigate={setPrefix} />
+    </Toasty>
+  );
+}
+
+/** Minimal DataTransfer stand-in — jsdom doesn't implement the real one, but
+ * fireEvent happily accepts anything shaped like it as the event's payload. */
+function makeDataTransfer() {
+  const store = new Map<string, string>();
+  const types: string[] = [];
+  return {
+    effectAllowed: "none",
+    dropEffect: "none",
+    types,
+    setData(type: string, value: string) {
+      if (!types.includes(type)) types.push(type);
+      store.set(type, value);
+    },
+    getData(type: string) {
+      return store.get(type) ?? "";
+    },
+  };
 }
 
 describe("RemoteBrowser", () => {
@@ -87,5 +117,271 @@ describe("RemoteBrowser", () => {
     // Entry-specific actions (only shown when a row entry is targeted).
     expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  test("re-lists the current folder once an upload finishes", async () => {
+    const entriesByPrefix: Record<string, RemoteEntry[]> = { "conn-1::": [] };
+    const services = createFakeServices({ entriesByPrefix });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("This folder is empty");
+
+    // The backend now has the uploaded file; only the engine event should
+    // prompt the browser to notice, without the user navigating away.
+    entriesByPrefix["conn-1::"] = ROOT_ENTRIES;
+    const transfer: Transfer = {
+      id: "t1",
+      connectionId: "conn-1",
+      key: "readme.txt",
+      localPath: "/tmp/readme.txt",
+      size: 100,
+      partSize: 8 * 1024 * 1024,
+      state: { kind: "uploaded" },
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    services.emit({ type: "transfer-updated", transfer });
+
+    await screen.findByText("readme.txt", {}, { timeout: 2000 });
+  });
+
+  test("double-clicking a file opens a debug info dialog; folders still navigate", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: {
+        "conn-1::": ROOT_ENTRIES,
+        "conn-1::photos/": PHOTOS_ENTRIES,
+      },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.dblClick(screen.getByText("readme.txt"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/File info/)).toBeInTheDocument();
+    expect(within(dialog).getAllByText("readme.txt").length).toBeGreaterThan(0);
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // Folders still navigate on double-click, without opening the dialog.
+    await user.dblClick(screen.getByText("photos"));
+    await screen.findByText("cat.png");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  test("the context menu offers a 'File info' item that opens the same debug dialog", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.click(screen.getByRole("button", { name: "Actions for readme.txt" }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "File info" })).toBeInTheDocument();
+
+    await user.click(within(menu).getByRole("menuitem", { name: "File info" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/File info/)).toBeInTheDocument();
+  });
+
+  test("dragging a row onto a folder row moves it via the browser service", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    const fileRow = screen.getByText("readme.txt").closest("tr");
+    const folderRow = screen.getByText("photos").closest("tr");
+    expect(fileRow).toBeTruthy();
+    expect(folderRow).toBeTruthy();
+
+    const dataTransfer = makeDataTransfer();
+    fireEvent.dragStart(fileRow as HTMLElement, { dataTransfer });
+    fireEvent.dragEnter(folderRow as HTMLElement, { dataTransfer });
+    fireEvent.drop(folderRow as HTMLElement, { dataTransfer });
+
+    await screen.findByText("readme.txt"); // still rendered while the move resolves
+    expect(services.moveCalls).toContainEqual({
+      connectionId: "conn-1",
+      key: "readme.txt",
+      toKey: "photos/readme.txt",
+    });
+  });
+
+  test("shift-click extends a range selection, and dragging any selected row moves the whole selection", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": MANY_ENTRIES },
+    });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("a.txt");
+
+    const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+    // Select a.txt, then shift-click c.txt: selects a, b, c (not the "photos" folder).
+    fireEvent.click(rowFor("a.txt"));
+    fireEvent.click(rowFor("c.txt"), { shiftKey: true });
+
+    const dataTransfer = makeDataTransfer();
+    fireEvent.dragStart(rowFor("b.txt"), { dataTransfer });
+    fireEvent.dragEnter(rowFor("photos"), { dataTransfer });
+    fireEvent.drop(rowFor("photos"), { dataTransfer });
+
+    await waitFor(() => {
+      expect(services.moveCalls).toContainEqual({
+        connectionId: "conn-1",
+        key: "a.txt",
+        toKey: "photos/a.txt",
+      });
+      expect(services.moveCalls).toContainEqual({
+        connectionId: "conn-1",
+        key: "b.txt",
+        toKey: "photos/b.txt",
+      });
+      expect(services.moveCalls).toContainEqual({
+        connectionId: "conn-1",
+        key: "c.txt",
+        toKey: "photos/c.txt",
+      });
+    });
+  });
+
+  test("cmd/ctrl-click toggles rows independently, and Escape clears the whole selection", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": MANY_ENTRIES },
+    });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("a.txt");
+
+    const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+    // cmd-click both a.txt and b.txt into the selection.
+    fireEvent.click(rowFor("a.txt"));
+    fireEvent.click(rowFor("b.txt"), { metaKey: true });
+
+    // Escape clears the selection entirely.
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    // Dragging a.txt now moves only itself — if Escape hadn't cleared the
+    // two-row selection, this would have moved b.txt along with it.
+    const dataTransfer = makeDataTransfer();
+    fireEvent.dragStart(rowFor("a.txt"), { dataTransfer });
+    fireEvent.dragEnter(rowFor("photos"), { dataTransfer });
+    fireEvent.drop(rowFor("photos"), { dataTransfer });
+
+    await waitFor(() => {
+      expect(services.moveCalls).toEqual([
+        { connectionId: "conn-1", key: "a.txt", toKey: "photos/a.txt" },
+      ]);
+    });
+  });
+
+  test("right-clicking a row within a multi-selection offers bulk delete, pluralized", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": MANY_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("a.txt");
+
+    const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+    fireEvent.click(rowFor("a.txt"));
+    fireEvent.click(rowFor("c.txt"), { shiftKey: true }); // selects a, b, c
+
+    fireEvent.contextMenu(rowFor("b.txt"));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Delete 3 items" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Delete 3 items?")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect([...services.deleteCalls].sort()).toEqual(["a.txt", "b.txt", "c.txt"]);
+    });
+  });
+
+  test("the folder info dialog shows a loading state, then the computed size and last-changed date", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+      folderInfoResult: {
+        files: 3,
+        totalSize: 5_000_000,
+        lastModified: new Date("2024-01-02").getTime(),
+      },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.click(screen.getByRole("button", { name: "Actions for photos" }));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Folder info" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // The fake service resolves near-instantly, so the loading state isn't
+    // reliably observable here — the real assertion is the computed result.
+    await within(dialog).findByText(/3 files, 4\.8 MB, last changed/);
+    expect(services.folderInfoCalls).toContainEqual({ connectionId: "conn-1", key: "photos/" });
+  });
+
+  test("shows an error toast when the file-drop handler reports an error", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    services.triggerFileDropError("permission denied");
+
+    await screen.findByText(/Some of what you dropped couldn't be added/);
+    await screen.findByText(/permission denied/);
   });
 });

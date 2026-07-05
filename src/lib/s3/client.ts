@@ -112,6 +112,46 @@ async function listAllKeysUnder(
   return keys;
 }
 
+export interface FolderStats {
+  files: number;
+  totalSize: number;
+  lastModified: number | null;
+}
+
+/** Recursively computes file count, total size, and the most recent
+ * modification time under a folder prefix — used by the folder info dialog,
+ * since S3 "folders" are virtual and carry no metadata of their own. */
+export async function folderStats(
+  client: S3Client,
+  bucket: string,
+  prefix: string,
+): Promise<FolderStats> {
+  let files = 0;
+  let totalSize = 0;
+  let lastModified: number | null = null;
+  let continuationToken: string | undefined;
+  do {
+    const res = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+    for (const obj of res.Contents ?? []) {
+      if (!obj.Key || obj.Key.endsWith("/")) continue; // skip folder markers
+      files += 1;
+      totalSize += obj.Size ?? 0;
+      const modified = obj.LastModified?.getTime();
+      if (modified !== undefined && (lastModified === null || modified > lastModified)) {
+        lastModified = modified;
+      }
+    }
+    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return { files, totalSize, lastModified };
+}
+
 /** Rename a file: CopyObject to the new key, then DeleteObject the old one. */
 export async function renameFile(
   client: S3Client,

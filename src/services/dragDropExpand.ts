@@ -29,6 +29,23 @@ export interface ExpandedDropFile {
   size: number;
 }
 
+export interface ExpandedDrop {
+  files: ExpandedDropFile[];
+  /** Native paths that couldn't be read (stat/size/readDir failed) and were
+   *  skipped so the rest of the batch could still upload. */
+  skipped: string[];
+}
+
+/** OS metadata litter that users never mean to upload. Filtered out during
+ * expansion — also load-bearing on macOS, where a `.DS_Store` inside any
+ * dropped folder would otherwise fail the Tauri fs scope check and abort
+ * the whole batch. Compared case-insensitively. */
+const OS_JUNK_FILES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
+
+function isJunkFile(name: string): boolean {
+  return OS_JUNK_FILES.has(name.toLowerCase());
+}
+
 /** Returns the last path segment, tolerating both "/" and "\\" separators. */
 export function basenameOf(path: string): string {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -40,16 +57,27 @@ async function walkDir(
   dirPath: string,
   relPrefix: string,
   ops: DropFsOps,
-  out: ExpandedDropFile[],
+  out: ExpandedDrop,
 ): Promise<void> {
-  const entries = await ops.readDir(dirPath);
+  let entries: DropDirEntry[];
+  try {
+    entries = await ops.readDir(dirPath);
+  } catch {
+    out.skipped.push(dirPath);
+    return;
+  }
   for (const entry of entries) {
+    if (isJunkFile(entry.name)) continue;
     const childPath = ops.joinPath(dirPath, entry.name);
     const childRel = `${relPrefix}/${entry.name}`;
     if (entry.isDirectory) {
       await walkDir(childPath, childRel, ops, out);
     } else {
-      out.push({ path: childPath, name: childRel, size: await ops.size(childPath) });
+      try {
+        out.files.push({ path: childPath, name: childRel, size: await ops.size(childPath) });
+      } catch {
+        out.skipped.push(childPath);
+      }
     }
   }
 }
@@ -59,19 +87,33 @@ async function walkDir(
  * list of files. `isDirectory` is only consulted for the top-level dropped
  * paths (their kind isn't otherwise known); nested entries use the
  * `isDirectory` flag already returned by `ops.readDir`.
+ *
+ * A single unreadable item never fails the batch: it lands in `skipped`
+ * and the remaining files still expand.
  */
 export async function expandDroppedPaths(
   paths: string[],
   isDirectory: (path: string) => Promise<boolean>,
   ops: DropFsOps,
-): Promise<ExpandedDropFile[]> {
-  const out: ExpandedDropFile[] = [];
+): Promise<ExpandedDrop> {
+  const out: ExpandedDrop = { files: [], skipped: [] };
   for (const p of paths) {
-    if (await isDirectory(p)) {
-      const baseName = basenameOf(p);
-      await walkDir(p, baseName, ops, out);
+    if (isJunkFile(basenameOf(p))) continue;
+    let dir: boolean;
+    try {
+      dir = await isDirectory(p);
+    } catch {
+      out.skipped.push(p);
+      continue;
+    }
+    if (dir) {
+      await walkDir(p, basenameOf(p), ops, out);
     } else {
-      out.push({ path: p, name: basenameOf(p), size: await ops.size(p) });
+      try {
+        out.files.push({ path: p, name: basenameOf(p), size: await ops.size(p) });
+      } catch {
+        out.skipped.push(p);
+      }
     }
   }
   return out;

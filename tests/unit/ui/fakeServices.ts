@@ -2,7 +2,12 @@
 // src/ui/services.ts entirely in memory, with no dependency on src/lib or
 // src/tauri (which may not exist yet while this workstream is in progress).
 import type { Connection, EngineEvent, RemoteEntry, Transfer } from "../../../src/lib/types";
-import type { AppServices, ConnectionDraft, PickedFile } from "../../../src/ui/services";
+import type {
+  AppServices,
+  ConnectionDraft,
+  FolderInfo,
+  PickedFile,
+} from "../../../src/ui/services";
 
 export interface FakeServicesOptions {
   connections?: Connection[];
@@ -11,6 +16,7 @@ export interface FakeServicesOptions {
   transfersByConnection?: Record<string, Transfer[]>;
   testConnectionResult?: { ok: boolean; message: string };
   pickFilesResult?: PickedFile[];
+  folderInfoResult?: FolderInfo;
 }
 
 export interface FakeServices extends AppServices {
@@ -22,6 +28,12 @@ export interface FakeServices extends AppServices {
   notifications: Array<{ title: string; body: string }>;
   savedConnections: Connection[];
   testConnectionCalls: ConnectionDraft[];
+  moveCalls: Array<{ connectionId: string; key: string; toKey: string }>;
+  deleteCalls: string[];
+  folderInfoCalls: Array<{ connectionId: string; key: string }>;
+  /** Simulates the real onFileDrop's onError firing (e.g. an unreadable
+   * dropped folder), for tests of the resulting error toast. */
+  triggerFileDropError(message: string): void;
 }
 
 export function createFakeServices(options: FakeServicesOptions = {}): FakeServices {
@@ -36,6 +48,10 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const notifications: Array<{ title: string; body: string }> = [];
   const savedConnections: Connection[] = [];
   const testConnectionCalls: ConnectionDraft[] = [];
+  const moveCalls: Array<{ connectionId: string; key: string; toKey: string }> = [];
+  const deleteCalls: string[] = [];
+  const folderInfoCalls: Array<{ connectionId: string; key: string }> = [];
+  let fileDropErrorHandler: ((message: string) => void) | null = null;
 
   const services: FakeServices = {
     connections: {
@@ -61,12 +77,21 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       },
       async createFolder() {},
       async rename() {},
-      async delete() {},
+      async move(connectionId, key, toKey) {
+        moveCalls.push({ connectionId, key, toKey });
+      },
+      async delete(_connectionId, key) {
+        deleteCalls.push(key);
+      },
       async copyLink(_connectionId, key) {
         return `https://example.test/${key}`;
       },
       async getThumbnailUrl() {
         return null;
+      },
+      async folderInfo(connectionId, key) {
+        folderInfoCalls.push({ connectionId, key });
+        return options.folderInfoResult ?? { files: 0, totalSize: 0, lastModified: null };
       },
     },
     engine: {
@@ -94,8 +119,11 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     async pickFiles() {
       return options.pickFilesResult ?? [];
     },
-    onFileDrop() {
-      return () => {};
+    onFileDrop(_cb, onError) {
+      fileDropErrorHandler = onError ?? null;
+      return () => {
+        fileDropErrorHandler = null;
+      };
     },
     setBadgeCount(count) {
       badgeCounts.push(count);
@@ -106,6 +134,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     emit(event) {
       for (const cb of listeners) cb(event);
     },
+    triggerFileDropError(message) {
+      fileDropErrorHandler?.(message);
+    },
     retryCalls,
     dismissCalls,
     setLastPrefixCalls,
@@ -113,6 +144,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     notifications,
     savedConnections,
     testConnectionCalls,
+    moveCalls,
+    deleteCalls,
+    folderInfoCalls,
   };
 
   return services;
