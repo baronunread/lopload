@@ -41,15 +41,29 @@ export interface ConnectionsService {
   setLastPrefix(id: string, prefix: string): Promise<void>;
 }
 
+/** Computed-on-demand stats for a folder's info dialog — S3 "folders" are
+ * virtual prefixes with no metadata of their own, so this walks the folder's
+ * contents recursively rather than being available from the listing. */
+export interface FolderInfo {
+  files: number;
+  totalSize: number;
+  lastModified: number | null;
+}
+
 export interface BrowserService {
   list(connectionId: string, prefix: string): Promise<RemoteEntry[]>;
   createFolder(connectionId: string, prefix: string, name: string): Promise<void>;
   rename(connectionId: string, key: string, newName: string): Promise<void>;
+  /** Moves a file or folder to a new full path — used for drag-and-drop moves
+   * (renaming within the same parent goes through rename() above). */
+  move(connectionId: string, key: string, toKey: string): Promise<void>;
   delete(connectionId: string, key: string): Promise<void>;
   /** A shareable link to the file, shown via "Copy link" in the context menu. */
   copyLink(connectionId: string, key: string): Promise<string>;
   /** Presigned URL for an image, or a streamable URL for a video; null if not previewable. */
   getThumbnailUrl(connectionId: string, key: string): Promise<string | null>;
+  /** Recursively computes file count, total size, and last-modified time under a folder. */
+  folderInfo(connectionId: string, key: string): Promise<FolderInfo>;
 }
 
 export interface EngineService {
@@ -76,8 +90,11 @@ export interface AppServices {
   pickFiles(): Promise<PickedFile[]>;
   /** Subscribes to OS-level drag-and-drop of files onto the window. Folders
    * are expanded recursively; each resulting file carries its size and a
-   * name that preserves the relative path under any dropped folder. */
-  onFileDrop(cb: (files: PickedFile[]) => void): () => void;
+   * name that preserves the relative path under any dropped folder.
+   * `onError`, if provided, is called with a plain-language-adjacent message
+   * when a dropped folder can't be read (e.g. an unreadable subdirectory) —
+   * without it such failures were only visible in the console/OS notifications. */
+  onFileDrop(cb: (files: PickedFile[]) => void, onError?: (message: string) => void): () => void;
   /** Updates the dock/taskbar badge to reflect the current failed-transfer count. */
   setBadgeCount(count: number): void;
   /** Fires a native OS notification. */

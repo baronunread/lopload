@@ -3,10 +3,10 @@ import { Toasty, useKumoToastManager } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
-import { SetupScreen } from "./SetupScreen";
-import { WelcomeScreen } from "./WelcomeScreen";
+import { AddStorageDialog } from "./AddStorageDialog";
+import { Onboarding } from "./Onboarding";
 import { RemoteBrowser } from "./RemoteBrowser";
-import { TransferPanel } from "./TransferPanel";
+import { TransferWidget } from "./TransferWidget";
 import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
 
 function AppShellInner() {
@@ -61,18 +61,11 @@ function AppShellInner() {
     if (remaining.length === 0) setShowManage(false);
   }
 
-  if (!showSetup && connections.length === 0) {
-    return <WelcomeScreen onGetStarted={() => setShowSetup(true)} />;
+  if (connections.length === 0) {
+    return <Onboarding onDone={handleSaved} />;
   }
 
-  if (showSetup || !current) {
-    return (
-      <SetupScreen
-        onSaved={handleSaved}
-        onCancel={connections.length > 0 ? () => setShowSetup(false) : undefined}
-      />
-    );
-  }
+  if (!current) return null;
 
   return (
     <div className="flex h-screen flex-col bg-kumo-canvas">
@@ -89,6 +82,10 @@ function AppShellInner() {
         </div>
       </header>
 
+      {showSetup && (
+        <AddStorageDialog onSaved={handleSaved} onClose={() => setShowSetup(false)} />
+      )}
+
       {showManage && (
         <ManageConnectionsDialog
           connections={connections}
@@ -96,23 +93,21 @@ function AppShellInner() {
           onDeleted={handleDeleted}
         />
       )}
-      <main className="grid flex-1 grid-cols-1 gap-4 overflow-auto p-4 md:grid-cols-2 md:overflow-hidden">
-        <section className="min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line md:min-h-0">
+      <main className="relative flex-1 overflow-auto p-4">
+        <section className="h-full min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line">
           <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
         </section>
-        <section className="min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line md:min-h-0">
-          <TransferPanel
-            connectionId={current.id}
-            prefix={prefix}
-            onBatchFinished={(summary) => toasts.add({ title: summary })}
-          />
-        </section>
       </main>
+
+      <TransferWidget
+        connectionId={current.id}
+        onBatchFinished={(summary) => toasts.add({ title: summary })}
+      />
     </div>
   );
 }
 
-/** Top-level app layout: header switcher + remote browser + transfer panel. */
+/** Top-level app layout: header switcher + remote browser + floating transfer widget. */
 export function AppShell() {
   return (
     <Toasty>

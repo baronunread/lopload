@@ -29,6 +29,7 @@ import {
   createS3Client,
   deleteFile as s3DeleteFile,
   deleteFolder as s3DeleteFolder,
+  folderStats,
   listEntries,
   renameFile as s3RenameFile,
   renameFolder as s3RenameFolder,
@@ -47,6 +48,7 @@ import { isImageName, isVideoName } from "../ui/format";
 import type {
   AppServices,
   ConnectionDraft,
+  FolderInfo,
   PickedFile,
   TestConnectionResult,
 } from "../ui/services";
@@ -208,7 +210,9 @@ class RealServices implements AppServices {
     delete: async (id: string): Promise<void> => {
       const store = await this.getConnectionStore();
       await store.delete(id);
-      await keychainDelete(id);
+      // A missing/broken keychain entry must never make a connection
+      // undeletable — the row is already gone, so finish the cleanup.
+      await keychainDelete(id).catch(() => {});
       this.invalidateConnection(id);
     },
     setLastPrefix: async (id: string, prefix: string): Promise<void> => {
@@ -236,6 +240,14 @@ class RealServices implements AppServices {
         await s3RenameFile(client, conn.bucket, key, toKey);
       }
     },
+    move: async (connectionId: string, key: string, toKey: string): Promise<void> => {
+      const { client, conn } = await this.getClient(connectionId);
+      if (isFolderKey(key)) {
+        await s3RenameFolder(client, conn.bucket, key, toKey);
+      } else {
+        await s3RenameFile(client, conn.bucket, key, toKey);
+      }
+    },
     delete: async (connectionId: string, key: string): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       if (isFolderKey(key)) {
@@ -253,6 +265,10 @@ class RealServices implements AppServices {
       if (!isImageName(name) && !isVideoName(name)) return null;
       const { client, conn } = await this.getClient(connectionId);
       return s3CopyLink(client, conn.bucket, key);
+    },
+    folderInfo: async (connectionId: string, key: string): Promise<FolderInfo> => {
+      const { client, conn } = await this.getClient(connectionId);
+      return folderStats(client, conn.bucket, key);
     },
   };
 
@@ -324,14 +340,28 @@ class RealServices implements AppServices {
     return files;
   }
 
-  onFileDrop(cb: (files: PickedFile[]) => void): () => void {
+  onFileDrop(
+    cb: (files: PickedFile[]) => void,
+    onError?: (message: string) => void,
+  ): () => void {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
 
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type !== "drop") return;
-        void this.expandAndEmit(event.payload.paths, cb);
+        this.expandAndEmit(event.payload.paths, cb, onError).catch((err) => {
+          // A dropped folder that can't be walked (e.g. an unreadable
+          // subdirectory, or a path outside what the OS lets this app
+          // enumerate) must not silently do nothing — surface it so the
+          // user knows the drop didn't queue anything.
+          console.error("Failed to expand dropped paths:", err);
+          this.notify(
+            "Lopload",
+            "Couldn't read one or more of the dropped items — nothing was added.",
+          );
+          onError?.(String(err));
+        });
       })
       .then((fn) => {
         if (cancelled) fn();
@@ -347,12 +377,13 @@ class RealServices implements AppServices {
   private async expandAndEmit(
     paths: string[],
     cb: (files: PickedFile[]) => void,
+    onError?: (message: string) => void,
   ): Promise<void> {
     const isDirectory = async (path: string): Promise<boolean> => {
       const info = await stat(path);
       return info.isDirectory;
     };
-    const expanded = await expandDroppedPaths(paths, isDirectory, {
+    const { files, skipped } = await expandDroppedPaths(paths, isDirectory, {
       readDir: async (path: string): Promise<DropDirEntry[]> => {
         const entries = await readDir(path);
         return entries.map((e) => ({ name: e.name, isDirectory: e.isDirectory }));
@@ -360,11 +391,19 @@ class RealServices implements AppServices {
       size: (path: string) => fileSize(path),
       joinPath: (dirPath: string, childName: string) => `${dirPath}/${childName}`,
     });
+    if (skipped.length > 0) {
+      console.error("Skipped unreadable dropped items:", skipped);
+      onError?.(
+        `${skipped.length} item${skipped.length === 1 ? "" : "s"} couldn't be read and ${skipped.length === 1 ? "was" : "were"} skipped.`,
+      );
+    }
     // `name` here is the "/"-joined relative path computed by
     // expandDroppedPaths (includes the dropped folder's own name for
     // nested files), so the remote key built as `prefix + name` preserves
     // folder structure. `size` is the real file size, not a placeholder.
-    cb(expanded.map((f) => ({ path: f.path, name: f.name, size: f.size })));
+    if (files.length > 0) {
+      cb(files.map((f) => ({ path: f.path, name: f.name, size: f.size })));
+    }
   }
 
   setBadgeCount(count: number): void {

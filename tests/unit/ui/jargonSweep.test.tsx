@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import { Toasty } from "@cloudflare/kumo";
-import { SetupScreen } from "../../../src/ui/SetupScreen";
-import { WelcomeScreen } from "../../../src/ui/WelcomeScreen";
+import { SetupForm } from "../../../src/ui/SetupForm";
+import { Onboarding } from "../../../src/ui/Onboarding";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
-import { TransferPanel } from "../../../src/ui/TransferPanel";
+import { TransferWidget } from "../../../src/ui/TransferWidget";
 import { ConnectionSwitcher } from "../../../src/ui/ConnectionSwitcher";
 import { StatusChip } from "../../../src/ui/StatusChip";
 import { ServicesProvider } from "../../../src/ui/services";
@@ -58,14 +58,20 @@ describe("jargon sweep", () => {
       transfersByConnection: { "conn-1": transfers },
     });
 
-    const welcome = render(<WelcomeScreen onGetStarted={() => {}} />);
-    assertNoJargon(welcome.container);
-    welcome.unmount();
+    const onboarding = render(
+      <Toasty>
+        <ServicesProvider value={services}>
+          <Onboarding onDone={() => {}} />
+        </ServicesProvider>
+      </Toasty>,
+    );
+    assertNoJargon(onboarding.container);
+    onboarding.unmount();
 
     const setup = render(
       <Toasty>
         <ServicesProvider value={services}>
-          <SetupScreen onSaved={() => {}} />
+          <SetupForm onSaved={() => {}} />
         </ServicesProvider>
       </Toasty>,
     );
@@ -73,20 +79,22 @@ describe("jargon sweep", () => {
     setup.unmount();
 
     const browser = render(
-      <ServicesProvider value={services}>
-        <RemoteBrowser connectionId="conn-1" prefix="" onNavigate={() => {}} />
-      </ServicesProvider>,
+      <Toasty>
+        <ServicesProvider value={services}>
+          <RemoteBrowser connectionId="conn-1" prefix="" onNavigate={() => {}} />
+        </ServicesProvider>
+      </Toasty>,
     );
     assertNoJargon(browser.container);
     browser.unmount();
 
-    const panel = render(
+    const widget = render(
       <ServicesProvider value={services}>
-        <TransferPanel connectionId="conn-1" prefix="" />
+        <TransferWidget connectionId="conn-1" />
       </ServicesProvider>,
     );
-    assertNoJargon(panel.container);
-    panel.unmount();
+    assertNoJargon(widget.container);
+    widget.unmount();
 
     const switcher = render(
       <ConnectionSwitcher
