@@ -110,8 +110,13 @@ mod tests {
     }
 
     /// This test touches the real OS keychain and cannot run headlessly in
-    /// CI (no keychain/secret-service available). Run manually with
-    /// `cargo test -- --ignored` on a machine with a real keychain.
+    /// CI (no keychain/secret-service available) or via a plain `cargo test`
+    /// invocation on a dev machine either — macOS shows an interactive
+    /// "<app> wants to use your confidential information" prompt on first
+    /// access from a new/unsigned binary, which has no session to answer it
+    /// outside a real (signed or at least interactively-launched) app. Run
+    /// manually with `cargo test -- --ignored` and approve the OS prompt if
+    /// one appears, or rely on manual verification through the running app.
     #[test]
     #[ignore]
     fn round_trips_through_real_keychain() {
