@@ -50,13 +50,17 @@ const documentsTransfer: Transfer = {
   localPath: "/tmp/invoice.pdf",
   size: 50,
   partSize: 8 * 1024 * 1024,
-  state: { kind: "uploaded" },
+  // Sticky failures stay visible across a connection switch; a plain
+  // "uploaded" transfer would not — see the regression test in
+  // TransferWidget.test.tsx documenting why (historical completed
+  // transfers must never resurface the widget on their own).
+  state: { kind: "failed", errorClass: "offline" },
   createdAt: 0,
   updatedAt: 0,
 };
 
 describe("AppShell first run", () => {
-  test("zero connections shows the welcome screen, then the setup form after the CTA", async () => {
+  test("zero connections shows the onboarding with the connection form", async () => {
     const services = createFakeServices({ connections: [] });
 
     render(
@@ -65,21 +69,12 @@ describe("AppShell first run", () => {
       </ServicesProvider>,
     );
 
+    // Onboarding step 1: welcome copy and the setup form together.
     await waitFor(() =>
-      expect(
-        screen.getByText("Drag files in, watch them upload, know for certain they arrived."),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("Welcome to Lopload")).toBeInTheDocument(),
     );
-    expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
-
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Add a storage connection" }));
-
     expect(screen.getByLabelText("Endpoint URL")).toBeInTheDocument();
     expect(screen.getByLabelText("Access key")).toBeInTheDocument();
-    expect(
-      screen.queryByText("Drag files in, watch them upload, know for certain they arrived."),
-    ).not.toBeInTheDocument();
   });
 });
 
@@ -109,7 +104,7 @@ describe("AppShell connection switcher", () => {
     await waitFor(() => expect(screen.getAllByText("vacation.mp4").length).toBeGreaterThan(0));
     expect(screen.getByText("Sending — 50%")).toBeInTheDocument();
     expect(screen.queryByText("invoice.pdf")).not.toBeInTheDocument();
-    expect(screen.queryByText("Uploaded ✓")).not.toBeInTheDocument();
+    expect(screen.queryByText("Couldn't send — tap to retry")).not.toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Storage connection"));
@@ -119,7 +114,7 @@ describe("AppShell connection switcher", () => {
     await waitFor(() =>
       expect(screen.getAllByText("invoice.pdf").length).toBeGreaterThan(0),
     );
-    expect(screen.getByText("Uploaded ✓")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't send — tap to retry")).toBeInTheDocument();
     expect(screen.queryByText("vacation.mp4")).not.toBeInTheDocument();
     expect(screen.queryByText("Sending — 50%")).not.toBeInTheDocument();
   });
@@ -158,7 +153,47 @@ describe("AppShell manage connections", () => {
     expect(await services.connections.list()).toEqual([documents]);
   });
 
-  test("removing the last connection returns to the welcome screen", async () => {
+  test("deleting the active connection never resurrects the fallback connection's old, already-uploaded transfers", async () => {
+    // Regression: deleting a connection switches `currentId` to the
+    // fallback connection just like an explicit switch does. If the
+    // fallback happens to have a finished upload sitting in its history,
+    // the floating widget must not pop up out of nowhere for it — the
+    // widget should only ever appear for uploads enqueued while it's
+    // mounted, not historical completed ones surfaced by a connection
+    // change.
+    const services = createFakeServices({
+      connections: [videos, documents],
+      entriesByPrefix: {
+        "videos::clips/": videosClipsEntries,
+        "documents::": documentsRootEntries,
+      },
+      transfersByConnection: {
+        documents: [{ ...documentsTransfer, state: { kind: "uploaded" } }],
+      },
+    });
+
+    render(
+      <ServicesProvider value={services}>
+        <AppShell />
+      </ServicesProvider>,
+    );
+
+    await waitFor(() => expect(screen.getAllByText("vacation.mp4").length).toBeGreaterThan(0));
+
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Storage connection"));
+    await user.click(screen.getByRole("option", { name: "Manage storage connections…" }));
+
+    await screen.findByText("Storage connections");
+    await user.click(screen.getByRole("button", { name: "Remove Videos" }));
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(screen.getAllByText("invoice.pdf").length).toBeGreaterThan(0));
+    expect(screen.queryByText(/Uploading \d+ item/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/uploads? complete/)).not.toBeInTheDocument();
+  });
+
+  test("removing the last connection returns to the onboarding", async () => {
     const services = createFakeServices({ connections: [videos] });
 
     render(
@@ -177,9 +212,7 @@ describe("AppShell manage connections", () => {
     await user.click(await screen.findByRole("button", { name: "Remove" }));
 
     await waitFor(() =>
-      expect(
-        screen.getByText("Drag files in, watch them upload, know for certain they arrived."),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("Welcome to Lopload")).toBeInTheDocument(),
     );
   });
 });
