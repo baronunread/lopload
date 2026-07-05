@@ -1,45 +1,82 @@
-# Lopload
+<p align="center">
+  <a href="https://lopload.com">
+    <picture>
+      <source srcset="public/logo-dark.svg" media="(prefers-color-scheme: dark)">
+      <source srcset="public/logo-light.svg" media="(prefers-color-scheme: light)">
+      <img src="public/logo-light.svg" width="120" alt="Lopload logo">
+    </picture>
+  </a>
+</p>
 
-[![Build](https://github.com/baronunread/lopload/actions/workflows/build.yml/badge.svg)](https://github.com/baronunread/lopload/actions/workflows/build.yml)
-[![Tauri](https://img.shields.io/badge/Tauri-2-8A2BE2?logo=tauri&logoColor=white)](https://v2.tauri.app)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Rust](https://img.shields.io/badge/Rust-1.85-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Bun](https://img.shields.io/badge/Bun-1.3-000000?logo=bun&logoColor=white)](https://bun.sh)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-808080)](#)
-[![License](https://img.shields.io/badge/license-MIT-3DA639)](LICENSE)
+<p align="center">A desktop file manager for S3-compatible storage.</p>
 
-A desktop file manager for S3-compatible storage. Drag files in, they upload. Nothing in the interface ever says "bucket" or "object" — these are just folders and files.
+<p align="center">
+  <a href="https://github.com/baronunread/lopload/actions/workflows/build.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/baronunread/lopload/build.yml?style=flat-square&branch=main" /></a>
+  <a href="https://github.com/baronunread/lopload/releases"><img alt="Release" src="https://img.shields.io/github/v/release/baronunread/lopload?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-3DA639?style=flat-square" /></a>
+</p>
 
-## Quick start
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="https://docs.lopload.com">Docs</a> •
+  <a href="#security">Security</a>
+</p>
 
-```sh
+[![Screenshot](media/screenshot.png)](https://lopload.com)
+
+> [!TIP]
+> Add credentials for one or more storage connections, then drag files in like any other file manager — Windows, macOS, and Linux. Nothing in the interface ever says "bucket," "object," or "key": these are just folders and files.
+
+---
+
+### Quick start
+
+```bash
 bun install
 bun run tauri dev
 ```
 
-> **Dev mode** — runs in a browser tab (`bun run dev`) with a demo backend (seeded files, simulated uploads). No Tauri, no S3 needed.
+> [!TIP]
+> **Dev mode** — run `bun run dev` to open the frontend in a browser tab with a seeded demo backend. No Tauri, no S3 bucket needed.
 
-> **Production build** — `LOPLOAD_NATIVE_KEYCHAIN=1 bun run tauri build` enables native OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). Debug builds use a local JSON file and never touch the keychain.
-
-## Why it's trustworthy
-
-Every transfer goes through `queued → sending → checking → uploaded ✓` (or `failed`). Nothing is marked uploaded without verification — local MD5 must match the server's ETag. Multipart uploads resume across restarts. Failed transfers stay visible until you act on them.
-
-## Commands
-
-| Command | What it does |
+| Platform | Installer |
 |---|---|
-| `bun run dev` | Frontend only (browser tab, demo backend) |
-| `bun run tauri dev` | Desktop app with hot-reload |
-| `bun run check` | TypeScript check + unit tests |
-| `bun run test:integration` | Integration tests (real MinIO via Docker) |
-| `bun run tauri build` | Debug installer (dev credential backend) |
-| `LOPLOAD_NATIVE_KEYCHAIN=1 bun run tauri build` | Production installer (OS keychain) |
+| macOS (Apple Silicon) | `.dmg` |
+| Windows (x64) | `.msi` |
+| Linux (x64) | `.deb` |
 
-> **CI** — pushes to `main` build all three platforms. Push a tag `v*` to create a GitHub Release with `.deb`, `.dmg`, and `.msi` artifacts.
+Download from the [releases page](https://github.com/baronunread/lopload/releases).
 
-## Security
+---
 
-- Credentials live only in the OS keychain (or dev store in debug builds). Never in SQLite, config files, or logs.
-- All S3 requests go through Rust (`@tauri-apps/plugin-http`). No CORS, no proxy, no third-party relay.
+### Features
+
+- **Verified uploads** — every file is checked after transfer: local MD5 vs server ETag. A network hiccup that truncates a transfer can never produce a false "done."
+- **Resumable** — multipart uploads persist progress to disk. An app or machine restart resumes from the last completed part.
+- **Sticky failures** — failed transfers stay visible until you act on them. No auto-dismiss, no silent retry.
+- **Multi-connection** — switch between storage endpoints. Each remembers its last-browsed folder.
+- **Orphan sweep** — abandoned multipart sessions older than 3 days are silently cleaned up.
+
+> [!TIP]
+> **Production build** — `LOPLOAD_NATIVE_KEYCHAIN=1 bun run tauri build` enables the native OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). Debug builds use a local file and never touch the keychain.
+
+---
+
+### Security
+
+- Credentials live only in the OS keychain (or dev store). Never in SQLite, config files, or logs.
+- All S3 requests go through Rust via `@tauri-apps/plugin-http`. No CORS, no proxy, no third-party relay.
 - Error messages shown to the user are plain sentences. Raw SDK or XML error text never reaches the UI.
+- [Documentation](https://docs.lopload.com) *(coming soon)*
+
+---
+
+### Contributing
+
+See [`AGENTS.md`](AGENTS.md) for architecture, commands, and conventions.
+
+<p align="center">
+  <a href="https://github.com/baronunread/lopload">GitHub</a> •
+  <a href="https://docs.lopload.com">Docs</a>
+</p>

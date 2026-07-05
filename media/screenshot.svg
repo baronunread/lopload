@@ -1,0 +1,47 @@
+<svg width="1200" height="750" viewBox="0 0 1200 750" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="750" rx="16" fill="#1E1E2E"/>
+  <!-- Title bar -->
+  <rect width="1200" height="44" fill="#2A2A3C" rx="16"/>
+  <rect y="20" width="1200" height="24" fill="#2A2A3C"/>
+  <circle cx="24" cy="22" r="6" fill="#FF5F57"/>
+  <circle cx="44" cy="22" r="6" fill="#FEBC2E"/>
+  <circle cx="64" cy="22" r="6" fill="#28C840"/>
+  <!-- Sidebar -->
+  <rect x="0" y="44" width="220" height="706" fill="#252536"/>
+  <rect x="16" y="68" width="188" height="36" rx="8" fill="#3A3A50"/>
+  <rect x="16" y="116" width="188" height="36" rx="8" fill="#3A3A50"/>
+  <rect x="16" y="164" width="140" height="20" rx="4" fill="#4A4A60"/>
+  <rect x="16" y="196" width="160" height="20" rx="4" fill="#4A4A60"/>
+  <rect x="16" y="228" width="120" height="20" rx="4" fill="#4A4A60"/>
+  <!-- Breadcrumb -->
+  <rect x="240" y="60" width="200" height="24" rx="4" fill="#3A3A50"/>
+  <!-- File table header -->
+  <rect x="240" y="100" width="930" height="36" rx="8" fill="#2A2A3C"/>
+  <rect x="260" y="112" width="200" height="12" rx="3" fill="#4A4A60"/>
+  <rect x="520" y="112" width="100" height="12" rx="3" fill="#4A4A60"/>
+  <rect x="680" y="112" width="80" height="12" rx="3" fill="#4A4A60"/>
+  <!-- File rows -->
+  <rect x="240" y="148" width="930" height="52" rx="8" fill="#2A2A3C"/>
+  <rect x="260" y="160" width="180" height="12" rx="3" fill="#6C6C80"/>
+  <rect x="260" y="178" width="120" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="520" y="166" width="60" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="680" y="166" width="40" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="240" y="212" width="930" height="52" rx="8" fill="#2A2A3C"/>
+  <rect x="260" y="224" width="160" height="12" rx="3" fill="#6C6C80"/>
+  <rect x="260" y="242" width="100" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="520" y="230" width="80" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="680" y="230" width="40" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="240" y="276" width="930" height="52" rx="8" fill="#2A2A3C"/>
+  <rect x="260" y="288" width="140" height="12" rx="3" fill="#6C6C80"/>
+  <rect x="260" y="306" width="90" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="520" y="294" width="100" height="8" rx="3" fill="#4A4A60"/>
+  <rect x="680" y="294" width="40" height="8" rx="3" fill="#4A4A60"/>
+  <!-- Transfer widget at bottom -->
+  <rect x="240" y="620" width="930" height="56" rx="12" fill="#2A2A3C" opacity="0.9"/>
+  <rect x="260" y="636" width="120" height="24" rx="6" fill="#FCE3A0"/>
+  <rect x="270" y="642" width="100" height="12" rx="3" fill="#7A5A0C"/>
+  <rect x="400" y="640" width="180" height="8" rx="4" fill="#4A4A60"/>
+  <rect x="400" y="654" width="120" height="8" rx="4" fill="#3A3A50"/>
+  <rect x="590" y="640" width="100" height="8" rx="4" fill="#4A4A60"/>
+  <rect x="590" y="654" width="80" height="8" rx="4" fill="#3A3A50"/>
+</svg>
