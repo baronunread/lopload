@@ -174,17 +174,17 @@ export function SetupScreen({ existing, onSaved, onCancel }: SetupScreenProps) {
         onChange={(e) => update("region", e.target.value)}
       />
 
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2">
         <Button
           type="submit"
           variant={ready ? "primary" : "secondary"}
           loading={testState === "testing" || (ready && saving)}
-          className={shake ? "lopload-shake" : undefined}
+          className={`w-full justify-center${shake ? " lopload-shake" : ""}`}
         >
           {ready ? "Save connection" : "Test connection"}
         </Button>
         {onCancel && (
-          <Button type="button" variant="ghost" onClick={onCancel}>
+          <Button type="button" variant="ghost" className="w-full justify-center" onClick={onCancel}>
             Cancel
           </Button>
         )}
