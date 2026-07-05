@@ -57,6 +57,11 @@ jobs:
       - name: Build application
         run: bun run tauri build
 
+      - name: Copy raw binary (Windows portable)
+        if: runner.os == 'Windows'
+        run: |
+          copy src-tauri\target\release\lopload.exe src-tauri\target\release\bundle\msi\Lopload_portable.exe
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:

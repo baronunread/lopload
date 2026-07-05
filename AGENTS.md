@@ -66,6 +66,11 @@ LOPLOAD_NATIVE_KEYCHAIN=1 bun run tauri build
 
 Set `signingIdentity` in `src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity` for macOS code signing.
 
+On Windows, `tauri build` produces:
+- `.msi` — WiX installer
+- `.exe` — NSIS installer (in `bundle/nsis/`)
+- `Lopload_portable.exe` — raw binary, no install needed (copied into `bundle/msi/` by CI)
+
 ## Conventions
 
 - No comments in source code unless the "why" isn't obvious from the code.

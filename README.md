@@ -40,10 +40,10 @@ bun run tauri dev
 > [!TIP]
 > **Dev mode** — run `bun run dev` to open the frontend in a browser tab with a seeded demo backend. No Tauri, no S3 bucket needed.
 
-| Platform | Installer |
+| Platform | Download |
 |---|---|
 | macOS (Apple Silicon) | `.dmg` |
-| Windows (x64) | `.msi` |
+| Windows (x64) | `.msi` (installer) · `.exe` (portable) |
 | Linux (x64) | `.deb` |
 
 Download from the [releases page](https://github.com/baronunread/lopload/releases).
