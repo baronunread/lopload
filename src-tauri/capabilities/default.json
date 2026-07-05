@@ -10,7 +10,7 @@
     "sql:allow-execute",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+      "allow": [{ "url": "https://*:*" }, { "url": "http://*:*" }]
     },
     "fs:default",
     "fs:read-all",
