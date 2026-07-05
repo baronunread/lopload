@@ -59,7 +59,7 @@ Download from the [releases page](https://github.com/baronunread/lopload/release
 - **Orphan sweep** — abandoned multipart sessions older than 3 days are silently cleaned up.
 
 > [!TIP]
-> **Production build** — `LOPLOAD_NATIVE_KEYCHAIN=1 bun run tauri build` enables the native OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). Debug builds use a local file and never touch the keychain.
+> **Production build** — `bun run tauri build` always stores credentials in the native OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). No env vars, no config, no prompts.
 
 ---
 

@@ -11,8 +11,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  LOPLOAD_NATIVE_KEYCHAIN: "1"
+env: {}
 
 jobs:
   build:

@@ -16,21 +16,20 @@ Everything uses `bun` — never `npm`/`npx`/`node`.
 
 ## Credential backend
 
-Selected at build time — never changed at runtime without a recompile:
+Single native backend, selected at compile time per platform — no env vars, no config:
 
-| `cfg(native_keychain)` | Backend | What happens |
+| Platform | Crate | Store |
 |---|---|---|
-| **not set** (default for all profiles) | Dev store: `$APPDATA/dev-credentials.json` (0600) | No OS keychain touched. No popups. |
-| **set** (only when `LOPLOAD_NATIVE_KEYCHAIN=1`) | `keyring` crate → macOS Keychain / Windows Credential Manager / Linux Secret Service | Full OS secure storage. |
-
-Override at runtime for **testing only**: set `LOPLOAD_KEYCHAIN_BACKEND=native|dev`.
+| macOS | `security-framework` with `use_protected_keychain()` | Data Protection Keychain (no prompts) |
+| Windows | `keyring` with `windows-native` | Credential Manager |
+| Linux | `keyring` with `sync-secret-service` | Secret Service (gnome-keyring / KWallet) |
 
 ## Architectural decisions
 
 1. **S3 in the frontend** — `@aws-sdk/client-s3` with manual multipart. Fetch injected via `requestHandler` (Tauri HTTP plugin in app, global fetch in tests).
 2. **No CORS** — the Tauri webview uses `@tauri-apps/plugin-http` which goes through Rust.
 3. **SQLite** via `@tauri-apps/plugin-sql` for connection metadata + transfer state. **No secrets in SQLite.**
-4. **Credentials** only in OS keychain (or dev store). Never SQLite, config files, or logs.
+4. **Credentials** only in OS keychain. Never SQLite, config files, or logs.
 5. **Transfer state machine**: `queued → sending → checking → uploaded | failed`. `failed` is sticky until user acts.
 6. **Verification before "Uploaded ✓"**: local MD5 vs ETag (single) or HeadObject size+composite ETag (multipart).
 7. **Error classes**: `offline`, `credentials`, `storage-full`, `connection-dropped`, `verification`, `not-found`, `unknown`. Raw SDK text never reaches the UI.
@@ -61,8 +60,10 @@ Rust tests: `cd src-tauri && cargo test` (keychain tests that touch the real OS 
 ## Building for production
 
 ```sh
-LOPLOAD_NATIVE_KEYCHAIN=1 bun run tauri build
+bun run tauri build
 ```
+
+Credentials are always stored in the OS-native secure storage — no env vars, no build flags.
 
 Set `signingIdentity` in `src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity` for macOS code signing.
 
