@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Toasty } from "@cloudflare/kumo";
 import { SetupScreen } from "../../../src/ui/SetupScreen";
 import { ServicesProvider } from "../../../src/ui/services";
 import { createFakeServices } from "./fakeServices";
@@ -16,38 +17,66 @@ async function fillRequiredFields(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("SetupScreen", () => {
-  test("save is disabled until test-connection succeeds", async () => {
+  test("the single button starts as Test connection and becomes Save connection once the test passes", async () => {
     const services = createFakeServices({ testConnectionResult: { ok: true, message: "It works." } });
     const user = userEvent.setup();
     render(
-      <ServicesProvider value={services}>
-        <SetupScreen onSaved={() => {}} />
-      </ServicesProvider>,
+      <Toasty>
+        <ServicesProvider value={services}>
+          <SetupScreen onSaved={() => {}} />
+        </ServicesProvider>
+      </Toasty>,
     );
 
     await fillRequiredFields(user);
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save connection" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Test connection" }));
-    await screen.findByText("It works.");
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+    const saveButton = await screen.findByRole("button", { name: "Save connection" });
+    expect(saveButton).toBeEnabled();
   });
 
-  test("failed test-connection shows a plain-language message and keeps save disabled", async () => {
+  test("a failed test-connection shows an error toast, shakes the button, and never reveals Save", async () => {
     const services = createFakeServices({
       testConnectionResult: { ok: false, message: "No internet connection." },
     });
     const user = userEvent.setup();
     render(
-      <ServicesProvider value={services}>
-        <SetupScreen onSaved={() => {}} />
-      </ServicesProvider>,
+      <Toasty>
+        <ServicesProvider value={services}>
+          <SetupScreen onSaved={() => {}} />
+        </ServicesProvider>
+      </Toasty>,
+    );
+
+    await fillRequiredFields(user);
+    const button = screen.getByRole("button", { name: "Test connection" });
+    await user.click(button);
+
+    await screen.findByText("No internet connection.");
+    await screen.findByText("Couldn't connect");
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save connection" })).not.toBeInTheDocument();
+  });
+
+  test("editing a field after a passed test resets back to Test connection", async () => {
+    const services = createFakeServices({ testConnectionResult: { ok: true, message: "It works." } });
+    const user = userEvent.setup();
+    render(
+      <Toasty>
+        <ServicesProvider value={services}>
+          <SetupScreen onSaved={() => {}} />
+        </ServicesProvider>
+      </Toasty>,
     );
 
     await fillRequiredFields(user);
     await user.click(screen.getByRole("button", { name: "Test connection" }));
+    await screen.findByRole("button", { name: "Save connection" });
 
-    await screen.findByText("No internet connection.");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Name"), "!");
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeInTheDocument();
   });
 });

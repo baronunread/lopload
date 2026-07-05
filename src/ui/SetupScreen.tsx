@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Banner, Button, Input, SensitiveInput } from "@cloudflare/kumo";
+import { useEffect, useState } from "react";
+import { Button, Input, SensitiveInput, useKumoToastManager } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import type { ConnectionDraft } from "./services";
 import { useServices } from "./services";
@@ -51,14 +51,20 @@ export function SetupScreen({ existing, onSaved, onCancel }: SetupScreenProps) {
   const [testState, setTestState] = useState<"idle" | "testing" | "passed" | "failed">(
     "idle",
   );
-  const [testMessage, setTestMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [shake, setShake] = useState(false);
+  const toasts = useKumoToastManager();
+
+  useEffect(() => {
+    if (!shake) return;
+    const timer = setTimeout(() => setShake(false), 400);
+    return () => clearTimeout(timer);
+  }, [shake]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
     // Any edit invalidates a prior successful test — re-test before saving.
     setTestState("idle");
-    setTestMessage(null);
   }
 
   function draft(): ConnectionDraft {
@@ -74,14 +80,23 @@ export function SetupScreen({ existing, onSaved, onCancel }: SetupScreenProps) {
 
   async function handleTest() {
     setTestState("testing");
-    setTestMessage(null);
     try {
       const result = await services.keychain.testConnection(draft());
-      setTestState(result.ok ? "passed" : "failed");
-      setTestMessage(result.message);
+      if (result.ok) {
+        setTestState("passed");
+      } else {
+        setTestState("failed");
+        setShake(true);
+        toasts.add({ variant: "error", title: "Couldn't connect", description: result.message });
+      }
     } catch {
       setTestState("failed");
-      setTestMessage("Something went wrong while testing the connection.");
+      setShake(true);
+      toasts.add({
+        variant: "error",
+        title: "Couldn't connect",
+        description: "Something went wrong while testing the connection.",
+      });
     }
   }
 
@@ -107,14 +122,15 @@ export function SetupScreen({ existing, onSaved, onCancel }: SetupScreenProps) {
     }
   }
 
-  const canSave = testState === "passed" && !saving;
+  const ready = testState === "passed";
 
   return (
     <form
       className="mx-auto flex max-w-md flex-col gap-4 p-8"
       onSubmit={(e) => {
         e.preventDefault();
-        if (canSave) void handleSave();
+        if (ready && !saving) void handleSave();
+        else if (testState !== "testing") void handleTest();
       }}
     >
       <h1 className="lopload-heading text-xl font-semibold">Add a storage connection</h1>
@@ -158,25 +174,14 @@ export function SetupScreen({ existing, onSaved, onCancel }: SetupScreenProps) {
         onChange={(e) => update("region", e.target.value)}
       />
 
-      {testMessage && (
-        <Banner
-          variant={testState === "passed" ? "default" : "error"}
-          title={testState === "passed" ? "Connection works" : "Couldn't connect"}
-          description={testMessage}
-        />
-      )}
-
       <div className="flex gap-2">
         <Button
-          type="button"
-          variant="secondary"
-          onClick={handleTest}
-          loading={testState === "testing"}
+          type="submit"
+          variant={ready ? "primary" : "secondary"}
+          loading={testState === "testing" || (ready && saving)}
+          className={shake ? "lopload-shake" : undefined}
         >
-          Test connection
-        </Button>
-        <Button type="submit" variant="primary" disabled={!canSave}>
-          Save
+          {ready ? "Save connection" : "Test connection"}
         </Button>
         {onCancel && (
           <Button type="button" variant="ghost" onClick={onCancel}>

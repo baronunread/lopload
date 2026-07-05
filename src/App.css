@@ -25,3 +25,22 @@ h2,
 h3 {
   font-family: var(--font-heading, "Nunito", ui-rounded, system-ui, sans-serif);
 }
+
+/* A brief, gentle shake — used to mark a failed action (e.g. "Test
+   connection") without any extra color/motion vocabulary. Kept short and
+   low-amplitude per the spec's "gentle and purposeful only" motion rule. */
+@keyframes lopload-shake {
+  10%,
+  90% { transform: translateX(-1px); }
+  20%,
+  80% { transform: translateX(2px); }
+  30%,
+  50%,
+  70% { transform: translateX(-4px); }
+  40%,
+  60% { transform: translateX(4px); }
+}
+
+.lopload-shake {
+  animation: lopload-shake 400ms ease-in-out;
+}

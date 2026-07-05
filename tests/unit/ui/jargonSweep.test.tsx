@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
+import { Toasty } from "@cloudflare/kumo";
 import { SetupScreen } from "../../../src/ui/SetupScreen";
 import { WelcomeScreen } from "../../../src/ui/WelcomeScreen";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
@@ -62,9 +63,11 @@ describe("jargon sweep", () => {
     welcome.unmount();
 
     const setup = render(
-      <ServicesProvider value={services}>
-        <SetupScreen onSaved={() => {}} />
-      </ServicesProvider>,
+      <Toasty>
+        <ServicesProvider value={services}>
+          <SetupScreen onSaved={() => {}} />
+        </ServicesProvider>
+      </Toasty>,
     );
     assertNoJargon(setup.container);
     setup.unmount();
