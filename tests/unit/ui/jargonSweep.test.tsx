@@ -94,6 +94,7 @@ describe("jargon sweep", () => {
         currentId={conn.id}
         onSwitch={() => {}}
         onAddStorage={() => {}}
+        onManageStorage={() => {}}
       />,
     );
     assertNoJargon(switcher.container);

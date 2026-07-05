@@ -124,3 +124,62 @@ describe("AppShell connection switcher", () => {
     expect(screen.queryByText("Sending — 50%")).not.toBeInTheDocument();
   });
 });
+
+describe("AppShell manage connections", () => {
+  test("removing the active connection falls back to another remaining one", async () => {
+    const services = createFakeServices({
+      connections: [videos, documents],
+      entriesByPrefix: {
+        "videos::clips/": videosClipsEntries,
+        "documents::": documentsRootEntries,
+      },
+    });
+
+    render(
+      <ServicesProvider value={services}>
+        <AppShell />
+      </ServicesProvider>,
+    );
+
+    await waitFor(() => expect(screen.getAllByText("vacation.mp4").length).toBeGreaterThan(0));
+
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Storage connection"));
+    await user.click(screen.getByRole("option", { name: "Manage storage connections…" }));
+
+    await screen.findByText("Storage connections");
+    await user.click(screen.getByRole("button", { name: "Remove Videos" }));
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+    // Falls back to the only remaining connection, Documents, with no
+    // leftover trace of Videos' state.
+    await waitFor(() => expect(screen.getAllByText("invoice.pdf").length).toBeGreaterThan(0));
+    expect(screen.queryByText("vacation.mp4")).not.toBeInTheDocument();
+    expect(await services.connections.list()).toEqual([documents]);
+  });
+
+  test("removing the last connection returns to the welcome screen", async () => {
+    const services = createFakeServices({ connections: [videos] });
+
+    render(
+      <ServicesProvider value={services}>
+        <AppShell />
+      </ServicesProvider>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByLabelText("Storage connection");
+    await user.click(screen.getByLabelText("Storage connection"));
+    await user.click(screen.getByRole("option", { name: "Manage storage connections…" }));
+
+    await screen.findByText("Storage connections");
+    await user.click(screen.getByRole("button", { name: "Remove Videos" }));
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Drag files in, watch them upload, know for certain they arrived."),
+      ).toBeInTheDocument(),
+    );
+  });
+});

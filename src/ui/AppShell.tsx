@@ -7,6 +7,7 @@ import { SetupScreen } from "./SetupScreen";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { RemoteBrowser } from "./RemoteBrowser";
 import { TransferPanel } from "./TransferPanel";
+import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
 
 function AppShellInner() {
   const services = useServices();
@@ -14,6 +15,7 @@ function AppShellInner() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [prefix, setPrefix] = useState("");
   const [showSetup, setShowSetup] = useState(false);
+  const [showManage, setShowManage] = useState(false);
   const toasts = useKumoToastManager();
 
   useEffect(() => {
@@ -48,6 +50,17 @@ function AppShellInner() {
     setShowSetup(false);
   }
 
+  function handleDeleted(id: string) {
+    const remaining = connections.filter((c) => c.id !== id);
+    setConnections(remaining);
+    if (id === currentId) {
+      const fallback = remaining[0] ?? null;
+      setCurrentId(fallback?.id ?? null);
+      setPrefix(fallback?.lastPrefix ?? "");
+    }
+    if (remaining.length === 0) setShowManage(false);
+  }
+
   if (!showSetup && connections.length === 0) {
     return <WelcomeScreen onGetStarted={() => setShowSetup(true)} />;
   }
@@ -71,9 +84,18 @@ function AppShellInner() {
             currentId={currentId}
             onSwitch={switchTo}
             onAddStorage={() => setShowSetup(true)}
+            onManageStorage={() => setShowManage(true)}
           />
         </div>
       </header>
+
+      {showManage && (
+        <ManageConnectionsDialog
+          connections={connections}
+          onClose={() => setShowManage(false)}
+          onDeleted={handleDeleted}
+        />
+      )}
       <main className="grid flex-1 grid-cols-1 gap-4 overflow-auto p-4 md:grid-cols-2 md:overflow-hidden">
         <section className="min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line md:min-h-0">
           <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
