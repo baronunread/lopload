@@ -127,7 +127,10 @@ function listEntries(connectionId: string, prefix: string): RemoteEntry[] {
       const folderKey = prefix + folderName;
       if (!folderKeys.has(folderKey)) {
         folderKeys.add(folderKey);
-        entries.push({ kind: "folder", name: folderName, key: folderKey });
+        // `name` is a display label, never a storage-style key — strip the
+        // trailing slash so it matches the real backend (src/lib/s3/client.ts's
+        // baseName()) instead of showing e.g. "photos/" in the UI.
+        entries.push({ kind: "folder", name: folderName.slice(0, -1), key: folderKey });
       }
     }
   }
