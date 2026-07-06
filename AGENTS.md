@@ -20,7 +20,7 @@ Single native backend, selected at compile time per platform — no env vars, no
 
 | Platform | Crate | Store |
 |---|---|---|
-| macOS | `security-framework` with `use_protected_keychain()` | Data Protection Keychain (no prompts) |
+| macOS | `security-framework` (standard `SecItemAdd`) | Data Protection Keychain (no prompts) |
 | Windows | `keyring` with `windows-native` | Credential Manager |
 | Linux | `keyring` with `sync-secret-service` | Secret Service (gnome-keyring / KWallet) |
 

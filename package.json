@@ -8,7 +8,6 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:production": "LOPLOAD_NATIVE_KEYCHAIN=1 tauri build",
     "test": "bun test tests/unit src",
     "test:integration": "bun test tests/integration",
     "typecheck": "tsc --noEmit",
