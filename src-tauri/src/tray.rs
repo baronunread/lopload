@@ -8,21 +8,43 @@
 
 use std::sync::Mutex;
 
+use serde::Deserialize;
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, Runtime, WindowEvent,
 };
 
 const MENU_ID_SHOW: &str = "show";
 const MENU_ID_RETRY: &str = "retry";
+const MENU_ID_COPY_LINK: &str = "copy-link";
+const MENU_ID_UPLOAD_NONE: &str = "upload-none";
 const MENU_ID_QUIT: &str = "quit";
+const UPLOAD_ITEM_PREFIX: &str = "upload-conn:";
 
 /// Emitted when the user clicks "Retry failed" in the tray menu — the
 /// frontend is the only side that knows which transfers are failed, so it
 /// listens for this and calls `retry()` on each of them.
 pub const RETRY_FAILED_EVENT: &str = "tray://retry-failed";
+
+/// Emitted when the user clicks a per-connection "Upload files…" item, with
+/// the connection id as payload — the frontend owns the file picker and the
+/// per-connection transfer engine, so it does the actual enqueueing.
+pub const UPLOAD_FILES_EVENT: &str = "tray://upload-files";
+
+/// Emitted when the user clicks "Copy link — <file>" — the frontend tracks
+/// which file that is (it's the one that owns upload verification), so this
+/// carries no payload; the frontend just re-copies whatever it last set.
+pub const COPY_LINK_EVENT: &str = "tray://copy-link";
+
+/// One saved connection, as pushed from the frontend for the "Upload
+/// files…" submenu — deliberately minimal (no endpoint/bucket/credentials).
+#[derive(Deserialize)]
+pub struct TrayConnection {
+    id: String,
+    name: String,
+}
 
 /// The tray menu items that get their text/enabled state updated live, kept
 /// around (rather than rebuilt) since Tauri 2's `MenuItem` supports
@@ -30,6 +52,8 @@ pub const RETRY_FAILED_EVENT: &str = "tray://retry-failed";
 struct TrayMenuItems<R: Runtime> {
     status: MenuItem<R>,
     retry: MenuItem<R>,
+    upload_submenu: Submenu<R>,
+    copy_link: MenuItem<R>,
     quit: MenuItem<R>,
 }
 
@@ -63,6 +87,28 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, format_quit_label(0), true, None::<&str>)?;
+
+    // Starts empty (populated via tray_set_connections once the frontend
+    // loads the saved connection list) with a disabled placeholder so the
+    // submenu never looks broken before that first push arrives.
+    let upload_submenu = Submenu::with_id(app, "upload", "Upload files…", true)?;
+    let upload_placeholder = MenuItem::with_id(
+        app,
+        MENU_ID_UPLOAD_NONE,
+        "No storage connections yet",
+        false,
+        None::<&str>,
+    )?;
+    upload_submenu.append(&upload_placeholder)?;
+
+    let copy_link_item = MenuItem::with_id(
+        app,
+        MENU_ID_COPY_LINK,
+        "Copy link",
+        false,
+        None::<&str>,
+    )?;
+
     let separator_top = PredefinedMenuItem::separator(app)?;
     let separator_bottom = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
@@ -72,6 +118,8 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &separator_top,
             &show_item,
             &retry_item,
+            &upload_submenu,
+            &copy_link_item,
             &separator_bottom,
             &quit_item,
         ],
@@ -95,13 +143,23 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .menu(&menu)
         .tooltip("Lopload")
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            MENU_ID_SHOW => show_main_window(app),
-            MENU_ID_RETRY => {
-                let _ = app.emit(RETRY_FAILED_EVENT, ());
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            if let Some(connection_id) = id.strip_prefix(UPLOAD_ITEM_PREFIX) {
+                let _ = app.emit(UPLOAD_FILES_EVENT, connection_id.to_string());
+                return;
             }
-            MENU_ID_QUIT => app.exit(0),
-            _ => {}
+            match id {
+                MENU_ID_SHOW => show_main_window(app),
+                MENU_ID_RETRY => {
+                    let _ = app.emit(RETRY_FAILED_EVENT, ());
+                }
+                MENU_ID_COPY_LINK => {
+                    let _ = app.emit(COPY_LINK_EVENT, ());
+                }
+                MENU_ID_QUIT => app.exit(0),
+                _ => {}
+            }
         })
         .build(app)?;
 
@@ -109,6 +167,8 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         items: TrayMenuItems {
             status: status_item,
             retry: retry_item,
+            upload_submenu,
+            copy_link: copy_link_item,
             quit: quit_item,
         },
         icons: TrayIcons {
@@ -227,6 +287,80 @@ pub fn tray_set_status<R: Runtime>(
         }
         *showing_failed_icon = show_failed_icon;
     }
+
+    Ok(())
+}
+
+/// Rebuilds the "Upload files…" submenu from the frontend's current
+/// connection list — called on startup and whenever a connection is added,
+/// renamed, or removed. Falls back to a disabled placeholder when empty.
+#[tauri::command]
+pub fn tray_set_connections<R: Runtime>(
+    app: AppHandle<R>,
+    connections: Vec<TrayConnection>,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<TrayState<R>>()
+        .ok_or_else(|| "tray not initialized".to_string())?;
+
+    let submenu = &state.items.upload_submenu;
+    let existing_count = submenu.items().map_err(|e| e.to_string())?.len();
+    for _ in 0..existing_count {
+        submenu.remove_at(0).map_err(|e| e.to_string())?;
+    }
+
+    if connections.is_empty() {
+        let placeholder = MenuItem::with_id(
+            &app,
+            MENU_ID_UPLOAD_NONE,
+            "No storage connections yet",
+            false,
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
+        submenu.append(&placeholder).map_err(|e| e.to_string())?;
+    } else {
+        for conn in &connections {
+            let item = MenuItem::with_id(
+                &app,
+                format!("{UPLOAD_ITEM_PREFIX}{}", conn.id),
+                conn.name.clone(),
+                true,
+                None::<&str>,
+            )
+            .map_err(|e| e.to_string())?;
+            submenu.append(&item).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Updates the "Copy link — <file>" item for the most recently verified
+/// upload; disabled with plain "Copy link" text when there isn't one.
+#[tauri::command]
+pub fn tray_set_last_upload<R: Runtime>(
+    app: AppHandle<R>,
+    name: Option<String>,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<TrayState<R>>()
+        .ok_or_else(|| "tray not initialized".to_string())?;
+
+    let (text, enabled) = match &name {
+        Some(name) => (format!("Copy link — {name}"), true),
+        None => ("Copy link".to_string(), false),
+    };
+    state
+        .items
+        .copy_link
+        .set_text(text)
+        .map_err(|e| e.to_string())?;
+    state
+        .items
+        .copy_link
+        .set_enabled(enabled)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
