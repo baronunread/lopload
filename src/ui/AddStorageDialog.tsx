@@ -17,7 +17,7 @@ export interface AddStorageDialogProps {
 export function AddStorageDialog({ existing, onSaved, onClose }: AddStorageDialogProps) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog className="w-full max-w-md p-6">
+      <Dialog className="w-full max-w-md p-6 short:max-w-2xl">
         <div className="flex items-center gap-3">
           <Button variant="ghost" onClick={onClose}>
             Cancel

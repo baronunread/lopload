@@ -167,7 +167,7 @@ export function SetupForm({
 
   return (
     <form
-      className="flex flex-col gap-4"
+      className="grid grid-cols-1 items-start gap-4 short:grid-cols-2"
       onSubmit={(e) => {
         e.preventDefault();
         if (ready && !saving) void handleSave();
@@ -217,7 +217,7 @@ export function SetupForm({
         type="submit"
         variant={ready ? "primary" : "secondary"}
         loading={testState === "testing" || (ready && saving)}
-        className={`w-full justify-center${shake ? " lopload-shake" : ""}`}
+        className={`w-full justify-center short:col-span-2 ${shake ? "lopload-shake" : ""}`}
       >
         {/* Both labels are always mounted, stacked in the same grid cell, and
             crossfade via opacity/transform — this animates the swap instead
@@ -226,7 +226,7 @@ export function SetupForm({
         <span className="relative grid">
           <span
             aria-hidden={ready}
-            className={`col-start-1 row-start-1 transition-all duration-200 ease-out ${
+            className={`col-start-1 row-start-1 transition-[opacity,translate] duration-200 ease-out ${
               ready ? "-translate-y-1 opacity-0" : "translate-y-0 opacity-100"
             }`}
           >
@@ -234,7 +234,7 @@ export function SetupForm({
           </span>
           <span
             aria-hidden={!ready}
-            className={`col-start-1 row-start-1 transition-all duration-200 ease-out ${
+            className={`col-start-1 row-start-1 transition-[opacity,translate] duration-200 ease-out ${
               ready ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
             }`}
           >
