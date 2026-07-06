@@ -12,13 +12,5 @@
     <!-- Network access for S3 connections. -->
     <key>com.apple.security.network.client</key>
     <true/>
-    <!-- Keychain access. No explicit entitlement is needed for a hardened,
-         non-sandboxed app to read/write its own keychain items, but this
-         group declaration ensures the app's Keychain items are scoped to
-         the bundle identifier. -->
-    <key>keychain-access-groups</key>
-    <array>
-        <string>$(AppIdentifierPrefix)com.lopload.app</string>
-    </array>
 </dict>
 </plist>
