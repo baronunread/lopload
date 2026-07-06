@@ -53,6 +53,10 @@ export interface EnqueueFile {
   size: number;
   /** Remote key this file uploads to. */
   key: string;
+  /** Shared by every file from the same dropped/picked folder — copied onto
+   *  the created Transfer so the UI can group them into one row. */
+  folderId?: string;
+  folderName?: string;
 }
 
 export interface TransferEngineDeps {
@@ -134,6 +138,8 @@ export class TransferEngine {
         localPath: file.localPath,
         size: file.size,
         partSize: PART_SIZE,
+        folderId: file.folderId,
+        folderName: file.folderName,
         state: { kind: "queued" },
         createdAt: t,
         updatedAt: t,

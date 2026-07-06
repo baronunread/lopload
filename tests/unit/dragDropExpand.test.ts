@@ -70,16 +70,27 @@ describe("expandDroppedPaths", () => {
 
     expect(result.files).toEqual(
       expect.arrayContaining([
-        { path: "/drop/Vacation/beach.jpg", name: "Vacation/beach.jpg", size: 100 },
+        {
+          path: "/drop/Vacation/beach.jpg",
+          name: "Vacation/beach.jpg",
+          size: 100,
+          folderId: expect.any(String),
+          folderName: "Vacation",
+        },
         {
           path: "/drop/Vacation/clips/sunset.mp4",
           name: "Vacation/clips/sunset.mp4",
           size: 200,
+          folderId: expect.any(String),
+          folderName: "Vacation",
         },
       ]),
     );
     expect(result.files).toHaveLength(2);
     expect(result.skipped).toEqual([]);
+    // Every file under the same dropped folder shares one folderId, so the
+    // UI can group them into a single aggregated row.
+    expect(result.files[0].folderId).toBe(result.files[1].folderId);
   });
 
   test("mixes loose files and folders dropped together", async () => {
@@ -98,7 +109,13 @@ describe("expandDroppedPaths", () => {
     expect(result.files).toEqual(
       expect.arrayContaining([
         { path: "/drop/loose.txt", name: "loose.txt", size: 5 },
-        { path: "/drop/Docs/readme.txt", name: "Docs/readme.txt", size: 6 },
+        {
+          path: "/drop/Docs/readme.txt",
+          name: "Docs/readme.txt",
+          size: 6,
+          folderId: expect.any(String),
+          folderName: "Docs",
+        },
       ]),
     );
     expect(result.files).toHaveLength(2);
@@ -172,7 +189,13 @@ describe("expandDroppedPaths", () => {
     const result = await expandDroppedPaths(["/drop/Mixed"], isDirectory, ops);
 
     expect(result.files).toEqual([
-      { path: "/drop/Mixed/ok.txt", name: "Mixed/ok.txt", size: 7 },
+      {
+        path: "/drop/Mixed/ok.txt",
+        name: "Mixed/ok.txt",
+        size: 7,
+        folderId: expect.any(String),
+        folderName: "Mixed",
+      },
     ]);
     expect(result.skipped).toEqual(["/drop/Mixed/broken.txt"]);
   });
@@ -192,7 +215,13 @@ describe("expandDroppedPaths", () => {
     const result = await expandDroppedPaths(["/drop/Root"], isDirectory, ops);
 
     expect(result.files).toEqual([
-      { path: "/drop/Root/file.txt", name: "Root/file.txt", size: 3 },
+      {
+        path: "/drop/Root/file.txt",
+        name: "Root/file.txt",
+        size: 3,
+        folderId: expect.any(String),
+        folderName: "Root",
+      },
     ]);
     expect(result.skipped).toEqual(["/drop/Root/locked"]);
   });

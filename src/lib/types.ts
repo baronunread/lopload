@@ -47,6 +47,11 @@ export interface Transfer {
   partSize: number;
   /** Set once a multipart session exists; drives resume + orphan matching. */
   uploadId?: string;
+  /** Shared by every transfer that came from the same dropped/picked folder,
+   *  so the UI can render them as one aggregated row instead of one per file. */
+  folderId?: string;
+  /** Display name for the aggregated folder row. Only set alongside `folderId`. */
+  folderName?: string;
   state: TransferState;
   createdAt: number;
   updatedAt: number;

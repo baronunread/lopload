@@ -41,6 +41,12 @@ const MIGRATIONS = [
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
+  // Added after the initial release — run via ALTER rather than the CREATE
+  // TABLE above so existing installs' databases pick it up too. SQLite has
+  // no "ADD COLUMN IF NOT EXISTS", so loadDatabase() below swallows the
+  // "duplicate column" error this throws on every startup after the first.
+  `ALTER TABLE transfers ADD COLUMN folder_id TEXT`,
+  `ALTER TABLE transfers ADD COLUMN folder_name TEXT`,
   `CREATE TABLE IF NOT EXISTS transfer_parts (
     transfer_id TEXT NOT NULL,
     part_number INTEGER NOT NULL,
@@ -57,7 +63,11 @@ export async function loadDatabase(path = "sqlite:lopload.db"): Promise<Database
   if (!migrated) {
     migrated = (async () => {
       for (const stmt of MIGRATIONS) {
-        await db.execute(stmt);
+        try {
+          await db.execute(stmt);
+        } catch (err) {
+          if (!/duplicate column name/i.test(String(err))) throw err;
+        }
       }
     })();
   }
@@ -150,6 +160,8 @@ interface TransferRow {
   state: string;
   error_class: string | null;
   expected_md5: string | null;
+  folder_id: string | null;
+  folder_name: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -189,6 +201,8 @@ function rowToTransfer(row: TransferRow): Transfer {
     size: row.size,
     partSize: row.part_size,
     uploadId: row.upload_id ?? undefined,
+    folderId: row.folder_id ?? undefined,
+    folderName: row.folder_name ?? undefined,
     state,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -219,8 +233,8 @@ export class SqliteTransferStore implements TransferStore {
     await this.db.execute(
       `INSERT INTO transfers (
          id, connection_id, key, local_path, size, part_size, upload_id,
-         state, error_class, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         state, error_class, folder_id, folder_name, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT(id) DO UPDATE SET
          upload_id = excluded.upload_id,
          state = excluded.state,
@@ -236,6 +250,8 @@ export class SqliteTransferStore implements TransferStore {
         t.uploadId ?? null,
         t.state.kind,
         errorClass,
+        t.folderId ?? null,
+        t.folderName ?? null,
         t.createdAt,
         t.updatedAt,
       ],

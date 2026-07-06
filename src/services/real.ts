@@ -292,6 +292,8 @@ class RealServices implements AppServices {
         localPath: f.path,
         size: f.size,
         key: `${prefix}${f.name}`,
+        folderId: f.folderId,
+        folderName: f.folderName,
       }));
       await engine.enqueue(toEnqueue);
     },
@@ -402,7 +404,15 @@ class RealServices implements AppServices {
     // nested files), so the remote key built as `prefix + name` preserves
     // folder structure. `size` is the real file size, not a placeholder.
     if (files.length > 0) {
-      cb(files.map((f) => ({ path: f.path, name: f.name, size: f.size })));
+      cb(
+        files.map((f) => ({
+          path: f.path,
+          name: f.name,
+          size: f.size,
+          folderId: f.folderId,
+          folderName: f.folderName,
+        })),
+      );
     }
   }
 

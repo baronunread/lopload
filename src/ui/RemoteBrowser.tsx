@@ -22,6 +22,7 @@ import { useServices, type FolderInfo } from "./services";
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { Thumbnail } from "./Thumbnail";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { SOLID_DANGER_BUTTON_STYLE } from "./dangerButton";
 
 export interface RemoteBrowserProps {
   connectionId: string;
@@ -610,7 +611,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                   <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
                     Cancel
                   </Dialog.Close>
-                  <Button variant="destructive" onClick={() => void confirmPending()}>
+                  <Button variant="destructive" style={SOLID_DANGER_BUTTON_STYLE} onClick={() => void confirmPending()}>
                     Delete
                   </Button>
                 </div>
@@ -623,7 +624,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                   <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
                     Cancel
                   </Dialog.Close>
-                  <Button variant="destructive" onClick={() => void confirmPending()}>
+                  <Button variant="destructive" style={SOLID_DANGER_BUTTON_STYLE} onClick={() => void confirmPending()}>
                     Delete
                   </Button>
                 </div>

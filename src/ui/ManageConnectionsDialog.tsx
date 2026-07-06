@@ -3,6 +3,7 @@ import { Button, Dialog } from "@cloudflare/kumo";
 import { TrashIcon } from "@phosphor-icons/react";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
+import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "./dangerButton";
 
 export interface ManageConnectionsDialogProps {
   connections: Connection[];
@@ -55,7 +56,8 @@ export function ManageConnectionsDialog({
                     <div className="truncate text-xs text-kumo-subtle">{conn.endpoint}</div>
                   </div>
                   <Button
-                    variant="ghost"
+                    variant="secondary-destructive"
+                    style={SOLID_DANGER_TEXT_STYLE}
                     icon={TrashIcon}
                     aria-label={`Remove ${conn.name}`}
                     onClick={() => setPending(conn)}
@@ -86,7 +88,12 @@ export function ManageConnectionsDialog({
               <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
                 Cancel
               </Dialog.Close>
-              <Button variant="destructive" loading={deleting} onClick={() => void confirmDelete()}>
+              <Button
+                variant="destructive"
+                style={SOLID_DANGER_BUTTON_STYLE}
+                loading={deleting}
+                onClick={() => void confirmDelete()}
+              >
                 Remove
               </Button>
             </div>

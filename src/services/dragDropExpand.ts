@@ -27,6 +27,14 @@ export interface ExpandedDropFile {
    *  files found inside a dropped directory); used to build the remote key. */
   name: string;
   size: number;
+  /** Set when this file came from expanding a dropped directory — shared by
+   *  every file under that same top-level drop, so the UI can group them
+   *  into a single folder row instead of one row per file. Unset for a
+   *  file dropped (or picked) on its own. */
+  folderId?: string;
+  /** Display name for the aggregated folder row — the dropped directory's
+   *  own name. Only set alongside `folderId`. */
+  folderName?: string;
 }
 
 export interface ExpandedDrop {
@@ -53,11 +61,17 @@ export function basenameOf(path: string): string {
   return idx === -1 ? normalized : normalized.slice(idx + 1);
 }
 
+interface DropFolder {
+  folderId: string;
+  folderName: string;
+}
+
 async function walkDir(
   dirPath: string,
   relPrefix: string,
   ops: DropFsOps,
   out: ExpandedDrop,
+  folder: DropFolder,
 ): Promise<void> {
   let entries: DropDirEntry[];
   try {
@@ -71,10 +85,16 @@ async function walkDir(
     const childPath = ops.joinPath(dirPath, entry.name);
     const childRel = `${relPrefix}/${entry.name}`;
     if (entry.isDirectory) {
-      await walkDir(childPath, childRel, ops, out);
+      await walkDir(childPath, childRel, ops, out, folder);
     } else {
       try {
-        out.files.push({ path: childPath, name: childRel, size: await ops.size(childPath) });
+        out.files.push({
+          path: childPath,
+          name: childRel,
+          size: await ops.size(childPath),
+          folderId: folder.folderId,
+          folderName: folder.folderName,
+        });
       } catch {
         out.skipped.push(childPath);
       }
@@ -107,7 +127,8 @@ export async function expandDroppedPaths(
       continue;
     }
     if (dir) {
-      await walkDir(p, basenameOf(p), ops, out);
+      const folderName = basenameOf(p);
+      await walkDir(p, folderName, ops, out, { folderId: crypto.randomUUID(), folderName });
     } else {
       try {
         out.files.push({ path: p, name: basenameOf(p), size: await ops.size(p) });

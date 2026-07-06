@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Toasty, useKumoToastManager } from "@cloudflare/kumo";
+import { Toasty } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
@@ -16,7 +16,6 @@ function AppShellInner() {
   const [prefix, setPrefix] = useState("");
   const [showSetup, setShowSetup] = useState(false);
   const [showManage, setShowManage] = useState(false);
-  const toasts = useKumoToastManager();
 
   useEffect(() => {
     void services.connections.list().then((list) => {
@@ -99,10 +98,7 @@ function AppShellInner() {
         </section>
       </main>
 
-      <TransferWidget
-        connectionId={current.id}
-        onBatchFinished={(summary) => toasts.add({ title: summary })}
-      />
+      <TransferWidget connectionId={current.id} />
     </div>
   );
 }

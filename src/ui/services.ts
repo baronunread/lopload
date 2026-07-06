@@ -31,6 +31,10 @@ export interface PickedFile {
   path: string;
   name: string;
   size: number;
+  /** Shared by every file dropped as part of the same folder, so the
+   *  transfer widget can group them into one aggregated row. */
+  folderId?: string;
+  folderName?: string;
 }
 
 export interface ConnectionsService {

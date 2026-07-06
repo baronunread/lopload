@@ -1,10 +1,58 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { CaretDownIcon, CaretUpIcon, XIcon } from "@phosphor-icons/react";
-import type { EngineEvent, Transfer } from "../lib/types";
+import { CaretDownIcon, CaretUpIcon, FolderIcon, XIcon } from "@phosphor-icons/react";
+import type { EngineEvent, Transfer, TransferState } from "../lib/types";
 import { useServices } from "./services";
 import { StatusChip } from "./StatusChip";
 import { formatBytes } from "./format";
+
+/** One widget row: either a single file, or every file from the same
+ * dropped/picked folder (`folderId`) collapsed into one aggregated row. */
+interface DisplayRow {
+  rowKey: string;
+  folderName?: string;
+  transfers: Transfer[];
+}
+
+/** Groups transfers that share a `folderId` into one row, preserving the
+ * order each row (folder or lone file) first appeared in. */
+function groupTransfers(list: Transfer[]): DisplayRow[] {
+  const rows: DisplayRow[] = [];
+  const indexByFolder = new Map<string, number>();
+  for (const t of list) {
+    if (t.folderId) {
+      const idx = indexByFolder.get(t.folderId);
+      if (idx !== undefined) {
+        rows[idx].transfers.push(t);
+        continue;
+      }
+      indexByFolder.set(t.folderId, rows.length);
+      rows.push({ rowKey: t.folderId, folderName: t.folderName, transfers: [t] });
+    } else {
+      rows.push({ rowKey: t.id, transfers: [t] });
+    }
+  }
+  return rows;
+}
+
+/** Synthesizes one representative state for a row so it can reuse
+ * StatusChip's rendering: in-flight while anything in the row still is,
+ * otherwise failed if anything failed, otherwise uploaded. For a folder row
+ * the "percent" is the fraction of its files uploaded so far, per spec. */
+function rowState(transfers: Transfer[]): TransferState {
+  const total = transfers.length;
+  const uploaded = transfers.filter((t) => t.state.kind === "uploaded").length;
+  const failed = transfers.filter((t) => t.state.kind === "failed");
+  const inFlight = total - uploaded - failed.length;
+  if (inFlight > 0) {
+    return { kind: "sending", percent: total > 0 ? Math.round((uploaded / total) * 100) : 0 };
+  }
+  if (failed.length > 0) {
+    const first = failed[0].state;
+    return { kind: "failed", errorClass: first.kind === "failed" ? first.errorClass : "unknown" };
+  }
+  return { kind: "uploaded" };
+}
 
 export interface TransferWidgetProps {
   connectionId: string;
@@ -188,46 +236,65 @@ export function TransferWidget({
 
       {!collapsed && (
         <ul className="flex flex-col gap-2 overflow-y-auto p-3">
-          {visible.map((t) => (
-            <li
-              key={t.id}
-              className="lopload-settle flex flex-col gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 lopload-body">
-                  <p className="truncate font-medium">
-                    {t.key.split("/").pop()}
-                  </p>
-                  <p className="text-xs text-kumo-subtle">
-                    {formatBytes(t.size)}
-                  </p>
+          {groupTransfers(visible).map((row) => {
+            const isFolder = row.transfers.length > 1 || row.folderName !== undefined;
+            const state = isFolder ? rowState(row.transfers) : row.transfers[0].state;
+            const totalSize = row.transfers.reduce((sum, t) => sum + t.size, 0);
+            const name = isFolder ? row.folderName : row.transfers[0].key.split("/").pop();
+            const subtitle = isFolder
+              ? `${row.transfers.length} file${row.transfers.length === 1 ? "" : "s"} • ${formatBytes(totalSize)}`
+              : formatBytes(totalSize);
+            const failedIds = row.transfers
+              .filter((t) => t.state.kind === "failed")
+              .map((t) => t.id);
+            return (
+              <li
+                key={row.rowKey}
+                className="lopload-settle flex flex-col gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2 lopload-body">
+                    {isFolder && (
+                      <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{name}</p>
+                      <p className="text-xs text-kumo-subtle">{subtitle}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-2">
+                    <StatusChip
+                      state={state}
+                      onRetry={
+                        state.kind === "failed"
+                          ? () => {
+                              for (const id of failedIds) void services.engine.retry(id);
+                            }
+                          : undefined
+                      }
+                    />
+                    {state.kind === "failed" && (
+                      <button
+                        type="button"
+                        aria-label={`Dismiss ${isFolder ? row.folderName : row.transfers[0].key}`}
+                        className="flex h-8 w-8 items-center justify-center text-kumo-subtle hover:text-kumo-default"
+                        onClick={() => {
+                          setDismissed((prev) => {
+                            const next = new Set(prev);
+                            for (const id of failedIds) next.add(id);
+                            return next;
+                          });
+                          for (const id of failedIds) void services.engine.dismiss(id);
+                        }}
+                      >
+                        <XIcon size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-shrink-0 items-center gap-2">
-                  <StatusChip
-                    state={t.state}
-                    onRetry={
-                      t.state.kind === "failed"
-                        ? () => void services.engine.retry(t.id)
-                        : undefined
-                    }
-                  />
-                  {t.state.kind === "failed" && (
-                    <button
-                      type="button"
-                      aria-label={`Dismiss ${t.key}`}
-                      className="flex h-8 w-8 items-center justify-center text-kumo-subtle hover:text-kumo-default"
-                      onClick={() => {
-                        setDismissed((prev) => new Set(prev).add(t.id));
-                        void services.engine.dismiss(t.id);
-                      }}
-                    >
-                      <XIcon size={16} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </motion.div>

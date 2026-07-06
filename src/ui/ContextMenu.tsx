@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { SOLID_DANGER_TEXT_STYLE } from "./dangerButton";
 
 export interface ContextMenuItem {
   label: string;
@@ -69,6 +70,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           className={`block w-full rounded px-3 py-1.5 text-left text-sm hover:bg-kumo-tint ${
             item.danger ? "text-kumo-danger" : "text-kumo-default"
           }`}
+          style={item.danger ? SOLID_DANGER_TEXT_STYLE : undefined}
           onClick={() => {
             item.onSelect();
             onClose();
