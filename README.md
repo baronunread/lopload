@@ -63,6 +63,26 @@ Download from the [releases page](https://github.com/baronunread/lopload/release
 
 ---
 
+### Auto updates
+
+Lopload checks GitHub Releases for a new version on startup (and at most every 24h while it stays open), and offers a "restart to update" prompt — never a forced/silent update. Updates are signed with Tauri's free minisign keypair; there's no paid code-signing certificate involved. **This needs one-time setup before it works:**
+
+1. **Generate the signing keypair** (once, on your machine — never commit the private key):
+   ```sh
+   bunx tauri signer generate -w ~/.tauri/lopload.key
+   ```
+   This prints a public key and writes the private key to `~/.tauri/lopload.key`. Optionally pass `-p` to set a password on the private key.
+
+2. **Paste the public key** into `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`, replacing the `REPLACE_WITH_TAURI_SIGNER_PUBLIC_KEY…` placeholder.
+
+3. **Add GitHub Actions secrets** (repo → Settings → Secrets and variables → Actions):
+   - `TAURI_SIGNING_PRIVATE_KEY` — the contents of `~/.tauri/lopload.key`
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — only if you set a password in step 1
+
+Until these are done, everyday CI builds (push/PR) are unaffected — they pass `--no-sign` and skip updater signing entirely. Only tag pushes (`v*`, i.e. actual releases) sign updater artifacts and need the secrets; that build step will fail until they're set. The very first tagged release after setup is what starts the update chain — every install after that can update from every subsequent release.
+
+---
+
 ### Security
 
 - Credentials live only in the OS keychain (or dev store). Never in SQLite, config files, or logs.

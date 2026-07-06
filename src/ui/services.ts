@@ -99,12 +99,24 @@ export interface KeychainService {
   testConnection(draft: ConnectionDraft): Promise<TestConnectionResult>;
 }
 
+/** Auto-update checking + install. A no-op outside the Tauri runtime (e.g.
+ * `bun run dev` in a browser tab), so the demo backend never touches it. */
+export interface UpdatesService {
+  /** Checks for a new release now. Resolves with its version string if one
+   * is available, otherwise null. */
+  checkForUpdate(): Promise<string | null>;
+  /** Downloads and installs the update found by the last checkForUpdate()
+   * call that found one, then relaunches the app. */
+  installAndRelaunch(): Promise<void>;
+}
+
 /** Everything the UI needs from the outside world, injected via context. */
 export interface AppServices {
   connections: ConnectionsService;
   browser: BrowserService;
   engine: EngineService;
   keychain: KeychainService;
+  updates: UpdatesService;
   /** Opens the native file picker; resolves with the files chosen (recursive for folders). */
   pickFiles(): Promise<PickedFile[]>;
   /** Native "Save as" dialog for downloading a single file; suggests

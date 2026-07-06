@@ -48,6 +48,7 @@ import { keychainDelete, keychainGet, keychainSet } from "../tauri/keychain";
 import { tauriFetch } from "../tauri/http";
 import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
 import { onRetryFailedRequested, setTrayStatus } from "../tauri/tray";
+import { checkForUpdate, installAndRelaunch } from "../tauri/updater";
 import { isImageName, isVideoName } from "../ui/format";
 import type {
   AppServices,
@@ -400,6 +401,12 @@ class RealServices implements AppServices {
         return { ok: false, message: "Something went wrong while testing the connection." };
       }
     },
+  };
+
+  // ---- UpdatesService ----
+  updates = {
+    checkForUpdate: (): Promise<string | null> => checkForUpdate(),
+    installAndRelaunch: (): Promise<void> => installAndRelaunch(),
   };
 
   // ---- misc AppServices members ----

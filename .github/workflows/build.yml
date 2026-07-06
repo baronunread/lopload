@@ -15,7 +15,6 @@ env: {}
 
 jobs:
   build:
-  build:
     strategy:
       fail-fast: false
       matrix:
@@ -59,12 +58,25 @@ jobs:
         run: echo "TAURI_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build application
-        run: bun run tauri build
+        # Only tag builds (real releases) sign updater artifacts — everyday
+        # push/PR builds pass --no-sign so they keep working before the
+        # TAURI_SIGNING_PRIVATE_KEY secret exists (see README's "Auto
+        # updates" section for the one-time owner setup).
+        run: bun run tauri build ${{ !startsWith(github.ref, 'refs/tags/v') && '--no-sign' || '' }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Copy raw binary (Windows portable)
         if: runner.os == 'Windows'
         run: |
           copy src-tauri\target\release\lopload.exe src-tauri\target\release\bundle\msi\Lopload_portable.exe
+
+      - name: Record macOS updater arch (for the release job's latest.json)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          ARCH="${{ runner.arch == 'ARM64' && 'aarch64' || 'x86_64' }}"
+          echo "$ARCH" > src-tauri/target/release/bundle/updater-arch-darwin.txt
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -79,18 +91,37 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Download all bundle artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: bundle-*
           merge-multiple: true
 
+      - name: Build updater manifest (latest.json)
+        run: bun run .github/scripts/build-latest-json.mjs
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             **/*.deb
+            **/*.rpm
+            **/*.AppImage
+            **/*.AppImage.tar.gz
+            **/*.AppImage.tar.gz.sig
             **/*.dmg
+            **/*.app.tar.gz
+            **/*.app.tar.gz.sig
             **/*.msi
+            **/*.msi.zip
+            **/*.msi.zip.sig
             **/*.exe
+            **/*.nsis.zip
+            **/*.nsis.zip.sig
+            latest.json
           generate_release_notes: true
