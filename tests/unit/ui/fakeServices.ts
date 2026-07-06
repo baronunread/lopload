@@ -28,6 +28,8 @@ export interface FakeServicesOptions {
    * mismatch. Cleared for an id once connections.save() is called for it,
    * simulating a successful re-entry. */
   credentialsUnreadableFor?: Set<string>;
+  /** Version string checkForUpdate() should resolve with, or undefined/null for none. */
+  updateVersion?: string | null;
 }
 
 export interface FakeServices extends AppServices {
@@ -48,6 +50,8 @@ export interface FakeServices extends AppServices {
   /** Simulates the real onFileDrop's onError firing (e.g. an unreadable
    * dropped folder), for tests of the resulting error toast. */
   triggerFileDropError(message: string): void;
+  checkForUpdateCalls: number[];
+  installAndRelaunchCalls: number[];
 }
 
 export function createFakeServices(options: FakeServicesOptions = {}): FakeServices {
@@ -70,6 +74,8 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const folderInfoCalls: Array<{ connectionId: string; key: string }> = [];
   const credentialsUnreadableFor = new Set(options.credentialsUnreadableFor ?? []);
   let fileDropErrorHandler: ((message: string) => void) | null = null;
+  const checkForUpdateCalls: number[] = [];
+  const installAndRelaunchCalls: number[] = [];
 
   const services: FakeServices = {
     connections: {
@@ -147,6 +153,15 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
         return options.testConnectionResult ?? { ok: true, message: "Connection works." };
       },
     },
+    updates: {
+      async checkForUpdate() {
+        checkForUpdateCalls.push(Date.now());
+        return options.updateVersion ?? null;
+      },
+      async installAndRelaunch() {
+        installAndRelaunchCalls.push(Date.now());
+      },
+    },
     async pickFiles() {
       return options.pickFilesResult ?? [];
     },
@@ -190,6 +205,8 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     moveCalls,
     deleteCalls,
     folderInfoCalls,
+    checkForUpdateCalls,
+    installAndRelaunchCalls,
   };
 
   return services;

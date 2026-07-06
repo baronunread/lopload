@@ -462,6 +462,12 @@ export function createDemoServices(): AppServices {
         return { ok: true, message: "Connected." };
       },
     },
+    updates: {
+      async checkForUpdate() {
+        return null;
+      },
+      async installAndRelaunch() {},
+    },
     async pickFiles(): Promise<PickedFile[]> {
       return [
         { path: "/demo/vacation.mp4", name: "vacation.mp4", size: 220_000_000 },

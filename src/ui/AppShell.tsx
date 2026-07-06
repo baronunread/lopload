@@ -1,13 +1,37 @@
 import { useEffect, useState } from "react";
-import { Toasty } from "@cloudflare/kumo";
+import { Toasty, useKumoToastManager } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
+import { useAutoUpdate } from "./useAutoUpdate";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { AddStorageDialog } from "./AddStorageDialog";
 import { Onboarding } from "./Onboarding";
 import { RemoteBrowser } from "./RemoteBrowser";
 import { TransferWidget } from "./TransferWidget";
 import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
+
+/** Shows the "restart to update" toast once an update is found, and keeps
+ * it in sync as transfer activity changes the notice's wording. Doesn't
+ * render anything itself — it only drives the toast manager. */
+function UpdateNoticeToast() {
+  const { notice, installAndRelaunch, dismiss } = useAutoUpdate();
+  const toasts = useKumoToastManager();
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = toasts.add({
+      title: notice.title,
+      description: notice.body,
+      timeout: 0,
+      actions: [{ children: notice.actionLabel, onClick: installAndRelaunch }],
+      onClose: dismiss,
+    });
+    return () => toasts.close(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notice]);
+
+  return null;
+}
 
 function AppShellInner() {
   const services = useServices();
@@ -107,6 +131,7 @@ function AppShellInner() {
 export function AppShell() {
   return (
     <Toasty>
+      <UpdateNoticeToast />
       <AppShellInner />
     </Toasty>
   );

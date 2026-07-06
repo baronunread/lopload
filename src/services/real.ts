@@ -56,6 +56,7 @@ import {
   setTrayStatus,
 } from "../tauri/tray";
 import { deriveTrayUploadTargets, trackLastUploaded, type LastUploadedFile } from "./trayState";
+import { checkForUpdate, installAndRelaunch } from "../tauri/updater";
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
 import type {
@@ -469,6 +470,12 @@ class RealServices implements AppServices {
         return { ok: false, message: "Something went wrong while testing the connection." };
       }
     },
+  };
+
+  // ---- UpdatesService ----
+  updates = {
+    checkForUpdate: (): Promise<string | null> => checkForUpdate(),
+    installAndRelaunch: (): Promise<void> => installAndRelaunch(),
   };
 
   // ---- misc AppServices members ----
