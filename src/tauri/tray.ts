@@ -1,0 +1,78 @@
+// Thin wrapper around the tray IPC surface (src-tauri/src/tray.rs): pushes
+// engine-derived status to the tray menu/icon and surfaces the tray's
+// "Retry failed" click back as an event the engine layer can act on. All
+// tray business logic (formatting, icon choice) lives in Rust — this file
+// only carries data across the IPC boundary.
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+export interface TrayStatus {
+  /** Number of transfers currently queued/sending/checking. */
+  uploading: number;
+  /** Overall progress across in-flight transfers, 0-100. */
+  percent: number;
+  /** Number of unacknowledged failed transfers. */
+  failed: number;
+}
+
+const RETRY_FAILED_EVENT = "tray://retry-failed";
+
+/** At most a few IPC calls per second — progress events fire far more often
+ * than the tray menu needs to redraw. Leading call goes out immediately;
+ * anything arriving within the window collapses into one trailing call. */
+const THROTTLE_MS = 300;
+
+let lastSentAt = 0;
+let pendingStatus: TrayStatus | null = null;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function sendStatus(status: TrayStatus): void {
+  lastSentAt = Date.now();
+  void invoke("tray_set_status", {
+    uploading: status.uploading,
+    percent: status.percent,
+    failed: status.failed,
+  }).catch(() => {});
+}
+
+/** Pushes the tray's status line, "Retry failed" count, and Quit label to
+ * Rust, throttled so a fast stream of progress updates doesn't spam IPC. */
+export function setTrayStatus(status: TrayStatus): void {
+  const now = Date.now();
+  const elapsed = now - lastSentAt;
+  if (elapsed >= THROTTLE_MS) {
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+    pendingStatus = null;
+    sendStatus(status);
+    return;
+  }
+  pendingStatus = status;
+  if (!pendingTimer) {
+    pendingTimer = setTimeout(() => {
+      pendingTimer = null;
+      if (pendingStatus) {
+        sendStatus(pendingStatus);
+        pendingStatus = null;
+      }
+    }, THROTTLE_MS - elapsed);
+  }
+}
+
+/** Subscribes to the tray's "Retry failed" menu click; returns an unsubscribe. */
+export function onRetryFailedRequested(cb: () => void): () => void {
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+
+  void listen(RETRY_FAILED_EVENT, () => cb()).then((fn) => {
+    if (cancelled) fn();
+    else unlisten = fn;
+  });
+
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
+}

@@ -6,42 +6,117 @@
 //! of quitting, since transfers continue in the background. Only the tray's
 //! "Quit Lopload" menu item actually exits the process.
 
+use std::sync::Mutex;
+
 use tauri::{
-    menu::{Menu, MenuItem},
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Runtime, WindowEvent,
+    AppHandle, Emitter, Manager, Runtime, WindowEvent,
 };
 
 const MENU_ID_SHOW: &str = "show";
+const MENU_ID_RETRY: &str = "retry";
 const MENU_ID_QUIT: &str = "quit";
+
+/// Emitted when the user clicks "Retry failed" in the tray menu — the
+/// frontend is the only side that knows which transfers are failed, so it
+/// listens for this and calls `retry()` on each of them.
+pub const RETRY_FAILED_EVENT: &str = "tray://retry-failed";
+
+/// The tray menu items that get their text/enabled state updated live, kept
+/// around (rather than rebuilt) since Tauri 2's `MenuItem` supports
+/// `set_text`/`set_enabled` in place.
+struct TrayMenuItems<R: Runtime> {
+    status: MenuItem<R>,
+    retry: MenuItem<R>,
+    quit: MenuItem<R>,
+}
+
+struct TrayIcons {
+    normal: Image<'static>,
+    failed: Image<'static>,
+}
+
+struct TrayState<R: Runtime> {
+    items: TrayMenuItems<R>,
+    icons: TrayIcons,
+    showing_failed_icon: Mutex<bool>,
+}
 
 /// Build the tray icon + menu and wire up window-close-hides-to-tray
 /// behavior. Call once from the `setup` hook.
 pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let status_item = MenuItem::with_id(
+        app,
+        "status",
+        format_status_line(0, 0.0, 0),
+        false,
+        None::<&str>,
+    )?;
     let show_item = MenuItem::with_id(app, MENU_ID_SHOW, "Show Lopload", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let retry_item = MenuItem::with_id(
+        app,
+        MENU_ID_RETRY,
+        format_retry_label(0),
+        false,
+        None::<&str>,
+    )?;
+    let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, format_quit_label(0), true, None::<&str>)?;
+    let separator_top = PredefinedMenuItem::separator(app)?;
+    let separator_bottom = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &status_item,
+            &separator_top,
+            &show_item,
+            &retry_item,
+            &separator_bottom,
+            &quit_item,
+        ],
+    )?;
 
     // Menu bar icons follow a different convention than the Dock icon: a
     // minimal monochrome "template image" (solid black glyph, transparent
     // background, no backdrop) that macOS re-tints for light/dark menu bars.
     // Reusing the colorful Dock icon here would look out of place next to
     // other apps' menu-bar glyphs, so load a dedicated silhouette asset and
-    // mark it as a template via `icon_as_template`.
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon-template.png"))?;
+    // mark it as a template via `icon_as_template`. A second variant with a
+    // small badge dot swaps in while there are unacknowledged failures.
+    let normal_icon =
+        Image::from_bytes(include_bytes!("../icons/tray-icon-template.png"))?.to_owned();
+    let failed_icon =
+        Image::from_bytes(include_bytes!("../icons/tray-icon-template-failed.png"))?.to_owned();
 
     TrayIconBuilder::with_id("main-tray")
-        .icon(icon)
+        .icon(normal_icon.clone())
         .icon_as_template(true)
         .menu(&menu)
         .tooltip("Lopload")
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             MENU_ID_SHOW => show_main_window(app),
+            MENU_ID_RETRY => {
+                let _ = app.emit(RETRY_FAILED_EVENT, ());
+            }
             MENU_ID_QUIT => app.exit(0),
             _ => {}
         })
         .build(app)?;
+
+    app.manage(TrayState {
+        items: TrayMenuItems {
+            status: status_item,
+            retry: retry_item,
+            quit: quit_item,
+        },
+        icons: TrayIcons {
+            normal: normal_icon,
+            failed: failed_icon,
+        },
+        showing_failed_icon: Mutex::new(false),
+    });
 
     if let Some(window) = app.get_webview_window("main") {
         window.on_window_event({
@@ -68,6 +143,133 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// The tray menu's disabled first line, e.g. "Uploading 3 files — 42%",
+/// "2 uploads failed", or "Lopload is idle" when nothing needs attention.
+/// In-flight transfers take priority over failures — once uploads settle,
+/// any sticky failures surface here until retried or dismissed.
+fn format_status_line(uploading: i64, percent: f64, failed: i64) -> String {
+    if uploading > 0 {
+        let pct = percent.clamp(0.0, 100.0).round() as i64;
+        let plural = if uploading == 1 { "" } else { "s" };
+        format!("Uploading {uploading} file{plural} — {pct}%")
+    } else if failed > 0 {
+        let plural = if failed == 1 { "" } else { "s" };
+        format!("{failed} upload{plural} failed")
+    } else {
+        "Lopload is idle".to_string()
+    }
+}
+
+/// "Retry failed (N)" — the item stays in the menu but disabled at N == 0,
+/// since `MenuItem` has no visibility toggle in Tauri 2.
+fn format_retry_label(failed: i64) -> String {
+    format!("Retry failed ({failed})")
+}
+
+/// "Quit" normally, or "Quit — N uploads will resume" while transfers are
+/// in flight — they resume on next launch, so this is informational only.
+fn format_quit_label(uploading: i64) -> String {
+    if uploading > 0 {
+        let plural = if uploading == 1 { "" } else { "s" };
+        format!("Quit — {uploading} upload{plural} will resume")
+    } else {
+        "Quit".to_string()
+    }
+}
+
+/// Pushes engine-derived state to the tray menu: the status line, the
+/// "Retry failed" item's label/enabled state, the Quit label, and (when the
+/// failed count crosses zero in either direction) the tray icon.
+#[tauri::command]
+pub fn tray_set_status<R: Runtime>(
+    app: AppHandle<R>,
+    uploading: i64,
+    percent: f64,
+    failed: i64,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<TrayState<R>>()
+        .ok_or_else(|| "tray not initialized".to_string())?;
+
+    state
+        .items
+        .status
+        .set_text(format_status_line(uploading, percent, failed))
+        .map_err(|e| e.to_string())?;
+    state
+        .items
+        .retry
+        .set_text(format_retry_label(failed))
+        .map_err(|e| e.to_string())?;
+    state
+        .items
+        .retry
+        .set_enabled(failed > 0)
+        .map_err(|e| e.to_string())?;
+    state
+        .items
+        .quit
+        .set_text(format_quit_label(uploading))
+        .map_err(|e| e.to_string())?;
+
+    let show_failed_icon = failed > 0;
+    let mut showing_failed_icon = state.showing_failed_icon.lock().unwrap();
+    if *showing_failed_icon != show_failed_icon {
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            let icon = if show_failed_icon {
+                state.icons.failed.clone()
+            } else {
+                state.icons.normal.clone()
+            };
+            tray.set_icon(Some(icon)).map_err(|e| e.to_string())?;
+        }
+        *showing_failed_icon = show_failed_icon;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod status_format_tests {
+    use super::*;
+
+    #[test]
+    fn status_line_prioritizes_uploading_over_failed() {
+        assert_eq!(format_status_line(3, 42.4, 2), "Uploading 3 files — 42%");
+        assert_eq!(format_status_line(1, 0.0, 0), "Uploading 1 file — 0%");
+    }
+
+    #[test]
+    fn status_line_reports_failures_when_idle() {
+        assert_eq!(format_status_line(0, 0.0, 1), "1 upload failed");
+        assert_eq!(format_status_line(0, 0.0, 4), "4 uploads failed");
+    }
+
+    #[test]
+    fn status_line_reports_idle() {
+        assert_eq!(format_status_line(0, 0.0, 0), "Lopload is idle");
+    }
+
+    #[test]
+    fn retry_label_includes_count() {
+        assert_eq!(format_retry_label(0), "Retry failed (0)");
+        assert_eq!(format_retry_label(5), "Retry failed (5)");
+    }
+
+    #[test]
+    fn quit_label_reflects_in_flight_count() {
+        assert_eq!(format_quit_label(0), "Quit");
+        assert_eq!(format_quit_label(1), "Quit — 1 upload will resume");
+        assert_eq!(format_quit_label(2), "Quit — 2 uploads will resume");
+    }
+
+    #[test]
+    fn percent_clamps_to_valid_range() {
+        assert_eq!(format_status_line(1, 142.0, 0), "Uploading 1 file — 100%");
+        assert_eq!(format_status_line(1, -10.0, 0), "Uploading 1 file — 0%");
+    }
+}
+
 /// Update the tray tooltip to reflect overall upload progress, e.g.
 /// "Uploading — 42%". Pass `None` to clear it back to the plain app name.
 ///
@@ -75,7 +277,10 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 /// platforms (no taskbar progress API), so the tooltip is the portable
 /// fallback used everywhere.
 #[tauri::command]
-pub fn tray_set_progress<R: Runtime>(app: AppHandle<R>, fraction: Option<f64>) -> Result<(), String> {
+pub fn tray_set_progress<R: Runtime>(
+    app: AppHandle<R>,
+    fraction: Option<f64>,
+) -> Result<(), String> {
     let tray = app
         .tray_by_id("main-tray")
         .ok_or_else(|| "tray icon not initialized".to_string())?;
