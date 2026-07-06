@@ -47,7 +47,15 @@ import {
 import { keychainDelete, keychainGet, keychainSet } from "../tauri/keychain";
 import { tauriFetch } from "../tauri/http";
 import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
-import { onRetryFailedRequested, setTrayStatus } from "../tauri/tray";
+import {
+  onCopyLinkRequested,
+  onRetryFailedRequested,
+  onUploadFilesRequested,
+  setTrayConnections,
+  setTrayLastUpload,
+  setTrayStatus,
+} from "../tauri/tray";
+import { deriveTrayUploadTargets, trackLastUploaded, type LastUploadedFile } from "./trayState";
 import { isImageName, isVideoName } from "../ui/format";
 import type {
   AppServices,
@@ -100,6 +108,10 @@ class RealServices implements AppServices {
 
   private orphanSweepStarted = false;
   private trayRetryListening = false;
+  private trayUploadListening = false;
+  private trayCopyLinkListening = false;
+  /** Most recently verified upload, for the tray's "Copy link — <file>" item. */
+  private lastUploaded: LastUploadedFile | null = null;
 
   private async getDb() {
     if (!this.dbPromise) this.dbPromise = loadDatabase();
@@ -167,6 +179,11 @@ class RealServices implements AppServices {
       this.transferSnapshots.set(event.transfer.id, event.transfer);
       this.updateTrayProgress();
       this.updateTrayStatus();
+      const nextLastUploaded = trackLastUploaded(this.lastUploaded, event);
+      if (nextLastUploaded !== this.lastUploaded) {
+        this.lastUploaded = nextLastUploaded;
+        setTrayLastUpload(nextLastUploaded?.name ?? null);
+      }
     } else if (event.type === "batch-finished") {
       const parts: string[] = [];
       if (event.uploaded > 0) {
@@ -244,17 +261,67 @@ class RealServices implements AppServices {
     return undefined;
   }
 
+  /** Pushes the current saved connection list to the tray's "Upload
+   * files…" submenu — called at startup and after any save/delete. */
+  private async refreshTrayConnections(): Promise<void> {
+    const store = await this.getConnectionStore();
+    const list = await store.list();
+    setTrayConnections(deriveTrayUploadTargets(list));
+  }
+
+  /** Listens once for a per-connection "Upload files…" tray click: opens the
+   * native file picker and enqueues the chosen files to that connection's
+   * last-browsed folder, using the same per-connection engine the app uses
+   * when the user switches to it in the window. */
+  startTrayUploadListening(): void {
+    if (this.trayUploadListening) return;
+    this.trayUploadListening = true;
+    onUploadFilesRequested((connectionId) => {
+      void this.handleTrayUpload(connectionId);
+    });
+  }
+
+  private async handleTrayUpload(connectionId: string): Promise<void> {
+    const store = await this.getConnectionStore();
+    const conn = await store.get(connectionId);
+    if (!conn) return;
+    const files = await this.pickFiles();
+    if (files.length === 0) return;
+    await this.engine.enqueueFiles(connectionId, conn.lastPrefix, files);
+  }
+
+  /** Listens once for the tray's "Copy link" click and copies the link for
+   * whichever upload trackLastUploaded() last recorded as verified. */
+  startTrayCopyLinkListening(): void {
+    if (this.trayCopyLinkListening) return;
+    this.trayCopyLinkListening = true;
+    onCopyLinkRequested(() => {
+      void this.handleTrayCopyLink();
+    });
+  }
+
+  private async handleTrayCopyLink(): Promise<void> {
+    const file = this.lastUploaded;
+    if (!file) return;
+    const link = await this.browser.copyLink(file.connectionId, file.key);
+    await navigator.clipboard?.writeText(link);
+    this.notify("Lopload", `Copied link for ${file.name}`);
+  }
+
   // ---- ConnectionsService ----
   connections = {
     list: async (): Promise<Connection[]> => {
       const store = await this.getConnectionStore();
-      return store.list();
+      const list = await store.list();
+      setTrayConnections(deriveTrayUploadTargets(list));
+      return list;
     },
     save: async (conn: Connection, credentials: Credentials): Promise<void> => {
       const store = await this.getConnectionStore();
       await store.save(conn);
       await keychainSet(conn.id, credentials);
       this.invalidateConnection(conn.id);
+      await this.refreshTrayConnections();
     },
     delete: async (id: string): Promise<void> => {
       const store = await this.getConnectionStore();
@@ -263,6 +330,7 @@ class RealServices implements AppServices {
       // undeletable — the row is already gone, so finish the cleanup.
       await keychainDelete(id).catch(() => {});
       this.invalidateConnection(id);
+      await this.refreshTrayConnections();
     },
     setLastPrefix: async (id: string, prefix: string): Promise<void> => {
       const store = await this.getConnectionStore();
@@ -580,6 +648,8 @@ export function createRealServices(): AppServices {
     singleton = new RealServices();
     singleton.startOrphanSweep();
     singleton.startTrayRetryListening();
+    singleton.startTrayUploadListening();
+    singleton.startTrayCopyLinkListening();
   }
   return singleton;
 }
