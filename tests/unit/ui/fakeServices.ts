@@ -2,6 +2,7 @@
 // src/ui/services.ts entirely in memory, with no dependency on src/lib or
 // src/tauri (which may not exist yet while this workstream is in progress).
 import type { Connection, EngineEvent, RemoteEntry, Transfer } from "../../../src/lib/types";
+import { CredentialsUnreadableError } from "../../../src/ui/services";
 import type {
   AppServices,
   ConnectionDraft,
@@ -22,6 +23,11 @@ export interface FakeServicesOptions {
   filesRecursiveByPrefix?: Record<string, { key: string; size: number }[]>;
   saveDestinationResult?: string | null;
   downloadDirectoryResult?: string | null;
+  /** Connection ids for which browser.list should behave like the keychain
+   * couldn't produce credentials — simulates a denied prompt or ACL
+   * mismatch. Cleared for an id once connections.save() is called for it,
+   * simulating a successful re-entry. */
+  credentialsUnreadableFor?: Set<string>;
 }
 
 export interface FakeServices extends AppServices {
@@ -62,6 +68,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const moveCalls: Array<{ connectionId: string; key: string; toKey: string }> = [];
   const deleteCalls: string[] = [];
   const folderInfoCalls: Array<{ connectionId: string; key: string }> = [];
+  const credentialsUnreadableFor = new Set(options.credentialsUnreadableFor ?? []);
   let fileDropErrorHandler: ((message: string) => void) | null = null;
 
   const services: FakeServices = {
@@ -72,6 +79,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       async save(conn) {
         connections.set(conn.id, conn);
         savedConnections.push(conn);
+        credentialsUnreadableFor.delete(conn.id);
       },
       async delete(id) {
         connections.delete(id);
@@ -84,6 +92,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     },
     browser: {
       async list(connectionId, prefix) {
+        if (credentialsUnreadableFor.has(connectionId)) {
+          throw new CredentialsUnreadableError(connectionId);
+        }
         return options.entriesByPrefix?.[`${connectionId}::${prefix}`] ?? [];
       },
       async createFolder() {},

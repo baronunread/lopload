@@ -19,6 +19,27 @@ import type {
 export type ConnectionDraft = Omit<Connection, "id" | "lastPrefix" | "createdAt"> &
   Credentials;
 
+/**
+ * Thrown by services that need a connection's credentials when the keychain
+ * has none to give — either the read threw (user hit Deny on the OS prompt,
+ * or the signing identity changed and the ACL no longer matches) or it
+ * resolved with no entry for this connection. Both cases are indistinguishable
+ * from the caller's side and call for the same recovery: ask the user to
+ * re-enter the access key and secret key. Distinct from the "credentials"
+ * ErrorClass in src/lib/errors.ts, which classifies credentials the *server*
+ * rejected — this is about credentials the *local keychain* couldn't produce
+ * at all, before any request was made.
+ */
+export class CredentialsUnreadableError extends Error {
+  readonly connectionId: string;
+
+  constructor(connectionId: string) {
+    super(`Credentials unreadable for connection: ${connectionId}`);
+    this.name = "CredentialsUnreadableError";
+    this.connectionId = connectionId;
+  }
+}
+
 /** Result of a "Test connection" attempt — always plain language, never raw SDK text. */
 export interface TestConnectionResult {
   ok: boolean;

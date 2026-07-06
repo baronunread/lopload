@@ -6,7 +6,7 @@ import { Toasty } from "@cloudflare/kumo";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { ServicesProvider } from "../../../src/ui/services";
 import { createFakeServices } from "./fakeServices";
-import type { RemoteEntry, Transfer } from "../../../src/lib/types";
+import type { Connection, RemoteEntry, Transfer } from "../../../src/lib/types";
 
 afterEach(cleanup);
 
@@ -17,6 +17,14 @@ const ROOT_ENTRIES: RemoteEntry[] = [
 const PHOTOS_ENTRIES: RemoteEntry[] = [
   { kind: "file", name: "cat.png", key: "photos/cat.png", size: 2048, lastModified: 0 },
 ];
+const CONN_1: Connection = {
+  id: "conn-1",
+  name: "Videos",
+  endpoint: "https://s3.example.test",
+  bucket: "videos-bucket",
+  lastPrefix: "",
+  createdAt: 0,
+};
 const MANY_ENTRIES: RemoteEntry[] = [
   { kind: "folder", name: "photos", key: "photos/" },
   { kind: "file", name: "a.txt", key: "a.txt", size: 1, lastModified: 0 },
@@ -91,6 +99,55 @@ describe("RemoteBrowser", () => {
       </ServicesProvider>,
     );
     await screen.findByText("This folder is empty");
+  });
+
+  test("an unreadable keychain entry shows the re-entry flow, and saving credentials reconnects", async () => {
+    const services = createFakeServices({
+      connections: [CONN_1],
+      credentialsUnreadableFor: new Set(["conn-1"]),
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+
+    await screen.findByText("We couldn't read the saved credentials for this storage");
+    expect(screen.queryByText("Couldn't load this storage")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Access key"), "AKIA...");
+    await user.type(screen.getByLabelText("Secret key"), "shh");
+    await user.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    await screen.findByText("readme.txt");
+    expect(services.savedConnections).toContainEqual(CONN_1);
+  });
+
+  test("cancelling the re-entry flow falls back to the plain retryable error state, not a crash", async () => {
+    const services = createFakeServices({
+      connections: [CONN_1],
+      credentialsUnreadableFor: new Set(["conn-1"]),
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+
+    await screen.findByText("We couldn't read the saved credentials for this storage");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await screen.findByText("Couldn't load this storage");
+    expect(
+      screen.queryByText("We couldn't read the saved credentials for this storage"),
+    ).not.toBeInTheDocument();
+    expect(services.savedConnections).toHaveLength(0);
   });
 
   test("the per-row '⋯' touch trigger opens the same context menu as right-click", async () => {
