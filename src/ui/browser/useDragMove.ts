@@ -14,6 +14,9 @@ export interface DragChipRefs {
   folderIconRef: React.RefObject<HTMLSpanElement | null>;
   fileIconRef: React.RefObject<HTMLSpanElement | null>;
   filesIconRef: React.RefObject<HTMLSpanElement | null>;
+  /** The dragged file's own thumbnail, shown instead of the generic file
+   * glyph when the row being dragged has a rendered preview. */
+  thumbRef: React.RefObject<HTMLImageElement | null>;
 }
 
 /** Parses the payload written to the custom drag MIME type: a JSON array of
@@ -46,8 +49,15 @@ export interface UseDragMoveResult {
   };
   /** Renders the compact "chip" drag image (a small preview centered under
    * the cursor) instead of the browser's default, which would otherwise drag
-   * the whole (huge) row or its text. */
-  showDragChip: (e: DragEvent, label: string, variant: DragChipVariant) => void;
+   * the whole (huge) row or its text. `thumbnailSrc` — the dragged file's
+   * already-rendered thumbnail URL, shown in place of the generic file
+   * glyph. */
+  showDragChip: (
+    e: DragEvent,
+    label: string,
+    variant: DragChipVariant,
+    thumbnailSrc?: string,
+  ) => void;
   clearDropTarget: () => void;
 }
 
@@ -63,8 +73,14 @@ export function useDragMove({ onMove }: UseDragMoveOptions): UseDragMoveResult {
   const folderIconRef = useRef<HTMLSpanElement>(null);
   const fileIconRef = useRef<HTMLSpanElement>(null);
   const filesIconRef = useRef<HTMLSpanElement>(null);
+  const thumbRef = useRef<HTMLImageElement>(null);
 
-  function showDragChip(e: DragEvent, label: string, variant: DragChipVariant) {
+  function showDragChip(
+    e: DragEvent,
+    label: string,
+    variant: DragChipVariant,
+    thumbnailSrc?: string,
+  ) {
     const chip = chipRef.current;
     const labelEl = labelRef.current;
     if (!chip || !labelEl) return;
@@ -74,25 +90,49 @@ export function useDragMove({ onMove }: UseDragMoveOptions): UseDragMoveResult {
       ["files", filesIconRef],
     ] as const;
     labelEl.textContent = label;
-    for (const [key, ref] of iconRefs) {
-      if (ref.current) ref.current.style.display = key === variant ? "" : "none";
+    const thumb = thumbRef.current;
+    const useThumb = thumbnailSrc !== undefined && thumb !== null;
+    if (useThumb) {
+      // Reusing the row's own (already decoded) thumbnail URL — setDragImage
+      // rasterizes synchronously, so a not-yet-loaded image would come out
+      // blank.
+      thumb.src = thumbnailSrc;
+      thumb.style.display = "";
     }
+    for (const [key, ref] of iconRefs) {
+      if (ref.current) ref.current.style.display = !useThumb && key === variant ? "" : "none";
+    }
+    // WebKit (the real app's WKWebView) only rasterizes elements that are
+    // actually painted — an off-screen chip yields the OS's generic
+    // rectangle. Move it under the cursor for the snapshot, aligned with
+    // where the drag image will appear so the one-frame cameo reads as the
+    // drag image itself. (Chromium would be fine with off-screen, so this
+    // placement is purely for WebKit.)
+    chip.style.top = `${e.clientY - 20}px`;
+    chip.style.left = `${e.clientX - 20}px`;
     try {
       // Test environments (happy-dom/jsdom) either omit this or throw — the
       // custom drag image is a visual nicety only, never load-bearing.
       e.dataTransfer.setDragImage?.(chip, 20, 20);
     } catch {
       // ignored
-    } finally {
-      // The browser rasterizes the drag image synchronously inside
-      // setDragImage, so it's safe to blank the (permanently off-screen)
-      // chip right back out — otherwise its text would be a second,
-      // always-present copy of every row's name in the DOM.
+    }
+    // Chromium rasterizes synchronously inside setDragImage, but WebKit
+    // snapshots after the dragstart handler returns — so the chip must stay
+    // populated and painted until the next macrotask, then go back to being
+    // an empty off-screen template.
+    setTimeout(() => {
+      chip.style.top = "";
+      chip.style.left = "";
       labelEl.textContent = "";
       for (const [, ref] of iconRefs) {
         if (ref.current) ref.current.style.display = "none";
       }
-    }
+      if (thumb) {
+        thumb.style.display = "none";
+        thumb.removeAttribute("src");
+      }
+    }, 0);
   }
 
   function dropTargetHandlers(toPrefix: string) {
@@ -127,7 +167,7 @@ export function useDragMove({ onMove }: UseDragMoveOptions): UseDragMoveResult {
 
   return {
     dropTarget,
-    chipRefs: { chipRef, labelRef, folderIconRef, fileIconRef, filesIconRef },
+    chipRefs: { chipRef, labelRef, folderIconRef, fileIconRef, filesIconRef, thumbRef },
     dropTargetHandlers,
     showDragChip,
     clearDropTarget: () => setDropTarget(null),

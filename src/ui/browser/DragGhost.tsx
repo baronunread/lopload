@@ -7,9 +7,11 @@ export interface DragGhostProps {
 
 /** Custom drag image for row moves: a small chip (icon + name, or a count
  * when dragging multiple selected rows) centered under the cursor, instead
- * of the browser's default of the whole (huge) row. Rendered off-screen —
- * setDragImage needs a laid-out element to rasterize, so this can't be a
- * detached node. */
+ * of the browser's default of the whole (huge) row. Parked off-screen while
+ * idle; showDragChip moves it under the cursor for the duration of the
+ * drag-image snapshot, because WebKit only rasterizes elements that are
+ * actually painted (a detached or off-screen node yields the OS's generic
+ * rectangle). */
 export function DragGhost({ refs }: DragGhostProps) {
   return (
     <div
@@ -26,6 +28,12 @@ export function DragGhost({ refs }: DragGhostProps) {
       <span ref={refs.filesIconRef} style={{ display: "none" }}>
         <FilesIcon size={18} className="shrink-0 text-kumo-subtle" />
       </span>
+      <img
+        ref={refs.thumbRef}
+        alt=""
+        style={{ display: "none" }}
+        className="lopload-media-outline h-6 w-6 shrink-0 rounded object-cover"
+      />
       <span ref={refs.labelRef} className="lopload-body truncate text-sm" />
     </div>
   );

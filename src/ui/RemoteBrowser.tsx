@@ -144,6 +144,28 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterQuery]);
 
+  // Cmd/Ctrl+A selects every visible row (like Finder/Explorer) instead of
+  // the document's text — unless focus is in a text field, where select-all
+  // keeps its native meaning.
+  useEffect(() => {
+    function handleSelectAll(e: KeyboardEvent) {
+      if (e.key !== "a" || !(e.metaKey || e.ctrlKey)) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      selection.setSelected(new Set(rows.map((r) => r.key)));
+    }
+    document.addEventListener("keydown", handleSelectAll);
+    return () => document.removeEventListener("keydown", handleSelectAll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+
   // Computes the folder info dialog's stats on demand once it's opened for a
   // folder — S3 "folders" have no metadata of their own to show up-front.
   useEffect(() => {
@@ -386,7 +408,18 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     e.dataTransfer.setData(MOVE_DRAG_TYPE, JSON.stringify(dragKeys));
     e.dataTransfer.effectAllowed = "move";
     const label = dragKeys.length > 1 ? `${dragKeys.length} items` : entry.name;
-    dragMove.showDragChip(e, label, dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file");
+    // Single-file drags reuse the row's rendered thumbnail (if it has one)
+    // so the chip shows the file itself rather than a generic glyph.
+    const thumbnailSrc =
+      dragKeys.length === 1 && !isFolder && e.currentTarget instanceof HTMLElement
+        ? (e.currentTarget.querySelector("img")?.src ?? undefined)
+        : undefined;
+    dragMove.showDragChip(
+      e,
+      label,
+      dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file",
+      thumbnailSrc,
+    );
   }
 
   function handleRowDoubleClick(entry: RemoteEntry) {
