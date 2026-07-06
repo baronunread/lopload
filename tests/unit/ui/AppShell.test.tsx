@@ -104,7 +104,10 @@ describe("AppShell connection switcher", () => {
     // The file name appears twice — once in the browser table, once in the
     // transfer list — so we use getAllByText throughout this test.
     await waitFor(() => expect(screen.getAllByText("vacation.mp4").length).toBeGreaterThan(0));
-    expect(screen.getByText("Sending — 50%")).toBeInTheDocument();
+    // The transfer widget hydrates through its own listTransfers() promise,
+    // separate from the browser listing awaited above — it needs its own
+    // waitFor or this assertion races the widget's first render.
+    await waitFor(() => expect(screen.getByText("Sending — 50%")).toBeInTheDocument());
     expect(screen.queryByText("invoice.pdf")).not.toBeInTheDocument();
     expect(screen.queryByText("Couldn't send — tap to retry")).not.toBeInTheDocument();
 
@@ -116,7 +119,9 @@ describe("AppShell connection switcher", () => {
     await waitFor(() =>
       expect(screen.getAllByText("invoice.pdf").length).toBeGreaterThan(0),
     );
-    expect(screen.getByText("Couldn't send — tap to retry")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("Couldn't send — tap to retry")).toBeInTheDocument(),
+    );
     expect(screen.queryByText("vacation.mp4")).not.toBeInTheDocument();
     expect(screen.queryByText("Sending — 50%")).not.toBeInTheDocument();
   });
