@@ -1,5 +1,5 @@
 import { Badge, Meter } from "@cloudflare/kumo";
-import type { TransferState } from "../lib/types";
+import type { Transfer, TransferState } from "../lib/types";
 import { chipInfo } from "./format";
 
 const VARIANT_BY_VISUAL = {
@@ -12,17 +12,19 @@ const VARIANT_BY_VISUAL = {
 
 export interface StatusChipProps {
   state: TransferState;
+  direction?: Transfer["direction"];
   /** Called when a failed chip is clicked — retries the transfer. */
   onRetry?: () => void;
 }
 
 /**
- * Renders one of the exact five status states from the spec as a labeled
- * chip. "Sending" additionally shows a live Meter; "failed" is clickable
- * to retry and is never auto-dismissed by this component.
+ * Renders one of the status states from the spec as a labeled chip (six
+ * counting both terminal-success states, "Uploaded ✓"/"Downloaded ✓").
+ * "Sending" additionally shows a live Meter; "failed" is clickable to retry
+ * and is never auto-dismissed by this component.
  */
-export function StatusChip({ state, onRetry }: StatusChipProps) {
-  const info = chipInfo(state);
+export function StatusChip({ state, direction, onRetry }: StatusChipProps) {
+  const info = chipInfo(state, direction);
   // Badge doesn't forward arbitrary DOM props, so data-state lives on a
   // wrapper element instead — tests key off the wrapper's data-state.
   const badge = (
@@ -53,7 +55,7 @@ export function StatusChip({ state, onRetry }: StatusChipProps) {
       <div data-state="sending" className="flex min-w-40 flex-col gap-1">
         {badge}
         <Meter
-          label="Sending"
+          label={direction === "download" ? "Downloading" : "Sending"}
           value={state.percent}
           showValue={false}
           indicatorClassName="bg-kumo-warning"

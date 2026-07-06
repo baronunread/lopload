@@ -40,6 +40,7 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
     localPath: "/local/file.bin",
     size: 10,
     partSize: PART_SIZE,
+    direction: "upload",
     state: { kind: "sending", percent: 0 },
     createdAt: now,
     updatedAt: now,

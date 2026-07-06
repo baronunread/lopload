@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { CaretDownIcon, CaretUpIcon, XIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CaretUpIcon, StopCircleIcon, XIcon } from "@phosphor-icons/react";
 import type { EngineEvent, Transfer } from "../lib/types";
 import { useServices } from "./services";
 import { StatusChip } from "./StatusChip";
@@ -29,11 +29,11 @@ const EXIT_ANIMATION_MS = 200;
  * transfers are sticky — they stay rendered (and count toward the badge)
  * until the user explicitly dismisses them or closes the whole widget.
  *
- * Closing while uploads are still in flight doesn't cancel anything (the
- * engine has no cancel operation) — it just hides the widget. If further
- * events arrive afterwards for still-running uploads, the widget reappears
- * with those, which mirrors Drive's own behavior of staying visible during
- * activity.
+ * Closing the widget while transfers are still in flight doesn't cancel
+ * them — it just hides the widget; each row has its own stop button for
+ * that. If further events arrive afterwards for still-running transfers,
+ * the widget reappears with those, which mirrors Drive's own behavior of
+ * staying visible during activity.
  *
  * Only ever shows transfers that became active while this widget was
  * mounted for the given connection — historical, already-uploaded entries
@@ -98,7 +98,9 @@ export function TransferWidget({
   const visible = transfers.filter((t) => !dismissed.has(t.id));
   const inFlight = visible.filter((t) => IN_FLIGHT_KINDS.has(t.state.kind));
   const failed = visible.filter((t) => t.state.kind === "failed");
-  const uploaded = visible.filter((t) => t.state.kind === "uploaded");
+  const completedTransfers = visible.filter(
+    (t) => t.state.kind === "uploaded" || t.state.kind === "downloaded",
+  );
 
   function clearAll() {
     setDismissed((prev) => {
@@ -117,17 +119,25 @@ export function TransferWidget({
 
   const shouldShow = visible.length > 0;
   const total = visible.length;
-  const completed = uploaded.length;
+  const completed = completedTransfers.length;
 
-  // Drive-style dynamic title: "Uploading…" while anything's still in
-  // flight, then a completion summary once the batch settles. Never
-  // auto-dismisses — the widget stays up until the user closes it.
+  // Both directions in the same batch keep the neutral "transfer" wording;
+  // an all-upload or all-download batch gets the more specific verb.
+  const hasUpload = visible.some((t) => t.direction === "upload");
+  const hasDownload = visible.some((t) => t.direction === "download");
+  const verb = hasUpload && hasDownload ? "transfer" : hasDownload ? "download" : "upload";
+  const verbIng = verb === "transfer" ? "Transferring" : verb === "download" ? "Downloading" : "Uploading";
+
+  // Drive-style dynamic title: "Uploading…" (or "Downloading…"/
+  // "Transferring…") while anything's still in flight, then a completion
+  // summary once the batch settles. Never auto-dismisses — the widget stays
+  // up until the user closes it.
   const title =
     inFlight.length > 0
-      ? `Uploading ${total} item${total === 1 ? "" : "s"}…`
+      ? `${verbIng} ${total} item${total === 1 ? "" : "s"}…`
       : failed.length > 0
-        ? `${completed} of ${total} uploads complete`
-        : `${completed} upload${completed === 1 ? "" : "s"} complete`;
+        ? `${completed} of ${total} ${verb}s complete`
+        : `${completed} ${verb}${completed === 1 ? "" : "s"} complete`;
 
   // Keep the widget mounted for a beat after shouldShow flips to false so
   // the fade/slide-out has time to play, then drop it from the tree
@@ -205,12 +215,26 @@ export function TransferWidget({
                 <div className="flex flex-shrink-0 items-center gap-2">
                   <StatusChip
                     state={t.state}
+                    direction={t.direction}
                     onRetry={
                       t.state.kind === "failed"
                         ? () => void services.engine.retry(t.id)
                         : undefined
                     }
                   />
+                  {IN_FLIGHT_KINDS.has(t.state.kind) && (
+                    <button
+                      type="button"
+                      aria-label={`Cancel ${t.key}`}
+                      className="flex h-8 w-8 items-center justify-center text-kumo-subtle hover:text-kumo-default"
+                      onClick={() => {
+                        setTransfers((prev) => prev.filter((existing) => existing.id !== t.id));
+                        void services.engine.cancel(t.id);
+                      }}
+                    >
+                      <StopCircleIcon size={16} />
+                    </button>
+                  )}
                   {t.state.kind === "failed" && (
                     <button
                       type="button"

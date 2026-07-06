@@ -51,6 +51,7 @@ const ALL_STATES: TransferState["kind"][] = [
   "sending",
   "checking",
   "uploaded",
+  "downloaded",
   "failed",
 ];
 
@@ -58,14 +59,21 @@ describe("state machine transition table", () => {
   test("valid transitions per PLAN.md", () => {
     expect(STATE_TRANSITIONS.queued).toEqual(["sending", "failed"]);
     expect(STATE_TRANSITIONS.sending).toEqual(["sending", "checking", "failed"]);
-    expect(STATE_TRANSITIONS.checking).toEqual(["uploaded", "failed", "sending"]);
+    expect(STATE_TRANSITIONS.checking).toEqual(["uploaded", "downloaded", "failed", "sending"]);
     expect(STATE_TRANSITIONS.uploaded).toEqual([]);
+    expect(STATE_TRANSITIONS.downloaded).toEqual([]);
     expect(STATE_TRANSITIONS.failed).toEqual(["queued"]);
   });
 
   test("uploaded is terminal — no transition out is valid", () => {
     for (const kind of ALL_STATES) {
       expect(canTransition({ kind: "uploaded" }, stateOf(kind))).toBe(false);
+    }
+  });
+
+  test("downloaded is terminal — no transition out is valid", () => {
+    for (const kind of ALL_STATES) {
+      expect(canTransition({ kind: "downloaded" }, stateOf(kind))).toBe(false);
     }
   });
 
@@ -140,7 +148,7 @@ describe("TransferEngine — single-part happy path", () => {
     expect(seenKinds[seenKinds.length - 1]).toBe("uploaded");
 
     const batchEvent = events.find((e) => e.type === "batch-finished");
-    expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 1, failed: 0 });
+    expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 1, downloaded: 0, failed: 0 });
   });
 
   test("ETag mismatch -> failed with errorClass verification, sticky", async () => {
@@ -261,7 +269,7 @@ describe("TransferEngine — concurrency and batching", () => {
     );
 
     const batchEvent = events.find((e) => e.type === "batch-finished");
-    expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 5, failed: 0 });
+    expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 5, downloaded: 0, failed: 0 });
   });
 });
 
@@ -288,6 +296,7 @@ describe("TransferEngine — resumePending", () => {
       size,
       partSize: PART_SIZE,
       uploadId: "upload-stuck",
+      direction: "upload",
       state: { kind: "sending", percent: 33 },
       createdAt: now,
       updatedAt: now,
