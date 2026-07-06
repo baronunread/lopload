@@ -152,6 +152,12 @@ export function SetupForm({
         secretKey: form.secretKey,
       });
       onSaved(conn);
+    } catch (e) {
+      toasts.add({
+        variant: "error",
+        title: "Couldn't save connection",
+        description: String(e),
+      });
     } finally {
       setSaving(false);
     }

@@ -25,7 +25,8 @@ impl Credentials {
 mod platform {
     use super::*;
 
-    // macOS: Security.framework with data-protection keychain (no prompts).
+    // macOS: Security.framework directly — modern SecItemAdd API (no popups
+    // for unsigned apps unlike the old keyring crate's SecKeychainAddGenericPassword).
     #[cfg(target_os = "macos")]
     mod imp {
         use super::*;
@@ -33,10 +34,8 @@ mod platform {
 
         pub fn set(connection_id: &str, creds: &Credentials) -> Result<(), String> {
             let json = creds.to_secret_json()?;
-            let mut opts = PasswordOptions::new_generic_password(SERVICE, connection_id);
-            opts.use_protected_keychain();
-            opts.set_label("Lopload storage credentials");
-            set_generic_password_options(json.as_bytes(), opts).map_err(|e| e.to_string())
+            set_generic_password(SERVICE, connection_id, json.as_bytes())
+                .map_err(|e| e.to_string())
         }
 
         pub fn get(connection_id: &str) -> Result<Credentials, String> {
