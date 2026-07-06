@@ -39,6 +39,7 @@ const videosTransfer: Transfer = {
   localPath: "/tmp/vacation.mp4",
   size: 100,
   partSize: 8 * 1024 * 1024,
+  direction: "upload",
   state: { kind: "sending", percent: 50 },
   createdAt: 0,
   updatedAt: 0,
@@ -50,6 +51,7 @@ const documentsTransfer: Transfer = {
   localPath: "/tmp/invoice.pdf",
   size: 50,
   partSize: 8 * 1024 * 1024,
+  direction: "upload",
   // Sticky failures stay visible across a connection switch; a plain
   // "uploaded" transfer would not — see the regression test in
   // TransferWidget.test.tsx documenting why (historical completed

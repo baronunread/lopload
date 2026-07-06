@@ -26,3 +26,7 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code worktrees and local planning notes
+.claude/worktrees/
+improvement-plan.md

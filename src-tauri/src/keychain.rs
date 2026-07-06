@@ -34,8 +34,7 @@ mod platform {
 
         pub fn set(connection_id: &str, creds: &Credentials) -> Result<(), String> {
             let json = creds.to_secret_json()?;
-            set_generic_password(SERVICE, connection_id, json.as_bytes())
-                .map_err(|e| e.to_string())
+            set_generic_password(SERVICE, connection_id, json.as_bytes()).map_err(|e| e.to_string())
         }
 
         pub fn get(connection_id: &str) -> Result<Credentials, String> {
@@ -107,16 +106,12 @@ pub fn keychain_set(
 }
 
 #[tauri::command]
-pub fn keychain_get(
-    connection_id: String,
-) -> Result<Credentials, String> {
+pub fn keychain_get(connection_id: String) -> Result<Credentials, String> {
     platform::get(&connection_id)
 }
 
 #[tauri::command]
-pub fn keychain_delete(
-    connection_id: String,
-) -> Result<(), String> {
+pub fn keychain_delete(connection_id: String) -> Result<(), String> {
     platform::delete(&connection_id)
 }
 

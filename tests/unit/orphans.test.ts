@@ -33,6 +33,7 @@ function transferWithUpload(id: string, uploadId: string): Transfer {
     size: 100,
     partSize: 8 * 1024 * 1024,
     uploadId,
+    direction: "upload",
     state: { kind: "sending", percent: 10 },
     createdAt: now,
     updatedAt: now,

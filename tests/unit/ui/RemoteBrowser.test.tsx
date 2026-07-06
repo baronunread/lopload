@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { act, useState } from "react";
 import { Toasty } from "@cloudflare/kumo";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { ServicesProvider } from "../../../src/ui/services";
@@ -140,6 +140,7 @@ describe("RemoteBrowser", () => {
       localPath: "/tmp/readme.txt",
       size: 100,
       partSize: 8 * 1024 * 1024,
+      direction: "upload",
       state: { kind: "uploaded" },
       createdAt: 0,
       updatedAt: 0,
@@ -149,7 +150,7 @@ describe("RemoteBrowser", () => {
     await screen.findByText("readme.txt", {}, { timeout: 2000 });
   });
 
-  test("double-clicking a file opens a debug info dialog; folders still navigate", async () => {
+  test("double-clicking a file opens it with the default app; folders still navigate", async () => {
     const services = createFakeServices({
       entriesByPrefix: {
         "conn-1::": ROOT_ENTRIES,
@@ -166,13 +167,12 @@ describe("RemoteBrowser", () => {
     await screen.findByText("readme.txt");
 
     await user.dblClick(screen.getByText("readme.txt"));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/File info/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("readme.txt").length).toBeGreaterThan(0);
-    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(services.openFileCalls).toEqual([
+      { connectionId: "conn-1", key: "readme.txt", name: "readme.txt" },
+    ]);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    // Folders still navigate on double-click, without opening the dialog.
+    // Folders still navigate on double-click, without opening anything.
     await user.dblClick(screen.getByText("photos"));
     await screen.findByText("cat.png");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -379,9 +379,116 @@ describe("RemoteBrowser", () => {
     );
     await screen.findByText("readme.txt");
 
-    services.triggerFileDropError("permission denied");
+    // Unlike userEvent/fireEvent helpers, this calls the registered onFileDrop
+    // error callback directly — React 19 asserts on state updates triggered
+    // outside its own event handling, so the resulting setDragging + toast
+    // updates need an explicit act() wrapper.
+    act(() => {
+      services.triggerFileDropError("permission denied");
+    });
 
     await screen.findByText(/Some of what you dropped couldn't be added/);
     await screen.findByText(/permission denied/);
+  });
+
+  test("clicking the Size header sorts files by size, folders always first", async () => {
+    const SORT_ENTRIES: RemoteEntry[] = [
+      { kind: "folder", name: "zzz-folder", key: "zzz-folder/" },
+      { kind: "file", name: "big.bin", key: "big.bin", size: 3000, lastModified: 0 },
+      { kind: "file", name: "small.bin", key: "small.bin", size: 10, lastModified: 0 },
+      { kind: "file", name: "mid.bin", key: "mid.bin", size: 500, lastModified: 0 },
+    ];
+    const services = createFakeServices({ entriesByPrefix: { "conn-1::": SORT_ENTRIES } });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("big.bin");
+
+    const rowNames = () =>
+      screen.getAllByRole("row").slice(1).map((row) => row.textContent ?? "");
+
+    await user.click(screen.getByRole("button", { name: "Size" }));
+    let names = rowNames();
+    expect(names[0]).toContain("zzz-folder");
+    expect(names.slice(1).findIndex((t) => t.includes("small.bin"))).toBeLessThan(
+      names.slice(1).findIndex((t) => t.includes("mid.bin")),
+    );
+    expect(names.slice(1).findIndex((t) => t.includes("mid.bin"))).toBeLessThan(
+      names.slice(1).findIndex((t) => t.includes("big.bin")),
+    );
+
+    // Clicking again flips to descending.
+    await user.click(screen.getByRole("button", { name: "Size" }));
+    names = rowNames();
+    expect(names.slice(1).findIndex((t) => t.includes("big.bin"))).toBeLessThan(
+      names.slice(1).findIndex((t) => t.includes("mid.bin")),
+    );
+  });
+
+  test("the filter field narrows rows by name, and Escape clears it before the selection", async () => {
+    const services = createFakeServices({ entriesByPrefix: { "conn-1::": MANY_ENTRIES } });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("a.txt");
+
+    fireEvent.click(screen.getByText("a.txt").closest("tr") as HTMLElement);
+    expect((screen.getByText("a.txt").closest("tr") as HTMLElement).className).toContain(
+      "bg-kumo-brand",
+    );
+
+    const filterInput = screen.getByLabelText("Filter this folder");
+    await user.type(filterInput, "b.txt");
+
+    expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+    expect(screen.queryByText("photos")).not.toBeInTheDocument();
+    await screen.findByText("b.txt");
+
+    // First Escape clears the filter, not the (still-intact) selection.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await screen.findByText("a.txt");
+    expect(filterInput).toHaveValue("");
+
+    const dataTransfer = makeDataTransfer();
+    fireEvent.dragStart(screen.getByText("a.txt").closest("tr") as HTMLElement, { dataTransfer });
+    fireEvent.dragEnter(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer });
+    fireEvent.drop(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer });
+
+    await waitFor(() => {
+      expect(services.moveCalls).toContainEqual({
+        connectionId: "conn-1",
+        key: "a.txt",
+        toKey: "photos/a.txt",
+      });
+    });
+
+    // A second Escape (filter already empty) clears the selection.
+    fireEvent.click(screen.getByText("b.txt").closest("tr") as HTMLElement);
+    fireEvent.keyDown(document, { key: "Escape" });
+    const dataTransfer2 = makeDataTransfer();
+    fireEvent.dragStart(screen.getByText("c.txt").closest("tr") as HTMLElement, { dataTransfer: dataTransfer2 });
+    fireEvent.dragEnter(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer: dataTransfer2 });
+    fireEvent.drop(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer: dataTransfer2 });
+
+    await waitFor(() => {
+      expect(services.moveCalls).toContainEqual({
+        connectionId: "conn-1",
+        key: "c.txt",
+        toKey: "photos/c.txt",
+      });
+    });
+    expect(services.moveCalls).not.toContainEqual({
+      connectionId: "conn-1",
+      key: "b.txt",
+      toKey: "photos/b.txt",
+    });
   });
 });

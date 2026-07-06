@@ -5,6 +5,7 @@ import type { Connection, EngineEvent, RemoteEntry, Transfer } from "../../../sr
 import type {
   AppServices,
   ConnectionDraft,
+  DownloadTarget,
   FolderInfo,
   PickedFile,
 } from "../../../src/ui/services";
@@ -17,12 +18,19 @@ export interface FakeServicesOptions {
   testConnectionResult?: { ok: boolean; message: string };
   pickFilesResult?: PickedFile[];
   folderInfoResult?: FolderInfo;
+  /** Keyed by `${connectionId}::${prefix}` — files listFilesRecursive returns. */
+  filesRecursiveByPrefix?: Record<string, { key: string; size: number }[]>;
+  saveDestinationResult?: string | null;
+  downloadDirectoryResult?: string | null;
 }
 
 export interface FakeServices extends AppServices {
   emit(event: EngineEvent): void;
   retryCalls: string[];
   dismissCalls: string[];
+  cancelCalls: string[];
+  enqueueDownloadsCalls: Array<{ connectionId: string; targets: DownloadTarget[] }>;
+  openFileCalls: Array<{ connectionId: string; key: string; name: string }>;
   setLastPrefixCalls: Array<{ id: string; prefix: string }>;
   badgeCounts: number[];
   notifications: Array<{ title: string; body: string }>;
@@ -43,6 +51,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const listeners = new Set<(event: EngineEvent) => void>();
   const retryCalls: string[] = [];
   const dismissCalls: string[] = [];
+  const cancelCalls: string[] = [];
+  const enqueueDownloadsCalls: Array<{ connectionId: string; targets: DownloadTarget[] }> = [];
+  const openFileCalls: Array<{ connectionId: string; key: string; name: string }> = [];
   const setLastPrefixCalls: Array<{ id: string; prefix: string }> = [];
   const badgeCounts: number[] = [];
   const notifications: Array<{ title: string; body: string }> = [];
@@ -93,6 +104,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
         folderInfoCalls.push({ connectionId, key });
         return options.folderInfoResult ?? { files: 0, totalSize: 0, lastModified: null };
       },
+      async listFilesRecursive(connectionId, prefix) {
+        return options.filesRecursiveByPrefix?.[`${connectionId}::${prefix}`] ?? [];
+      },
     },
     engine: {
       async listTransfers(connectionId) {
@@ -103,11 +117,17 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
         return () => listeners.delete(cb);
       },
       async enqueueFiles() {},
+      async enqueueDownloads(connectionId, targets) {
+        enqueueDownloadsCalls.push({ connectionId, targets });
+      },
       async retry(transferId) {
         retryCalls.push(transferId);
       },
       async dismiss(transferId) {
         dismissCalls.push(transferId);
+      },
+      async cancel(transferId) {
+        cancelCalls.push(transferId);
       },
     },
     keychain: {
@@ -118,6 +138,15 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     },
     async pickFiles() {
       return options.pickFilesResult ?? [];
+    },
+    async pickSaveDestination() {
+      return options.saveDestinationResult ?? null;
+    },
+    async pickDownloadDirectory() {
+      return options.downloadDirectoryResult ?? null;
+    },
+    async openFile(connectionId, key, name) {
+      openFileCalls.push({ connectionId, key, name });
     },
     onFileDrop(_cb, onError) {
       fileDropErrorHandler = onError ?? null;
@@ -139,6 +168,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     },
     retryCalls,
     dismissCalls,
+    cancelCalls,
+    enqueueDownloadsCalls,
+    openFileCalls,
     setLastPrefixCalls,
     badgeCounts,
     notifications,

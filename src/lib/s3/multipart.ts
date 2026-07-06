@@ -47,6 +47,7 @@ export interface MultipartDeps {
   store: TransferStore;
   /** Called after each chunk of bytes is confirmed sent, for progress UI. */
   onProgress?: (bytesSent: number, totalBytes: number) => void;
+  signal?: AbortSignal;
 }
 
 function stripQuotes(etag: string): string {
@@ -84,7 +85,7 @@ async function uploadSinglePart(
   transfer: Transfer,
   deps: MultipartDeps,
 ): Promise<void> {
-  const { client, bucket, reader, onProgress } = deps;
+  const { client, bucket, reader, onProgress, signal } = deps;
   const size = transfer.size;
   const hasher = new Md5();
   const chunks: Uint8Array[] = [];
@@ -105,6 +106,7 @@ async function uploadSinglePart(
 
   const res = await client.send(
     new PutObjectCommand({ Bucket: bucket, Key: transfer.key, Body: body }),
+    { abortSignal: signal },
   );
   const serverEtag = stripQuotes(res.ETag ?? "").toLowerCase();
   if (serverEtag !== localMd5Hex.toLowerCase()) {
@@ -118,12 +120,13 @@ async function uploadMultipart(
   transfer: Transfer,
   deps: MultipartDeps,
 ): Promise<void> {
-  const { client, bucket, reader, store, onProgress } = deps;
+  const { client, bucket, reader, store, onProgress, signal } = deps;
 
   let uploadId = transfer.uploadId;
   if (!uploadId) {
     const created = await client.send(
       new CreateMultipartUploadCommand({ Bucket: bucket, Key: transfer.key }),
+      { abortSignal: signal },
     );
     if (!created.UploadId) {
       throw new Error("CreateMultipartUpload did not return an UploadId");
@@ -149,6 +152,7 @@ async function uploadMultipart(
   try {
     const listed = await client.send(
       new ListPartsCommand({ Bucket: bucket, Key: transfer.key, UploadId: uploadId }),
+      { abortSignal: signal },
     );
     serverParts = listed.Parts ?? [];
   } catch {
@@ -193,6 +197,7 @@ async function uploadMultipart(
         PartNumber: partNumber,
         Body: chunk,
       }),
+      { abortSignal: signal },
     );
     const etag = res.ETag ?? "";
     const part: TransferPart = { transferId: transfer.id, partNumber, etag, size: length };
@@ -211,10 +216,12 @@ async function uploadMultipart(
         Parts: finalParts.map((p) => ({ ETag: p.etag, PartNumber: p.partNumber })),
       },
     }),
+    { abortSignal: signal },
   );
 
   const head = await client.send(
     new HeadObjectCommand({ Bucket: bucket, Key: transfer.key }),
+    { abortSignal: signal },
   );
 
   const expectedEtag = compositeEtag(finalParts.map((p) => stripQuotes(p.etag)));

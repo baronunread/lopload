@@ -9,8 +9,10 @@
 // expansion) is factored out into a pure, separately-unit-tested module.
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readDir, size as fileSize, stat } from "@tauri-apps/plugin-fs";
+import { tempDir } from "@tauri-apps/api/path";
+import { openPath } from "@tauri-apps/plugin-opener";
 import type { S3Client } from "@aws-sdk/client-s3";
 
 import type {
@@ -31,6 +33,7 @@ import {
   deleteFolder as s3DeleteFolder,
   folderStats,
   listEntries,
+  listFilesUnder,
   renameFile as s3RenameFile,
   renameFolder as s3RenameFolder,
   testConnection as s3TestConnection,
@@ -43,11 +46,13 @@ import {
 } from "../lib/stores/sqlite";
 import { keychainDelete, keychainGet, keychainSet } from "../tauri/keychain";
 import { tauriFetch } from "../tauri/http";
-import { tauriFileReader } from "../tauri/fs";
+import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
+import { onRetryFailedRequested, setTrayStatus } from "../tauri/tray";
 import { isImageName, isVideoName } from "../ui/format";
 import type {
   AppServices,
   ConnectionDraft,
+  DownloadTarget,
   FolderInfo,
   PickedFile,
   TestConnectionResult,
@@ -94,6 +99,7 @@ class RealServices implements AppServices {
   private transferSnapshots = new Map<string, Transfer>();
 
   private orphanSweepStarted = false;
+  private trayRetryListening = false;
 
   private async getDb() {
     if (!this.dbPromise) this.dbPromise = loadDatabase();
@@ -147,6 +153,7 @@ class RealServices implements AppServices {
       bucket: conn.bucket,
       connectionId,
       reader: tauriFileReader,
+      writer: tauriFileWriter,
       store,
     });
     engine.subscribe((event) => this.onEngineEvent(connectionId, event));
@@ -159,10 +166,14 @@ class RealServices implements AppServices {
     if (event.type === "transfer-updated") {
       this.transferSnapshots.set(event.transfer.id, event.transfer);
       this.updateTrayProgress();
+      this.updateTrayStatus();
     } else if (event.type === "batch-finished") {
       const parts: string[] = [];
       if (event.uploaded > 0) {
         parts.push(`${event.uploaded} file${event.uploaded === 1 ? "" : "s"} uploaded`);
+      }
+      if (event.downloaded > 0) {
+        parts.push(`${event.downloaded} file${event.downloaded === 1 ? "" : "s"} downloaded`);
       }
       if (event.failed > 0) {
         parts.push(`${event.failed} file${event.failed === 1 ? "" : "s"} failed — open Lopload to retry`);
@@ -172,20 +183,58 @@ class RealServices implements AppServices {
     for (const fn of this.engineSubscribers) fn(event);
   }
 
-  private updateTrayProgress(): void {
+  /** Tallies in-flight/failed transfers across every connection's engine —
+   * shared by the tray tooltip (updateTrayProgress) and the tray menu status
+   * line/Quit label/failure icon (updateTrayStatus). */
+  private computeTrayAggregate(): {
+    uploading: number;
+    totalBytes: number;
+    doneBytes: number;
+    failed: number;
+  } {
+    let uploading = 0;
     let totalBytes = 0;
     let doneBytes = 0;
-    let anyActive = false;
+    let failed = 0;
     for (const t of this.transferSnapshots.values()) {
       if (t.state.kind === "queued" || t.state.kind === "sending" || t.state.kind === "checking") {
-        anyActive = true;
+        uploading += 1;
         totalBytes += t.size;
         if (t.state.kind === "sending") doneBytes += t.size * (t.state.percent / 100);
         else if (t.state.kind === "checking") doneBytes += t.size;
+      } else if (t.state.kind === "failed") {
+        failed += 1;
       }
     }
-    const fraction = anyActive && totalBytes > 0 ? doneBytes / totalBytes : null;
+    return { uploading, totalBytes, doneBytes, failed };
+  }
+
+  private updateTrayProgress(): void {
+    const { uploading, totalBytes, doneBytes } = this.computeTrayAggregate();
+    const fraction = uploading > 0 && totalBytes > 0 ? doneBytes / totalBytes : null;
     void invoke("tray_set_progress", { fraction }).catch(() => {});
+  }
+
+  /** Pushes the tray menu's status line, "Retry failed" count, and
+   * transfer-aware Quit label — throttled on the src/tauri/tray.ts side. */
+  private updateTrayStatus(): void {
+    const { uploading, totalBytes, doneBytes, failed } = this.computeTrayAggregate();
+    const percent = uploading > 0 && totalBytes > 0 ? (doneBytes / totalBytes) * 100 : 0;
+    setTrayStatus({ uploading, percent, failed });
+  }
+
+  /** Listens once for the tray's "Retry failed" click and replays it as a
+   * retry() on every currently-failed transfer across all engines. */
+  startTrayRetryListening(): void {
+    if (this.trayRetryListening) return;
+    this.trayRetryListening = true;
+    onRetryFailedRequested(() => {
+      for (const [id, transfer] of this.transferSnapshots) {
+        if (transfer.state.kind !== "failed") continue;
+        const engine = this.findEngineFor(id);
+        void engine?.retry(id);
+      }
+    });
   }
 
   private findEngineFor(transferId: string): TransferEngine | undefined {
@@ -270,6 +319,13 @@ class RealServices implements AppServices {
       const { client, conn } = await this.getClient(connectionId);
       return folderStats(client, conn.bucket, key);
     },
+    listFilesRecursive: async (
+      connectionId: string,
+      prefix: string,
+    ): Promise<{ key: string; size: number }[]> => {
+      const { client, conn } = await this.getClient(connectionId);
+      return listFilesUnder(client, conn.bucket, prefix);
+    },
   };
 
   // ---- EngineService ----
@@ -297,6 +353,18 @@ class RealServices implements AppServices {
       }));
       await engine.enqueue(toEnqueue);
     },
+    enqueueDownloads: async (
+      connectionId: string,
+      targets: DownloadTarget[],
+    ): Promise<void> => {
+      const engine = await this.getEngine(connectionId);
+      const toEnqueue: EnqueueFile[] = targets.map((t) => ({
+        localPath: t.localPath,
+        size: t.size,
+        key: t.key,
+      }));
+      await engine.enqueueDownloads(toEnqueue);
+    },
     retry: async (transferId: string): Promise<void> => {
       const engine = this.findEngineFor(transferId);
       await engine?.retry(transferId);
@@ -305,6 +373,12 @@ class RealServices implements AppServices {
       const engine = this.findEngineFor(transferId);
       engine?.acknowledge(transferId);
       await engine?.dismiss(transferId);
+      this.transferSnapshots.delete(transferId);
+      this.updateTrayStatus();
+    },
+    cancel: async (transferId: string): Promise<void> => {
+      const engine = this.findEngineFor(transferId);
+      engine?.cancel(transferId);
     },
   };
 
@@ -340,6 +414,37 @@ class RealServices implements AppServices {
       files.push({ path, name: path.split(/[/\\]/).pop() ?? path, size });
     }
     return files;
+  }
+
+  async pickSaveDestination(defaultName: string): Promise<string | null> {
+    const destination = await saveDialog({ defaultPath: defaultName });
+    return destination ?? null;
+  }
+
+  async pickDownloadDirectory(): Promise<string | null> {
+    const selection = await openDialog({ multiple: false, directory: true });
+    if (!selection) return null;
+    return Array.isArray(selection) ? (selection[0] ?? null) : selection;
+  }
+
+  async openFile(connectionId: string, key: string, name: string): Promise<void> {
+    const dir = await tempDir();
+    const localPath = `${dir}/lopload-open-${crypto.randomUUID()}-${name}`;
+    const engine = await this.getEngine(connectionId);
+    const [transfer] = await engine.enqueueDownloads([{ key, localPath, size: 0 }]);
+    await new Promise<void>((resolve) => {
+      const unsubscribe = engine.subscribe((event) => {
+        if (event.type !== "transfer-updated" || event.transfer.id !== transfer.id) return;
+        if (event.transfer.state.kind === "downloaded") {
+          unsubscribe();
+          resolve();
+          void openPath(localPath);
+        } else if (event.transfer.state.kind === "failed") {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
   }
 
   onFileDrop(
@@ -474,6 +579,7 @@ export function createRealServices(): AppServices {
   if (!singleton) {
     singleton = new RealServices();
     singleton.startOrphanSweep();
+    singleton.startTrayRetryListening();
   }
   return singleton;
 }

@@ -1,7 +1,12 @@
 // TransferEngine: drives the state machine
-// queued → sending(percent) → checking → uploaded | failed
+// queued → sending(percent) → checking → uploaded | downloaded | failed
 // with concurrency 3, persisting every state change and emitting
 // EngineEvents to subscribers. Framework-free — no React, no Tauri.
+//
+// One engine instance handles both directions for a connection: `direction`
+// on each Transfer picks which of uploadTransfer/downloadTransfer actually
+// moves the bytes, but queueing, concurrency, persistence, and the failure/
+// retry/cancel machinery are all shared rather than duplicated.
 
 import type { S3Client } from "@aws-sdk/client-s3";
 
@@ -19,6 +24,7 @@ import {
   uploadTransfer,
   type LocalFileReader,
 } from "./s3/multipart";
+import { downloadTransfer, type LocalFileWriter } from "./s3/download";
 
 /** Valid next states for each current state — invalid transitions are rejected. */
 export const STATE_TRANSITIONS: Record<
@@ -29,8 +35,9 @@ export const STATE_TRANSITIONS: Record<
   sending: ["sending", "checking", "failed"],
   // "checking" -> "sending" covers resuming a transfer that was interrupted
   // mid-verification on a previous run; everything else about "checking" is terminal-ish.
-  checking: ["uploaded", "failed", "sending"],
+  checking: ["uploaded", "downloaded", "failed", "sending"],
   uploaded: [],
+  downloaded: [],
   failed: ["queued"],
 };
 
@@ -49,9 +56,10 @@ const CONCURRENCY = 3;
 const RESUMABLE_STATES: TransferState["kind"][] = ["queued", "sending", "checking"];
 
 export interface EnqueueFile {
+  /** Source path (upload) or destination path (download) on the local disk. */
   localPath: string;
   size: number;
-  /** Remote key this file uploads to. */
+  /** Remote key this file uploads to or downloads from. */
   key: string;
   /** Shared by every file from the same dropped/picked folder — copied onto
    *  the created Transfer so the UI can group them into one row. */
@@ -65,6 +73,8 @@ export interface TransferEngineDeps {
   connectionId: string;
   reader: LocalFileReader;
   store: TransferStore;
+  /** Required only if this engine will ever be asked to enqueueDownloads. */
+  writer?: LocalFileWriter;
   concurrency?: number;
   now?: () => number;
   /** Injectable id generator for deterministic tests. */
@@ -76,6 +86,7 @@ export class TransferEngine {
   private readonly bucket: string;
   private readonly connectionId: string;
   private readonly reader: LocalFileReader;
+  private readonly writer?: LocalFileWriter;
   private readonly store: TransferStore;
   private readonly concurrency: number;
   private readonly now: () => number;
@@ -86,8 +97,17 @@ export class TransferEngine {
   private readonly active = new Set<string>();
   private readonly subscribers = new Set<(event: EngineEvent) => void>();
   private readonly acknowledged = new Set<string>();
+  private readonly abortControllers = new Map<string, AbortController>();
+  /** Transfer ids cancel() was called on. Entries are never removed: within
+   * one engine instance a cancelled transfer is done for good (it's already
+   * out of `transfers`/`queue`/`active`, so nothing can restart it here) —
+   * this set exists purely to stop a stray in-flight rejection or a late
+   * fire-and-forget progress update from being mistaken for a real failure
+   * or silently resurrecting the transfer after the fact. */
+  private readonly cancelledIds = new Set<string>();
 
   private batchUploaded = 0;
+  private batchDownloaded = 0;
   private batchFailed = 0;
   private pumping = false;
 
@@ -96,6 +116,7 @@ export class TransferEngine {
     this.bucket = deps.bucket;
     this.connectionId = deps.connectionId;
     this.reader = deps.reader;
+    this.writer = deps.writer;
     this.store = deps.store;
     this.concurrency = deps.concurrency ?? CONCURRENCY;
     this.now = deps.now ?? (() => Date.now());
@@ -128,6 +149,18 @@ export class TransferEngine {
 
   /** Queue new files for upload under this connection's bucket. */
   async enqueue(files: EnqueueFile[]): Promise<Transfer[]> {
+    return this.enqueueInternal(files, "upload");
+  }
+
+  /** Queue new remote files for download to a local destination path each. */
+  async enqueueDownloads(files: EnqueueFile[]): Promise<Transfer[]> {
+    return this.enqueueInternal(files, "download");
+  }
+
+  private async enqueueInternal(
+    files: EnqueueFile[],
+    direction: Transfer["direction"],
+  ): Promise<Transfer[]> {
     const created: Transfer[] = [];
     for (const file of files) {
       const t = this.now();
@@ -140,6 +173,7 @@ export class TransferEngine {
         partSize: PART_SIZE,
         folderId: file.folderId,
         folderName: file.folderName,
+        direction,
         state: { kind: "queued" },
         createdAt: t,
         updatedAt: t,
@@ -154,7 +188,8 @@ export class TransferEngine {
     return created;
   }
 
-  /** Retry a failed transfer; multipart transfers resume from persisted parts. */
+  /** Retry a failed transfer; multipart uploads resume from persisted parts,
+   * downloads restart from byte zero. */
   async retry(transferId: string): Promise<void> {
     const transfer = this.transfers.get(transferId);
     if (!transfer || transfer.state.kind !== "failed") return;
@@ -174,6 +209,26 @@ export class TransferEngine {
     this.transfers.delete(transferId);
     this.acknowledged.delete(transferId);
     await this.store.delete(transferId);
+  }
+
+  /**
+   * Cancels a queued or in-flight transfer: drops it from the queue/active
+   * set and this session's transfer list, and aborts its in-flight request
+   * (if any) rather than letting it land as a sticky failure. The store
+   * record is left untouched — for an upload with a multipart session
+   * already underway, its uploadId and persisted parts survive, so if the
+   * app restarts before the user acts further, resumePending() picks the
+   * transfer back up and continues it rather than starting over.
+   */
+  cancel(transferId: string): void {
+    this.cancelledIds.add(transferId);
+    const controller = this.abortControllers.get(transferId);
+    controller?.abort();
+    this.abortControllers.delete(transferId);
+    const queueIdx = this.queue.indexOf(transferId);
+    if (queueIdx !== -1) this.queue.splice(queueIdx, 1);
+    this.active.delete(transferId);
+    this.transfers.delete(transferId);
   }
 
   /**
@@ -201,6 +256,11 @@ export class TransferEngine {
     transfer.state = next;
     transfer.updatedAt = this.now();
     await this.store.save(transfer);
+    // A fire-and-forget onProgress call (from uploadTransfer/downloadTransfer)
+    // can still be resolving its store.save() after cancel() has already
+    // dropped this transfer — without this check, that stale continuation
+    // would silently re-insert it into the live transfer list.
+    if (this.cancelledIds.has(transfer.id)) return;
     this.transfers.set(transfer.id, transfer);
     // Snapshot for the event — `transfer` keeps mutating in place, so
     // subscribers must not receive a reference that changes under them.
@@ -229,13 +289,15 @@ export class TransferEngine {
 
   private maybeEmitBatchFinished(): void {
     if (this.active.size === 0 && this.queue.length === 0 &&
-        (this.batchUploaded > 0 || this.batchFailed > 0)) {
+        (this.batchUploaded > 0 || this.batchDownloaded > 0 || this.batchFailed > 0)) {
       this.emit({
         type: "batch-finished",
         uploaded: this.batchUploaded,
+        downloaded: this.batchDownloaded,
         failed: this.batchFailed,
       });
       this.batchUploaded = 0;
+      this.batchDownloaded = 0;
       this.batchFailed = 0;
     }
   }
@@ -245,38 +307,68 @@ export class TransferEngine {
     if (!transfer) return;
     this.transfers.set(id, transfer);
 
+    const controller = new AbortController();
+    this.abortControllers.set(id, controller);
+
     try {
       if (transfer.state.kind === "queued") {
         await this.setState(transfer, { kind: "sending", percent: 0 });
       } else if (transfer.state.kind !== "sending" && transfer.state.kind !== "checking") {
-        // Nothing to do for uploaded/failed transfers pulled onto the queue.
+        // Nothing to do for uploaded/downloaded/failed transfers pulled onto the queue.
         return;
       } else if (transfer.state.kind === "checking") {
         // Left mid-verification by a crash; re-run from sending(0) — the
-        // upload step itself will fast-path already-uploaded parts.
+        // transfer step itself will fast-path already-uploaded parts (uploads)
+        // or simply restart the stream (downloads).
         await this.setState(transfer, { kind: "sending", percent: 0 });
       }
 
-      await uploadTransfer(transfer, {
-        client: this.client,
-        bucket: this.bucket,
-        reader: this.reader,
-        store: this.store,
-        onProgress: (sent, total) => {
-          const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 100;
-          void this.setState(transfer, { kind: "sending", percent });
-        },
-      });
+      const onProgress = (sent: number, total: number) => {
+        const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 100;
+        void this.setState(transfer, { kind: "sending", percent });
+      };
+
+      if (transfer.direction === "download") {
+        if (!this.writer) {
+          throw new Error("TransferEngine has no writer configured for downloads");
+        }
+        await downloadTransfer(transfer, {
+          client: this.client,
+          bucket: this.bucket,
+          writer: this.writer,
+          onProgress,
+          signal: controller.signal,
+        });
+      } else {
+        await uploadTransfer(transfer, {
+          client: this.client,
+          bucket: this.bucket,
+          reader: this.reader,
+          store: this.store,
+          onProgress,
+          signal: controller.signal,
+        });
+      }
 
       await this.setState(transfer, { kind: "checking" });
-      await this.setState(transfer, { kind: "uploaded" });
-      this.batchUploaded += 1;
+      await this.setState(transfer, { kind: transfer.direction === "download" ? "downloaded" : "uploaded" });
+      if (transfer.direction === "download") this.batchDownloaded += 1;
+      else this.batchUploaded += 1;
     } catch (err) {
+      if (this.cancelledIds.has(id)) {
+        // Deliberately cancelled — not a failure, and already dropped from
+        // the live transfer list by cancel(); nothing further to persist.
+        // (cancelledIds is never cleared for this id: within one engine
+        // instance a cancelled transfer is dead for good — retry()/pump()
+        // can't resurrect it since it's no longer in `this.transfers`
+        // either; only a fresh engine's resumePending() picks it back up.)
+        return;
+      }
       const errorClass: ErrorClass =
         err instanceof VerificationError ? err.errorClass : classifyError(err);
       // A transfer may be in "sending" or already "checking" when it fails.
       const current = this.transfers.get(id) ?? transfer;
-      if (current.state.kind === "uploaded") return;
+      if (current.state.kind === "uploaded" || current.state.kind === "downloaded") return;
       try {
         await this.setState(current, { kind: "failed", errorClass });
       } catch {
@@ -287,6 +379,8 @@ export class TransferEngine {
         this.emit({ type: "transfer-updated", transfer: { ...current } });
       }
       this.batchFailed += 1;
+    } finally {
+      this.abortControllers.delete(id);
     }
   }
 }

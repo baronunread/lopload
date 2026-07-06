@@ -1,6 +1,6 @@
 // Plain-language formatting helpers. No storage jargon anywhere in here —
 // see the jargon sweep test in tests/unit/ui/jargonSweep.test.tsx.
-import type { TransferState } from "../lib/types";
+import type { Transfer, TransferState } from "../lib/types";
 
 /** The exact five chip labels from the spec table — order matters for docs, not for logic. */
 export const STATUS_LABELS = {
@@ -8,6 +8,7 @@ export const STATUS_LABELS = {
   sending: "Sending",
   checking: "Checking",
   uploaded: "Uploaded ✓",
+  downloaded: "Downloaded ✓",
   failed: "Couldn't send — tap to retry",
 } as const;
 
@@ -20,23 +21,35 @@ export interface ChipInfo {
   visual: ChipVisual;
 }
 
-/** Maps a TransferState to the exact label + visual treatment the spec requires. */
-export function chipInfo(state: TransferState): ChipInfo {
+/** Maps a TransferState to the exact label + visual treatment the spec
+ * requires. `direction` (default "upload") only changes wording — the
+ * visual treatment and data-state are identical for both directions. */
+export function chipInfo(
+  state: TransferState,
+  direction: Transfer["direction"] = "upload",
+): ChipInfo {
+  const isDownload = direction === "download";
   switch (state.kind) {
     case "queued":
       return { state: "queued", label: STATUS_LABELS.queued, visual: "neutral" };
     case "sending":
       return {
         state: "sending",
-        label: `${STATUS_LABELS.sending} — ${Math.round(state.percent)}%`,
+        label: `${isDownload ? "Downloading" : STATUS_LABELS.sending} — ${Math.round(state.percent)}%`,
         visual: "amber",
       };
     case "checking":
       return { state: "checking", label: STATUS_LABELS.checking, visual: "amber-pulse" };
     case "uploaded":
       return { state: "uploaded", label: STATUS_LABELS.uploaded, visual: "mint" };
+    case "downloaded":
+      return { state: "downloaded", label: STATUS_LABELS.downloaded, visual: "mint" };
     case "failed":
-      return { state: "failed", label: STATUS_LABELS.failed, visual: "coral" };
+      return {
+        state: "failed",
+        label: isDownload ? "Couldn't download — tap to retry" : STATUS_LABELS.failed,
+        visual: "coral",
+      };
   }
 }
 

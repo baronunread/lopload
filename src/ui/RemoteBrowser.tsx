@@ -1,28 +1,30 @@
-import { useEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   Breadcrumbs,
   Button,
   Dialog,
   Empty,
   Input,
-  Table,
   useKumoToastManager,
 } from "@cloudflare/kumo";
-import {
-  DotsThreeVerticalIcon,
-  FileIcon,
-  FilesIcon,
-  FolderIcon,
-  FolderPlusIcon,
-  HouseIcon,
-  UploadSimpleIcon,
-} from "@phosphor-icons/react";
+import { FolderPlusIcon, HouseIcon, MagnifyingGlassIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import type { RemoteEntry } from "../lib/types";
 import { useServices, type FolderInfo } from "./services";
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
-import { Thumbnail } from "./Thumbnail";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { SOLID_DANGER_BUTTON_STYLE } from "./dangerButton";
+import { DragGhost } from "./browser/DragGhost";
+import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
+import { filterEntries } from "./browser/filter";
+import { DEFAULT_SORT, nextSortState, sortEntries, type SortKey } from "./browser/sort";
+import { useDragMove, MOVE_DRAG_TYPE } from "./browser/useDragMove";
+import { useSelection } from "./browser/useSelection";
 
 export interface RemoteBrowserProps {
   connectionId: string;
@@ -43,12 +45,6 @@ type FolderInfoState = { status: "loading" } | ({ status: "loaded" } & FolderInf
  * would otherwise trigger a re-list per file. */
 const REFRESH_DEBOUNCE_MS = 500;
 
-/** Custom drag MIME type for internal row drag-to-move. Kept distinct from
- * the browser's native "Files" drag type (used for OS file drops, which are
- * actually handled separately via the Tauri onDragDropEvent bridge) so a
- * move-drag can never be mistaken for an incoming file upload. */
-const MOVE_DRAG_TYPE = "application/x-lopload-key";
-
 /** Remote folder browser: breadcrumbs, listing table, thumbnails, and a right-click menu. */
 export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowserProps) {
   const services = useServices();
@@ -63,17 +59,14 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const [infoEntry, setInfoEntry] = useState<RemoteEntry | null>(null);
   const [folderInfoState, setFolderInfoState] = useState<FolderInfoState | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const lastClickedKey = useRef<string | null>(null);
   const dragCounter = useRef(0);
+  const [filterQuery, setFilterQuery] = useState("");
+  const [sort, setSort] = useState(DEFAULT_SORT);
   const toasts = useKumoToastManager();
 
-  const dragChipRef = useRef<HTMLDivElement>(null);
-  const dragChipLabelRef = useRef<HTMLSpanElement>(null);
-  const dragChipFolderIconRef = useRef<HTMLSpanElement>(null);
-  const dragChipFileIconRef = useRef<HTMLSpanElement>(null);
-  const dragChipFilesIconRef = useRef<HTMLSpanElement>(null);
+  const rows = sortEntries(filterEntries(entries, filterQuery), sort);
+  const selection = useSelection(rows);
+  const segments = segmentsForPrefix(prefix);
 
   async function refresh() {
     setLoading(true);
@@ -93,8 +86,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   useEffect(() => {
     void refresh();
-    setSelected(new Set());
-    lastClickedKey.current = null;
+    selection.clear();
+    setFilterQuery("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, prefix]);
 
@@ -118,14 +111,21 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, prefix]);
 
-  // Escape clears the current multi-selection, wherever focus happens to be.
+  // Escape clears the filter first, then (on a subsequent press) the
+  // selection — wherever focus happens to be.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelected(new Set());
+      if (e.key !== "Escape") return;
+      if (filterQuery) {
+        setFilterQuery("");
+        return;
+      }
+      selection.clear();
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterQuery]);
 
   // Computes the folder info dialog's stats on demand once it's opened for a
   // folder — S3 "folders" have no metadata of their own to show up-front.
@@ -182,6 +182,34 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     }
   }
 
+  /** Downloads a single file (native "Save as" dialog) or a whole folder
+   * recursively (native folder picker, recreating the folder's own name and
+   * structure inside the chosen destination). */
+  async function handleDownload(entry: RemoteEntry) {
+    if (entry.kind === "file") {
+      const destination = await services.pickSaveDestination(entry.name);
+      if (!destination) return;
+      await services.engine.enqueueDownloads(connectionId, [
+        { key: entry.key, localPath: destination, size: entry.size ?? 0 },
+      ]);
+      return;
+    }
+
+    const destDir = await services.pickDownloadDirectory();
+    if (!destDir) return;
+    const files = await services.browser.listFilesRecursive(connectionId, entry.key);
+    if (files.length === 0) return;
+    const root = `${destDir}/${entry.name}`;
+    await services.engine.enqueueDownloads(
+      connectionId,
+      files.map((f) => ({
+        key: f.key,
+        localPath: `${root}/${f.key.slice(entry.key.length)}`,
+        size: f.size,
+      })),
+    );
+  }
+
   function navigate(next: string) {
     onNavigate(next);
     void services.connections.setLastPrefix(connectionId, next);
@@ -205,94 +233,13 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     await refresh();
   }
 
-  /** Parses the payload written to the custom drag MIME type: a JSON array
-   * of the keys being moved (one, or the whole selection). */
-  function parseDragKeys(raw: string): string[] {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed as string[];
-    } catch {
-      // Fall through — treat the raw string as a single legacy key.
-    }
-    return raw ? [raw] : [];
-  }
-
-  /** Renders the compact "chip" used as the custom drag image (a small
-   * preview centered under the cursor) instead of the browser's default,
-   * which would otherwise drag the whole (huge) row or its text. */
-  function showDragChip(e: DragEvent, label: string, variant: "folder" | "file" | "files") {
-    const chip = dragChipRef.current;
-    const labelEl = dragChipLabelRef.current;
-    if (!chip || !labelEl) return;
-    const iconRefs = [
-      ["folder", dragChipFolderIconRef],
-      ["file", dragChipFileIconRef],
-      ["files", dragChipFilesIconRef],
-    ] as const;
-    labelEl.textContent = label;
-    for (const [key, ref] of iconRefs) {
-      if (ref.current) ref.current.style.display = key === variant ? "" : "none";
-    }
-    try {
-      // Test environments (happy-dom/jsdom) either omit this or throw —
-      // the custom drag image is a visual nicety only, never load-bearing.
-      e.dataTransfer.setDragImage?.(chip, 20, 20);
-    } catch {
-      // ignored
-    } finally {
-      // The browser rasterizes the drag image synchronously inside
-      // setDragImage, so it's safe to blank the (permanently off-screen)
-      // chip right back out — otherwise its text would be a second,
-      // always-present copy of every row's name in the DOM.
-      labelEl.textContent = "";
-      for (const [, ref] of iconRefs) {
-        if (ref.current) ref.current.style.display = "none";
-      }
-    }
-  }
-
-  /** Drag handlers for a valid drop target (a folder row, or an ancestor
-   * breadcrumb) that only react to internal row drags, never OS file drags. */
-  function dropTargetHandlers(toPrefix: string) {
-    return {
-      onDragOver: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
-      },
-      onDragEnter: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setDropTarget(toPrefix);
-      },
-      onDragLeave: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.stopPropagation();
-        setDropTarget((current) => (current === toPrefix ? null : current));
-      },
-      onDrop: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setDropTarget(null);
-        const fromKeys = parseDragKeys(e.dataTransfer.getData(MOVE_DRAG_TYPE));
-        void handleMove(fromKeys, toPrefix);
-      },
-    };
-  }
-
-  const folders = entries.filter((e) => e.kind === "folder");
-  const files = entries.filter((e) => e.kind === "file");
-  const rows = [...folders, ...files];
-  const segments = segmentsForPrefix(prefix);
+  const dragMove = useDragMove({ onMove: handleMove });
 
   function contextItemsFor(entry?: RemoteEntry): ContextMenuItem[] {
     // Right-clicking a row that's part of a multi-row selection offers bulk
     // actions on the whole selection instead of the usual single-entry menu.
-    if (entry && selected.has(entry.key) && selected.size > 1) {
-      const selectedEntries = rows.filter((r) => selected.has(r.key));
+    if (entry && selection.selected.has(entry.key) && selection.selected.size > 1) {
+      const selectedEntries = rows.filter((r) => selection.selected.has(r.key));
       return [
         {
           label: `Delete ${selectedEntries.length} items`,
@@ -321,6 +268,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           },
         },
         {
+          label: "Download",
+          onSelect: () => void handleDownload(entry),
+        },
+        {
           label: "Copy link",
           onSelect: () => {
             void services.browser.copyLink(connectionId, entry.key).then((link) => {
@@ -342,31 +293,36 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     return items;
   }
 
-  /** Click-to-select: plain click selects only this row, cmd/ctrl-click
-   * toggles it in/out of the selection, and shift-click extends the
-   * selection to every row between the last-clicked row and this one. */
-  function handleRowClick(entry: RemoteEntry, e: ReactMouseEvent) {
-    if (e.shiftKey && lastClickedKey.current) {
-      const startIdx = rows.findIndex((r) => r.key === lastClickedKey.current);
-      const endIdx = rows.findIndex((r) => r.key === entry.key);
-      if (startIdx !== -1 && endIdx !== -1) {
-        const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-        setSelected(new Set(rows.slice(from, to + 1).map((r) => r.key)));
-      }
-      return;
+  function handleRowDragStart(entry: RemoteEntry, e: DragEvent) {
+    const isFolder = entry.kind === "folder";
+    const isSelected = selection.selected.has(entry.key);
+    const isMultiDrag = isSelected && selection.selected.size > 1;
+    const dragKeys = isMultiDrag ? Array.from(selection.selected) : [entry.key];
+    if (!isMultiDrag) {
+      selection.setSelected(new Set([entry.key]));
     }
-    if (e.metaKey || e.ctrlKey) {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (next.has(entry.key)) next.delete(entry.key);
-        else next.add(entry.key);
-        return next;
-      });
-      lastClickedKey.current = entry.key;
-      return;
-    }
-    setSelected(new Set([entry.key]));
-    lastClickedKey.current = entry.key;
+    e.dataTransfer.setData(MOVE_DRAG_TYPE, JSON.stringify(dragKeys));
+    e.dataTransfer.effectAllowed = "move";
+    const label = dragKeys.length > 1 ? `${dragKeys.length} items` : entry.name;
+    dragMove.showDragChip(e, label, dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file");
+  }
+
+  function handleRowDoubleClick(entry: RemoteEntry) {
+    if (entry.kind === "folder") navigate(entry.key);
+    else void services.openFile(connectionId, entry.key, entry.name);
+  }
+
+  function handleRowActionsClick(entry: RemoteEntry, e: ReactMouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenu({ x: rect.left, y: rect.bottom, entry });
+  }
+
+  function handleRowContextMenu(entry: RemoteEntry, e: ReactMouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, entry });
   }
 
   async function confirmPending() {
@@ -381,10 +337,14 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       await Promise.all(
         pending.entries.map((entry) => services.browser.delete(connectionId, entry.key)),
       );
-      setSelected(new Set());
+      selection.clear();
     }
     setPending(null);
     await refresh();
+  }
+
+  function handleSortChange(key: SortKey) {
+    setSort((current) => nextSortState(current, key));
   }
 
   return (
@@ -413,17 +373,17 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         if (e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
         e.preventDefault();
       }}
-      onClick={() => setSelected(new Set())}
+      onClick={() => selection.clear()}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Breadcrumbs>
           <span
-            className={`contents ${dropTarget === "" ? "rounded bg-kumo-tint" : ""}`}
+            className={`contents ${dragMove.dropTarget === "" ? "rounded bg-kumo-tint" : ""}`}
             onClick={(e) => {
               e.preventDefault();
               navigate("");
             }}
-            {...dropTargetHandlers("")}
+            {...dragMove.dropTargetHandlers("")}
           >
             <Breadcrumbs.Link href="#" icon={<HouseIcon size={16} />}>
               Home
@@ -439,12 +399,12 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                   <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
                 ) : (
                   <span
-                    className={`contents ${dropTarget === segPrefix ? "rounded bg-kumo-tint" : ""}`}
+                    className={`contents ${dragMove.dropTarget === segPrefix ? "rounded bg-kumo-tint" : ""}`}
                     onClick={(e) => {
                       e.preventDefault();
                       navigate(segPrefix);
                     }}
-                    {...dropTargetHandlers(segPrefix)}
+                    {...dragMove.dropTargetHandlers(segPrefix)}
                   >
                     <Breadcrumbs.Link href="#">{segment}</Breadcrumbs.Link>
                   </span>
@@ -454,6 +414,15 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           })}
         </Breadcrumbs>
         <div className="flex items-center gap-2">
+          <Input
+            size="sm"
+            placeholder="Filter"
+            aria-label="Filter this folder"
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+            className="w-36"
+            onClick={(e) => e.stopPropagation()}
+          />
           <Button
             variant="secondary"
             size="sm"
@@ -486,103 +455,42 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
             </Button>
           }
         />
-      ) : !loading && rows.length === 0 ? (
+      ) : !loading && entries.length === 0 ? (
         <Empty title="This folder is empty" description="Drag files in, or use Upload." />
+      ) : !loading && rows.length === 0 ? (
+        <Empty
+          title="No matches"
+          description="Nothing in this folder matches your filter."
+          contents={
+            <div className="flex justify-center">
+              <MagnifyingGlassIcon size={20} className="text-kumo-subtle" />
+            </div>
+          }
+        />
       ) : (
-        <Table layout="fixed" className="[&_td]:border-b-0">
-          <Table.Header>
-            <Table.Row>
-              <Table.Head className="w-auto p-2 sm:p-3">Name</Table.Head>
-              <Table.Head className="w-16 p-2 sm:w-24 sm:p-3">Size</Table.Head>
-              <Table.Head className="hidden w-32 p-2 sm:table-cell sm:p-3">Modified</Table.Head>
-              <Table.Head className="w-9 p-2 sm:w-12 sm:p-3">
-                <span className="sr-only">Actions</span>
-              </Table.Head>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body className="divide-y divide-kumo-line">
-            {rows.map((entry) => {
-              const isFolder = entry.kind === "folder";
-              const isDropTarget = isFolder && dropTarget === entry.key;
-              const isSelected = selected.has(entry.key);
-              return (
-                <Table.Row
-                  key={entry.key}
-                  className={`h-14 cursor-default select-none ${
-                    isDropTarget
-                      ? "bg-kumo-tint ring-1 ring-inset ring-kumo-brand"
-                      : isSelected
-                        ? "bg-kumo-brand/10 ring-1 ring-inset ring-kumo-brand/50 hover:bg-kumo-brand/15"
-                        : "hover:bg-kumo-tint"
-                  }`}
-                  draggable
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRowClick(entry, e);
-                  }}
-                  onDragStart={(e) => {
-                    e.stopPropagation();
-                    const isMultiDrag = isSelected && selected.size > 1;
-                    const dragKeys = isMultiDrag ? Array.from(selected) : [entry.key];
-                    if (!isMultiDrag) {
-                      setSelected(new Set([entry.key]));
-                      lastClickedKey.current = entry.key;
-                    }
-                    e.dataTransfer.setData(MOVE_DRAG_TYPE, JSON.stringify(dragKeys));
-                    e.dataTransfer.effectAllowed = "move";
-                    const label =
-                      dragKeys.length > 1 ? `${dragKeys.length} items` : entry.name;
-                    showDragChip(e, label, dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file");
-                  }}
-                  onDragEnd={() => setDropTarget(null)}
-                  {...(isFolder ? dropTargetHandlers(entry.key) : {})}
-                  onDoubleClick={() => {
-                    if (isFolder) navigate(entry.key);
-                    else setInfoEntry(entry);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setMenu({ x: e.clientX, y: e.clientY, entry });
-                  }}
-                >
-                  <Table.Cell className="flex min-w-0 items-center gap-2 p-2 sm:p-3">
-                    <Thumbnail
-                      connectionId={connectionId}
-                      entryKey={entry.key}
-                      name={entry.name}
-                      kind={entry.kind}
-                    />
-                    <span className="lopload-body cursor-default truncate select-none">
-                      {entry.name}
-                    </span>
-                  </Table.Cell>
-                  <Table.Cell className="lopload-body whitespace-nowrap p-2 text-kumo-subtle sm:p-3">
-                    {entry.kind === "file" ? formatBytes(entry.size ?? 0) : "—"}
-                  </Table.Cell>
-                  <Table.Cell className="hidden whitespace-nowrap p-2 lopload-body text-kumo-subtle sm:table-cell sm:p-3">
-                    {formatDate(entry.lastModified)}
-                  </Table.Cell>
-                  <Table.Cell className="p-1 text-right sm:p-2">
-                    <Button
-                      variant="ghost"
-                      shape="square"
-                      size="sm"
-                      aria-label={`Actions for ${entry.name}`}
-                      icon={DotsThreeVerticalIcon}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setMenu({ x: rect.left, y: rect.bottom, entry });
-                      }}
-                    />
-                  </Table.Cell>
-                </Table.Row>
-              );
-            })}
-          </Table.Body>
-        </Table>
+        <RemoteBrowserTable
+          rows={rows}
+          connectionId={connectionId}
+          selected={selection.selected}
+          dropTarget={dragMove.dropTarget}
+          dropTargetHandlersFor={(entry) =>
+            entry.kind === "folder" ? dragMove.dropTargetHandlers(entry.key) : undefined
+          }
+          onRowClick={(entry, e) => {
+            e.stopPropagation();
+            selection.handleRowClick(entry, e);
+          }}
+          onRowDragStart={(entry, e) => {
+            e.stopPropagation();
+            handleRowDragStart(entry, e);
+          }}
+          onRowDragEnd={dragMove.clearDropTarget}
+          onRowDoubleClick={handleRowDoubleClick}
+          onRowContextMenu={handleRowContextMenu}
+          onRowActionsClick={handleRowActionsClick}
+          sort={sort}
+          onSortChange={handleSortChange}
+        />
       )}
 
       {menu && (
@@ -716,27 +624,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         </div>
       )}
 
-      {/* Custom drag image for row moves: a small chip (icon + name, or a
-          count when dragging multiple selected rows) centered under the
-          cursor, instead of the browser's default of the whole (huge) row.
-          Rendered off-screen — setDragImage needs a laid-out element to
-          rasterize, so this can't be a detached node. */}
-      <div
-        ref={dragChipRef}
-        aria-hidden
-        className="pointer-events-none fixed -top-[1000px] -left-[1000px] flex max-w-48 items-center gap-2 rounded-lg bg-kumo-base px-3 py-2 shadow-lg ring-1 ring-kumo-line"
-      >
-        <span ref={dragChipFolderIconRef} style={{ display: "none" }}>
-          <FolderIcon size={18} weight="fill" className="shrink-0 text-kumo-brand" />
-        </span>
-        <span ref={dragChipFileIconRef} style={{ display: "none" }}>
-          <FileIcon size={18} className="shrink-0 text-kumo-subtle" />
-        </span>
-        <span ref={dragChipFilesIconRef} style={{ display: "none" }}>
-          <FilesIcon size={18} className="shrink-0 text-kumo-subtle" />
-        </span>
-        <span ref={dragChipLabelRef} className="lopload-body truncate text-sm" />
-      </div>
+      <DragGhost refs={dragMove.chipRefs} />
     </div>
   );
 }

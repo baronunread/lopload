@@ -27,6 +27,7 @@ pub fn run() {
             keychain::keychain_get,
             keychain::keychain_delete,
             tray::tray_set_progress,
+            tray::tray_set_status,
             tray::set_badge_count,
         ])
         .run(tauri::generate_context!())
