@@ -9,6 +9,7 @@ import { Onboarding } from "./Onboarding";
 import { RemoteBrowser } from "./RemoteBrowser";
 import { TransferWidget } from "./TransferWidget";
 import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
+import { ThemeToggle } from "./ThemeToggle";
 
 /** Shows the "restart to update" toast once an update is found, and keeps
  * it in sync as transfer activity changes the notice's wording. Doesn't
@@ -94,7 +95,7 @@ function AppShellInner() {
     <div className="flex h-screen flex-col bg-kumo-canvas">
       <header className="flex items-center justify-between gap-3 border-b border-kumo-line bg-kumo-base px-4 py-3">
         <h1 className="lopload-heading shrink-0 text-xl font-semibold">Lopload</h1>
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
           <ConnectionSwitcher
             connections={connections}
             currentId={currentId}
@@ -102,6 +103,7 @@ function AppShellInner() {
             onAddStorage={() => setShowSetup(true)}
             onManageStorage={() => setShowManage(true)}
           />
+          <ThemeToggle />
         </div>
       </header>
 

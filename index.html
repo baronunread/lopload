@@ -13,13 +13,36 @@
       @font-face here instead of relying on a public CDN (Tauri webviews
       are offline-capable and CSP may block remote font fetches).
 
-      data-mode="dark" is static (not JS-injected) so dark is the default
-      look with zero flash-of-light-mode on load. Kumo switches its
-      light-dark() token pairs (see src/ui/theme.css) off this attribute's
-      effect on the computed `color-scheme` property, set in
-      node_modules/@cloudflare/kumo/dist/styles/kumo-binding.css. A future
-      light/dark toggle can just flip this attribute at runtime.
+      The static data-mode="dark" on <html> is only the no-JS fallback; the
+      inline script below re-resolves it from the OS preference before first
+      paint (it must stay inline and in <head> — a deferred/module script
+      would flash the wrong theme). Kumo switches its light-dark() token
+      pairs (see src/ui/theme.css) off this attribute's effect on the
+      computed `color-scheme` property, set in
+      node_modules/@cloudflare/kumo/dist/styles/kumo-binding.css.
     -->
+    <script>
+      (function () {
+        var mq = window.matchMedia("(prefers-color-scheme: dark)");
+        var apply = function () {
+          var stored = null;
+          try {
+            // The header's theme toggle writes an explicit override here;
+            // without one, the OS preference decides.
+            stored = localStorage.getItem("lopload-theme");
+          } catch (e) {}
+          var mode =
+            stored === "light" || stored === "dark"
+              ? stored
+              : mq.matches
+                ? "dark"
+                : "light";
+          document.documentElement.setAttribute("data-mode", mode);
+        };
+        apply();
+        mq.addEventListener("change", apply);
+      })();
+    </script>
     <title>Lopload</title>
   </head>
 
