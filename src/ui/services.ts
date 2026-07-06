@@ -90,6 +90,8 @@ export interface BrowserService {
   /** Moves a file or folder to a new full path — used for drag-and-drop moves
    * (renaming within the same parent goes through rename() above). */
   move(connectionId: string, key: string, toKey: string): Promise<void>;
+  /** Moves a file or folder into the Trash rather than deleting it outright —
+   * see TrashService for restoring it or removing it for good. */
   delete(connectionId: string, key: string): Promise<void>;
   /** A shareable link to the file, shown via "Copy link" in the context menu. */
   copyLink(connectionId: string, key: string): Promise<string>;
@@ -100,6 +102,32 @@ export interface BrowserService {
   /** Every file (not folder markers) under a folder prefix, with size — used
    * to enqueue a recursive folder download. */
   listFilesRecursive(connectionId: string, prefix: string): Promise<{ key: string; size: number }[]>;
+}
+
+/** One row in the Trash view: a file, or a whole folder trashed as a single
+ * action (restoring/removing it for good acts on everything under it). */
+export interface TrashItem {
+  /** Stable id for this row, unique within a connection's trash. */
+  id: string;
+  /** Full path the item lived at before it was trashed — a folder's own
+   * path ends in "/", same convention as RemoteEntry. */
+  originalKey: string;
+  kind: "file" | "folder";
+  deletedAt: number;
+  /** When the silent purge sweep removes this for good. */
+  purgeAt: number;
+  size: number;
+}
+
+export interface TrashService {
+  list(connectionId: string): Promise<TrashItem[]>;
+  /** Moves an item back to its original path. Throws if something already
+   * exists there — the trashed copy is left untouched either way. */
+  restore(connectionId: string, item: TrashItem): Promise<void>;
+  /** Removes a single trashed item for good. */
+  deleteNow(connectionId: string, item: TrashItem): Promise<void>;
+  /** Removes everything in this connection's Trash for good. */
+  emptyTrash(connectionId: string): Promise<void>;
 }
 
 export interface EngineService {
@@ -135,6 +163,7 @@ export interface UpdatesService {
 export interface AppServices {
   connections: ConnectionsService;
   browser: BrowserService;
+  trash: TrashService;
   engine: EngineService;
   keychain: KeychainService;
   updates: UpdatesService;

@@ -173,7 +173,7 @@ describe("RemoteBrowser", () => {
     expect(menu).toBeInTheDocument();
     // Entry-specific actions (only shown when a row entry is targeted).
     expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Move to Trash" })).toBeInTheDocument();
   });
 
   test("re-lists the current folder once an upload finishes", async () => {
@@ -384,11 +384,9 @@ describe("RemoteBrowser", () => {
 
     fireEvent.contextMenu(rowFor("b.txt"));
     const menu = await screen.findByRole("menu");
-    await user.click(within(menu).getByRole("menuitem", { name: "Delete 3 items" }));
-
-    const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText("Delete 3 items?")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    // Moving to Trash is low-stakes (recoverable), so it acts immediately —
+    // no confirmation dialog, unlike Delete now/Empty trash in the Trash view.
+    await user.click(within(menu).getByRole("menuitem", { name: "Move 3 items to Trash" }));
 
     await waitFor(() => {
       expect([...services.deleteCalls].sort()).toEqual(["a.txt", "b.txt", "c.txt"]);

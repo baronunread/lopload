@@ -316,6 +316,123 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
     expect(link.startsWith("http")).toBe(true);
   });
 
+  test("trash: deleting hides an item from listing, shows it in the trash, then restore/delete-now/empty round-trip", async () => {
+    const services = await impl.services();
+    const conn = await makeConnection(services);
+
+    await services.browser.createFolder(conn.id, "", "Vacation");
+    const localPath = `/local/${uniqueId("photo")}.jpg`;
+    impl.seedLocalFile(localPath, new TextEncoder().encode("photo bytes"));
+    await new Promise<void>((resolve) => {
+      const unsubscribe = services.engine.subscribe((e) => {
+        if (
+          e.type === "transfer-updated" &&
+          e.transfer.connectionId === conn.id &&
+          e.transfer.state.kind === "uploaded"
+        ) {
+          unsubscribe();
+          resolve();
+        }
+      });
+      void services.engine.enqueueFiles(conn.id, "Vacation/", [
+        { path: localPath, name: "beach.jpg", size: 11 },
+      ]);
+    });
+
+    // Deleting the folder must hide every file under it from normal listing,
+    // recursive listing, and downloads-all.
+    await services.browser.delete(conn.id, "Vacation/");
+
+    const afterDelete = await services.browser.list(conn.id, "");
+    expect(afterDelete.some((e) => e.key.startsWith("Vacation"))).toBe(false);
+    const recursiveAfterDelete = await services.browser.listFilesRecursive(conn.id, "Vacation/");
+    expect(recursiveAfterDelete).toEqual([]);
+
+    const trashed = await services.trash.list(conn.id);
+    const vacationItem = trashed.find((t) => t.originalKey === "Vacation/");
+    expect(vacationItem).toBeDefined();
+    expect(vacationItem!.kind).toBe("folder");
+
+    // Restoring puts it back where normal browsing sees it again.
+    await services.trash.restore(conn.id, vacationItem!);
+    const afterRestore = await services.browser.list(conn.id, "");
+    expect(afterRestore.some((e) => e.key === "Vacation/")).toBe(true);
+    const recursiveAfterRestore = await services.browser.listFilesRecursive(conn.id, "Vacation/");
+    expect(recursiveAfterRestore.some((f) => f.key === "Vacation/beach.jpg")).toBe(true);
+    const trashedAfterRestore = await services.trash.list(conn.id);
+    expect(trashedAfterRestore.some((t) => t.originalKey === "Vacation/")).toBe(false);
+
+    // Delete it again, then remove it for good via deleteNow.
+    await services.browser.delete(conn.id, "Vacation/");
+    const trashedAgain = await services.trash.list(conn.id);
+    const vacationAgain = trashedAgain.find((t) => t.originalKey === "Vacation/")!;
+    expect(vacationAgain).toBeDefined();
+    await services.trash.deleteNow(conn.id, vacationAgain);
+    const afterDeleteNow = await services.trash.list(conn.id);
+    expect(afterDeleteNow.some((t) => t.originalKey === "Vacation/")).toBe(false);
+
+    // Empty trash clears everything left for this connection.
+    const other = await makeConnection(services);
+    await services.browser.createFolder(other.id, "", "ToTrash");
+    await services.browser.delete(other.id, "ToTrash/");
+    expect((await services.trash.list(other.id)).length).toBeGreaterThan(0);
+    await services.trash.emptyTrash(other.id);
+    expect(await services.trash.list(other.id)).toEqual([]);
+  }, 10_000);
+
+  test("trash: restoring a file onto an occupied path throws and leaves the trashed copy in place", async () => {
+    const services = await impl.services();
+    const conn = await makeConnection(services);
+    const localPath = `/local/${uniqueId("note")}.txt`;
+    impl.seedLocalFile(localPath, new TextEncoder().encode("v1"));
+
+    await new Promise<void>((resolve) => {
+      const unsubscribe = services.engine.subscribe((e) => {
+        if (
+          e.type === "transfer-updated" &&
+          e.transfer.connectionId === conn.id &&
+          e.transfer.state.kind === "uploaded"
+        ) {
+          unsubscribe();
+          resolve();
+        }
+      });
+      void services.engine.enqueueFiles(conn.id, "", [
+        { path: localPath, name: "note.txt", size: 2 },
+      ]);
+    });
+    await services.browser.delete(conn.id, "note.txt");
+
+    // Something new now lives at the same path the trashed copy came from.
+    const localPath2 = `/local/${uniqueId("note2")}.txt`;
+    impl.seedLocalFile(localPath2, new TextEncoder().encode("v2"));
+    await new Promise<void>((resolve) => {
+      const unsubscribe = services.engine.subscribe((e) => {
+        if (
+          e.type === "transfer-updated" &&
+          e.transfer.connectionId === conn.id &&
+          e.transfer.state.kind === "uploaded"
+        ) {
+          unsubscribe();
+          resolve();
+        }
+      });
+      void services.engine.enqueueFiles(conn.id, "", [
+        { path: localPath2, name: "note.txt", size: 2 },
+      ]);
+    });
+
+    const trashed = await services.trash.list(conn.id);
+    const item = trashed.find((t) => t.originalKey === "note.txt")!;
+    expect(item).toBeDefined();
+
+    await expect(services.trash.restore(conn.id, item)).rejects.toThrow();
+
+    // The trashed copy must still be there afterwards.
+    const trashedAfter = await services.trash.list(conn.id);
+    expect(trashedAfter.some((t) => t.originalKey === "note.txt")).toBe(true);
+  }, 10_000);
+
   test("keychain.testConnection: succeeds for a reachable target, fails for an unreachable one", async () => {
     const services = await impl.services();
 

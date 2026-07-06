@@ -9,6 +9,7 @@ import type {
   DownloadTarget,
   FolderInfo,
   PickedFile,
+  TrashItem,
 } from "../../../src/ui/services";
 
 export interface FakeServicesOptions {
@@ -23,6 +24,7 @@ export interface FakeServicesOptions {
   filesRecursiveByPrefix?: Record<string, { key: string; size: number }[]>;
   saveDestinationResult?: string | null;
   downloadDirectoryResult?: string | null;
+  trashItems?: TrashItem[];
   /** Connection ids for which browser.list should behave like the keychain
    * couldn't produce credentials — simulates a denied prompt or ACL
    * mismatch. Cleared for an id once connections.save() is called for it,
@@ -47,6 +49,9 @@ export interface FakeServices extends AppServices {
   moveCalls: Array<{ connectionId: string; key: string; toKey: string }>;
   deleteCalls: string[];
   folderInfoCalls: Array<{ connectionId: string; key: string }>;
+  restoreCalls: TrashItem[];
+  deleteNowCalls: TrashItem[];
+  emptyTrashCalls: string[];
   /** Simulates the real onFileDrop's onError firing (e.g. an unreadable
    * dropped folder), for tests of the resulting error toast. */
   triggerFileDropError(message: string): void;
@@ -72,6 +77,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const moveCalls: Array<{ connectionId: string; key: string; toKey: string }> = [];
   const deleteCalls: string[] = [];
   const folderInfoCalls: Array<{ connectionId: string; key: string }> = [];
+  const restoreCalls: TrashItem[] = [];
+  const deleteNowCalls: TrashItem[] = [];
+  const emptyTrashCalls: string[] = [];
   const credentialsUnreadableFor = new Set(options.credentialsUnreadableFor ?? []);
   let fileDropErrorHandler: ((message: string) => void) | null = null;
   const checkForUpdateCalls: number[] = [];
@@ -123,6 +131,20 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       },
       async listFilesRecursive(connectionId, prefix) {
         return options.filesRecursiveByPrefix?.[`${connectionId}::${prefix}`] ?? [];
+      },
+    },
+    trash: {
+      async list() {
+        return options.trashItems ?? [];
+      },
+      async restore(_connectionId, item) {
+        restoreCalls.push(item);
+      },
+      async deleteNow(_connectionId, item) {
+        deleteNowCalls.push(item);
+      },
+      async emptyTrash(connectionId) {
+        emptyTrashCalls.push(connectionId);
       },
     },
     engine: {
@@ -205,6 +227,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     moveCalls,
     deleteCalls,
     folderInfoCalls,
+    restoreCalls,
+    deleteNowCalls,
+    emptyTrashCalls,
     checkForUpdateCalls,
     installAndRelaunchCalls,
   };

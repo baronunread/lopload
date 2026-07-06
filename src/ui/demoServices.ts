@@ -17,7 +17,8 @@ import type {
   Transfer,
   TransferState,
 } from "../lib/types";
-import type { AppServices, DownloadTarget, PickedFile } from "./services";
+import { groupTrashObjects, isTrashKey, parseTrashKey, trashKey } from "../lib/s3/trash";
+import type { AppServices, DownloadTarget, PickedFile, TrashItem } from "./services";
 
 /** A file in the fake remote tree, keyed by full key (e.g. "photos/2024/beach.jpg"). */
 interface FakeFile {
@@ -110,6 +111,7 @@ function listEntries(connectionId: string, prefix: string): RemoteEntry[] {
   const entries: RemoteEntry[] = [];
 
   for (const file of files.values()) {
+    if (isTrashKey(file.key)) continue;
     if (!file.key.startsWith(prefix)) continue;
     const rest = file.key.slice(prefix.length);
     if (rest === "") continue;
@@ -161,15 +163,100 @@ function moveEntries(files: Map<string, FakeFile>, fromKey: string, toKey: strin
   }
 }
 
-function deleteUnderKey(connectionId: string, key: string) {
+/** Moves a file or folder into the trash location, sharing one deletedAtMs
+ * across every object under a folder so the trash view can group them back
+ * into a single row — mirrors moveFileToTrash/moveFolderToTrash in
+ * src/lib/s3/client.ts. */
+function moveToTrash(connectionId: string, key: string) {
   const files = filesFor(connectionId);
+  const deletedAtMs = Date.now();
   if (key.endsWith("/")) {
-    for (const k of Array.from(files.keys())) {
-      if (k.startsWith(key)) files.delete(k);
+    const toMove = Array.from(files.entries()).filter(([k]) => k.startsWith(key));
+    for (const [k, f] of toMove) {
+      files.delete(k);
+      const dest = trashKey(deletedAtMs, k);
+      files.set(dest, { ...f, key: dest });
+    }
+    // Always leave a marker for the folder itself at the trash location, even
+    // if it never had one of its own — otherwise an empty (or marker-less)
+    // folder wouldn't group into a single trash row.
+    const markerDest = trashKey(deletedAtMs, key);
+    if (!files.has(markerDest)) {
+      files.set(markerDest, { key: markerDest, size: 0, lastModified: deletedAtMs });
     }
   } else {
+    const file = files.get(key);
+    if (!file) return;
     files.delete(key);
+    const dest = trashKey(deletedAtMs, key);
+    files.set(dest, { ...file, key: dest });
   }
+}
+
+const RESTORE_CONFLICT_MESSAGE =
+  "Something's already there — restore skipped, the trashed copy is untouched.";
+
+function restoreTrashItem(connectionId: string, item: TrashItem) {
+  const files = filesFor(connectionId);
+  const groupPrefix = trashKey(item.deletedAt, item.originalKey);
+  if (item.kind === "folder") {
+    const conflict = Array.from(files.keys()).some(
+      (k) => !isTrashKey(k) && k.startsWith(item.originalKey),
+    );
+    if (conflict) throw new Error(RESTORE_CONFLICT_MESSAGE);
+    const trashed = Array.from(files.entries()).filter(([k]) => k.startsWith(groupPrefix));
+    for (const [k, f] of trashed) {
+      const rest = k.slice(groupPrefix.length);
+      const dest = item.originalKey + rest;
+      files.delete(k);
+      files.set(dest, { ...f, key: dest });
+    }
+  } else {
+    if (files.has(item.originalKey)) throw new Error(RESTORE_CONFLICT_MESSAGE);
+    const file = files.get(groupPrefix);
+    if (!file) return;
+    files.delete(groupPrefix);
+    files.set(item.originalKey, { ...file, key: item.originalKey });
+  }
+}
+
+function deleteTrashItemNow(connectionId: string, item: TrashItem) {
+  const files = filesFor(connectionId);
+  if (item.kind === "file") {
+    files.delete(trashKey(item.deletedAt, item.originalKey));
+    return;
+  }
+  const groupPrefix = trashKey(item.deletedAt, item.originalKey);
+  for (const k of Array.from(files.keys())) {
+    if (k.startsWith(groupPrefix)) files.delete(k);
+  }
+}
+
+function emptyTrashFor(connectionId: string) {
+  const files = filesFor(connectionId);
+  for (const k of Array.from(files.keys())) {
+    if (isTrashKey(k)) files.delete(k);
+  }
+}
+
+function listTrashItems(connectionId: string): TrashItem[] {
+  const files = filesFor(connectionId);
+  const objects = Array.from(files.values())
+    .filter((f) => isTrashKey(f.key))
+    .flatMap((f) => {
+      const parsed = parseTrashKey(f.key);
+      return parsed
+        ? [{ trashKey: f.key, originalKey: parsed.originalKey, deletedAtMs: parsed.deletedAtMs, size: f.size }]
+        : [];
+    });
+  return groupTrashObjects(objects).map((g) => ({
+    id: `${g.deletedAtMs}:${g.originalKey}`,
+    originalKey: g.originalKey,
+    kind: g.kind,
+    deletedAt: g.deletedAtMs,
+    purgeAt: g.purgeAtMs,
+    size: g.totalSize,
+  }));
 }
 
 const TICK_MS = 150;
@@ -305,7 +392,7 @@ export function createDemoServices(): AppServices {
         moveEntries(filesFor(connectionId), key, toKey);
       },
       async delete(connectionId, key) {
-        deleteUnderKey(connectionId, key);
+        moveToTrash(connectionId, key);
       },
       async copyLink(connectionId, key) {
         return `https://demo.example.com/${connectionId}/${key}?sig=demo`;
@@ -319,7 +406,7 @@ export function createDemoServices(): AppServices {
         let totalSize = 0;
         let lastModified: number | null = null;
         for (const f of files.values()) {
-          if (!f.key.startsWith(key)) continue;
+          if (isTrashKey(f.key) || !f.key.startsWith(key)) continue;
           count += 1;
           totalSize += f.size;
           if (lastModified === null || f.lastModified > lastModified) {
@@ -332,11 +419,25 @@ export function createDemoServices(): AppServices {
         const files = filesFor(connectionId);
         const result: { key: string; size: number }[] = [];
         for (const f of files.values()) {
-          if (!f.key.startsWith(prefix)) continue;
+          if (isTrashKey(f.key) || !f.key.startsWith(prefix)) continue;
           if (basename(f.key) === ".keep") continue;
           result.push({ key: f.key, size: f.size });
         }
         return result;
+      },
+    },
+    trash: {
+      async list(connectionId) {
+        return listTrashItems(connectionId);
+      },
+      async restore(connectionId, item) {
+        restoreTrashItem(connectionId, item);
+      },
+      async deleteNow(connectionId, item) {
+        deleteTrashItemNow(connectionId, item);
+      },
+      async emptyTrash(connectionId) {
+        emptyTrashFor(connectionId);
       },
     },
     engine: {

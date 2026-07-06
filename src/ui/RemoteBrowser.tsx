@@ -13,15 +13,21 @@ import {
   Input,
   useKumoToastManager,
 } from "@cloudflare/kumo";
-import { FolderPlusIcon, HouseIcon, MagnifyingGlassIcon, UploadSimpleIcon } from "@phosphor-icons/react";
+import {
+  FolderPlusIcon,
+  HouseIcon,
+  MagnifyingGlassIcon,
+  TrashIcon,
+  UploadSimpleIcon,
+} from "@phosphor-icons/react";
 import type { Connection, RemoteEntry } from "../lib/types";
 import { CredentialsUnreadableError, useServices, type FolderInfo } from "./services";
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { CredentialsReentryForm } from "./CredentialsReentryForm";
-import { SOLID_DANGER_BUTTON_STYLE } from "./dangerButton";
 import { DragGhost } from "./browser/DragGhost";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
+import { TrashDialog } from "./browser/TrashDialog";
 import { filterEntries } from "./browser/filter";
 import { DEFAULT_SORT, nextSortState, sortEntries, type SortKey } from "./browser/sort";
 import { useDragMove, MOVE_DRAG_TYPE } from "./browser/useDragMove";
@@ -33,11 +39,7 @@ export interface RemoteBrowserProps {
   onNavigate: (prefix: string) => void;
 }
 
-type PendingAction =
-  | { kind: "new-folder" }
-  | { kind: "rename"; entry: RemoteEntry }
-  | { kind: "delete"; entry: RemoteEntry }
-  | { kind: "bulk-delete"; entries: RemoteEntry[] };
+type PendingAction = { kind: "new-folder" } | { kind: "rename"; entry: RemoteEntry };
 
 type FolderInfoState = { status: "loading" } | ({ status: "loaded" } & FolderInfo);
 
@@ -64,6 +66,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const dragCounter = useRef(0);
   const [filterQuery, setFilterQuery] = useState("");
   const [sort, setSort] = useState(DEFAULT_SORT);
+  const [showTrash, setShowTrash] = useState(false);
   const toasts = useKumoToastManager();
 
   const rows = sortEntries(filterEntries(entries, filterQuery), sort);
@@ -279,6 +282,37 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   const dragMove = useDragMove({ onMove: handleMove });
 
+  /** Moves an item to the Trash — low-stakes enough (it's recoverable via
+   * the Trash view) that it doesn't need a confirmation dialog, unlike
+   * Delete now/Empty trash there. */
+  async function handleDeleteToTrash(entry: RemoteEntry) {
+    try {
+      await services.browser.delete(connectionId, entry.key);
+      selection.clear();
+      await refresh();
+    } catch (err) {
+      toasts.add({
+        variant: "error",
+        title: "Couldn't move to Trash",
+        description: err instanceof Error ? err.message : "Something went wrong.",
+      });
+    }
+  }
+
+  async function handleBulkDeleteToTrash(entries: RemoteEntry[]) {
+    try {
+      await Promise.all(entries.map((entry) => services.browser.delete(connectionId, entry.key)));
+      selection.clear();
+      await refresh();
+    } catch (err) {
+      toasts.add({
+        variant: "error",
+        title: "Couldn't move to Trash",
+        description: err instanceof Error ? err.message : "Something went wrong.",
+      });
+    }
+  }
+
   function contextItemsFor(entry?: RemoteEntry): ContextMenuItem[] {
     // Right-clicking a row that's part of a multi-row selection offers bulk
     // actions on the whole selection instead of the usual single-entry menu.
@@ -290,9 +324,9 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           onSelect: () => void handleBulkDownload(selectedEntries),
         },
         {
-          label: `Delete ${selectedEntries.length} items`,
+          label: `Move ${selectedEntries.length} items to Trash`,
           danger: true,
-          onSelect: () => setPending({ kind: "bulk-delete", entries: selectedEntries }),
+          onSelect: () => void handleBulkDeleteToTrash(selectedEntries),
         },
       ];
     }
@@ -333,9 +367,9 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         },
       );
       items.push({
-        label: "Delete",
+        label: "Move to Trash",
         danger: true,
-        onSelect: () => setPending({ kind: "delete", entry }),
+        onSelect: () => void handleDeleteToTrash(entry),
       });
     }
     return items;
@@ -379,13 +413,6 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       await services.browser.createFolder(connectionId, prefix, pendingName);
     } else if (pending.kind === "rename") {
       await services.browser.rename(connectionId, pending.entry.key, pendingName);
-    } else if (pending.kind === "delete") {
-      await services.browser.delete(connectionId, pending.entry.key);
-    } else if (pending.kind === "bulk-delete") {
-      await Promise.all(
-        pending.entries.map((entry) => services.browser.delete(connectionId, entry.key)),
-      );
-      selection.clear();
     }
     setPending(null);
     await refresh();
@@ -482,6 +509,9 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           >
             New folder
           </Button>
+          <Button variant="secondary" size="sm" icon={TrashIcon} onClick={() => setShowTrash(true)}>
+            Trash
+          </Button>
           <Button
             variant="primary"
             size="sm"
@@ -564,61 +594,28 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         onOpenChange={(open) => {
           if (!open) setPending(null);
         }}
-        role={pending?.kind === "delete" || pending?.kind === "bulk-delete" ? "alertdialog" : "dialog"}
       >
         {pending && (
           <Dialog className="p-6">
-            {pending.kind === "delete" ? (
-              <>
-                <Dialog.Title>Delete {pending.entry.name}?</Dialog.Title>
-                <Dialog.Description>This can't be undone.</Dialog.Description>
-                <div className="mt-4 flex justify-end gap-2">
-                  <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                    Cancel
-                  </Dialog.Close>
-                  <Button variant="destructive" style={SOLID_DANGER_BUTTON_STYLE} onClick={() => void confirmPending()}>
-                    Delete
-                  </Button>
-                </div>
-              </>
-            ) : pending.kind === "bulk-delete" ? (
-              <>
-                <Dialog.Title>Delete {pending.entries.length} items?</Dialog.Title>
-                <Dialog.Description>This can't be undone.</Dialog.Description>
-                <div className="mt-4 flex justify-end gap-2">
-                  <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                    Cancel
-                  </Dialog.Close>
-                  <Button variant="destructive" style={SOLID_DANGER_BUTTON_STYLE} onClick={() => void confirmPending()}>
-                    Delete
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <Dialog.Title>
-                  {pending.kind === "new-folder" ? "New folder" : "Rename"}
-                </Dialog.Title>
-                <Input
-                  label="Name"
-                  value={pendingName}
-                  onChange={(e) => setPendingName(e.target.value)}
-                  autoFocus
-                />
-                <div className="mt-4 flex justify-end gap-2">
-                  <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                    Cancel
-                  </Dialog.Close>
-                  <Button
-                    variant="primary"
-                    disabled={!pendingName.trim()}
-                    onClick={() => void confirmPending()}
-                  >
-                    Save
-                  </Button>
-                </div>
-              </>
-            )}
+            <Dialog.Title>{pending.kind === "new-folder" ? "New folder" : "Rename"}</Dialog.Title>
+            <Input
+              label="Name"
+              value={pendingName}
+              onChange={(e) => setPendingName(e.target.value)}
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
+                Cancel
+              </Dialog.Close>
+              <Button
+                variant="primary"
+                disabled={!pendingName.trim()}
+                onClick={() => void confirmPending()}
+              >
+                Save
+              </Button>
+            </div>
           </Dialog>
         )}
       </Dialog.Root>
@@ -682,6 +679,14 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       )}
 
       <DragGhost refs={dragMove.chipRefs} />
+
+      {showTrash && (
+        <TrashDialog
+          connectionId={connectionId}
+          onClose={() => setShowTrash(false)}
+          onRestored={() => void refresh()}
+        />
+      )}
     </div>
   );
 }

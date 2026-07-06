@@ -29,16 +29,22 @@ import {
   copyLink as s3CopyLink,
   createFolder as s3CreateFolder,
   createS3Client,
-  deleteFile as s3DeleteFile,
-  deleteFolder as s3DeleteFolder,
+  deleteTrashItem as s3DeleteTrashItem,
+  emptyTrash as s3EmptyTrash,
   folderStats,
   listEntries,
   listFilesUnder,
+  listTrash as s3ListTrash,
+  moveFileToTrash as s3MoveFileToTrash,
+  moveFolderToTrash as s3MoveFolderToTrash,
   renameFile as s3RenameFile,
   renameFolder as s3RenameFolder,
+  restoreFileFromTrash as s3RestoreFileFromTrash,
+  restoreFolderFromTrash as s3RestoreFolderFromTrash,
   testConnection as s3TestConnection,
 } from "../lib/s3/client";
 import { sweepOrphans } from "../lib/s3/orphans";
+import { sweepTrash } from "../lib/s3/trashSweep";
 import {
   loadDatabase,
   SqliteConnectionStore,
@@ -66,10 +72,12 @@ import type {
   FolderInfo,
   PickedFile,
   TestConnectionResult,
+  TrashItem,
 } from "../ui/services";
 import { expandDroppedPaths, type DropDirEntry } from "./dragDropExpand";
 
 const ORPHAN_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const TRASH_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /** True when running inside the Tauri webview (vs. a plain browser tab). */
 export function isTauriRuntime(): boolean {
@@ -109,6 +117,7 @@ class RealServices implements AppServices {
   private transferSnapshots = new Map<string, Transfer>();
 
   private orphanSweepStarted = false;
+  private trashSweepStarted = false;
   private trayRetryListening = false;
   private trayUploadListening = false;
   private trayCopyLinkListening = false;
@@ -369,10 +378,11 @@ class RealServices implements AppServices {
     },
     delete: async (connectionId: string, key: string): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
+      const deletedAtMs = Date.now();
       if (isFolderKey(key)) {
-        await s3DeleteFolder(client, conn.bucket, key);
+        await s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs);
       } else {
-        await s3DeleteFile(client, conn.bucket, key);
+        await s3MoveFileToTrash(client, conn.bucket, key, deletedAtMs);
       }
     },
     copyLink: async (connectionId: string, key: string): Promise<string> => {
@@ -395,6 +405,38 @@ class RealServices implements AppServices {
     ): Promise<{ key: string; size: number }[]> => {
       const { client, conn } = await this.getClient(connectionId);
       return listFilesUnder(client, conn.bucket, prefix);
+    },
+  };
+
+  // ---- TrashService ----
+  trash = {
+    list: async (connectionId: string): Promise<TrashItem[]> => {
+      const { client, conn } = await this.getClient(connectionId);
+      const groups = await s3ListTrash(client, conn.bucket);
+      return groups.map((g) => ({
+        id: `${g.deletedAtMs}:${g.originalKey}`,
+        originalKey: g.originalKey,
+        kind: g.kind,
+        deletedAt: g.deletedAtMs,
+        purgeAt: g.purgeAtMs,
+        size: g.totalSize,
+      }));
+    },
+    restore: async (connectionId: string, item: TrashItem): Promise<void> => {
+      const { client, conn } = await this.getClient(connectionId);
+      if (item.kind === "folder") {
+        await s3RestoreFolderFromTrash(client, conn.bucket, item.deletedAt, item.originalKey);
+      } else {
+        await s3RestoreFileFromTrash(client, conn.bucket, item.deletedAt, item.originalKey);
+      }
+    },
+    deleteNow: async (connectionId: string, item: TrashItem): Promise<void> => {
+      const { client, conn } = await this.getClient(connectionId);
+      await s3DeleteTrashItem(client, conn.bucket, item.deletedAt, item.originalKey, item.kind);
+    },
+    emptyTrash: async (connectionId: string): Promise<void> => {
+      const { client, conn } = await this.getClient(connectionId);
+      await s3EmptyTrash(client, conn.bucket);
     },
   };
 
@@ -645,6 +687,34 @@ class RealServices implements AppServices {
       // Silent.
     }
   }
+
+  /** Runs the silent trash purge sweep now, and every 24h thereafter. Modeled
+   * exactly on startOrphanSweep(). Call once at startup. */
+  startTrashSweep(): void {
+    if (this.trashSweepStarted) return;
+    this.trashSweepStarted = true;
+    const run = () => void this.sweepAllConnectionsTrash();
+    run();
+    setInterval(run, TRASH_SWEEP_INTERVAL_MS);
+  }
+
+  private async sweepAllConnectionsTrash(): Promise<void> {
+    try {
+      const store = await this.getConnectionStore();
+      const connections = await store.list();
+      for (const conn of connections) {
+        try {
+          const { client } = await this.getClient(conn.id);
+          await sweepTrash(client, conn.bucket, Date.now());
+        } catch {
+          // Silent, same as the orphan sweep — one connection's failure
+          // must not affect the others.
+        }
+      }
+    } catch {
+      // Silent.
+    }
+  }
 }
 
 let singleton: RealServices | null = null;
@@ -655,6 +725,7 @@ export function createRealServices(): AppServices {
   if (!singleton) {
     singleton = new RealServices();
     singleton.startOrphanSweep();
+    singleton.startTrashSweep();
     singleton.startTrayRetryListening();
     singleton.startTrayUploadListening();
     singleton.startTrayCopyLinkListening();

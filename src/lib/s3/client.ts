@@ -17,6 +17,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { Connection, Credentials, PlainError, RemoteEntry } from "../types";
 import { toPlainError } from "../errors";
 import { InjectedFetchHttpHandler, type FetchFn } from "./http-handler";
+import { groupTrashObjects, isTrashKey, parseTrashKey, trashKey, TRASH_PREFIX, type TrashGroup } from "./trash";
 
 /** Build an S3Client that routes all HTTP through the injected fetch. */
 export function createS3Client(
@@ -34,6 +35,12 @@ export function createS3Client(
     },
     requestHandler: new InjectedFetchHttpHandler(fetchFn),
   });
+}
+
+/** The `CopySource` value CopyObjectCommand expects: bucket + key,
+ * slash-preserving percent-encoded. */
+function copySourceFor(bucket: string, key: string): string {
+  return `/${bucket}/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
 }
 
 function baseName(key: string): string {
@@ -64,7 +71,7 @@ export async function listEntries(
       }),
     );
     for (const cp of res.CommonPrefixes ?? []) {
-      if (!cp.Prefix) continue;
+      if (!cp.Prefix || isTrashKey(cp.Prefix)) continue;
       entries.push({
         kind: "folder",
         name: baseName(cp.Prefix),
@@ -72,7 +79,7 @@ export async function listEntries(
       });
     }
     for (const obj of res.Contents ?? []) {
-      if (!obj.Key || obj.Key === prefix) continue;
+      if (!obj.Key || obj.Key === prefix || isTrashKey(obj.Key)) continue;
       // Skip the zero-byte "folder marker" object matching the prefix itself.
       if (obj.Key.endsWith("/")) continue;
       entries.push({
@@ -101,6 +108,10 @@ async function listObjectsUnder(
   bucket: string,
   prefix: string,
 ): Promise<RemoteObjectRef[]> {
+  // Callers scanning inside the trash location (restoring/purging) need to
+  // see trash objects; every other caller (normal browsing/download/rename)
+  // must never see them.
+  const hideTrash = !isTrashKey(prefix);
   const objects: RemoteObjectRef[] = [];
   let continuationToken: string | undefined;
   do {
@@ -112,7 +123,9 @@ async function listObjectsUnder(
       }),
     );
     for (const obj of res.Contents ?? []) {
-      if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
+      if (!obj.Key) continue;
+      if (hideTrash && isTrashKey(obj.Key)) continue;
+      objects.push({ key: obj.Key, size: obj.Size ?? 0 });
     }
     continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
   } while (continuationToken);
@@ -166,7 +179,7 @@ export async function folderStats(
       }),
     );
     for (const obj of res.Contents ?? []) {
-      if (!obj.Key || obj.Key.endsWith("/")) continue; // skip folder markers
+      if (!obj.Key || obj.Key.endsWith("/") || isTrashKey(obj.Key)) continue; // skip folder markers
       files += 1;
       totalSize += obj.Size ?? 0;
       const modified = obj.LastModified?.getTime();
@@ -189,7 +202,7 @@ export async function renameFile(
   await client.send(
     new CopyObjectCommand({
       Bucket: bucket,
-      CopySource: `/${bucket}/${encodeURIComponent(fromKey).replace(/%2F/g, "/")}`,
+      CopySource: copySourceFor(bucket, fromKey),
       Key: toKey,
     }),
   );
@@ -209,7 +222,7 @@ export async function renameFolder(
     await client.send(
       new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: `/${bucket}/${encodeURIComponent(key).replace(/%2F/g, "/")}`,
+        CopySource: copySourceFor(bucket, key),
         Key: newKey,
       }),
     );
@@ -235,6 +248,209 @@ export async function deleteFolder(
   const keys = await listAllKeysUnder(client, bucket, prefix);
   if (keys.length === 0) return;
   const CHUNK = 1000; // DeleteObjects max batch size
+  for (let i = 0; i < keys.length; i += CHUNK) {
+    const batch = keys.slice(i, i + CHUNK);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: batch.map((Key) => ({ Key })) },
+      }),
+    );
+  }
+}
+
+/** Moves a single file to the trash location: CopyObject there, then delete
+ * the original. Uses plain (non-multipart) CopyObject — if the file is too
+ * large for that, the error is left to flow through the normal plain-language
+ * error path rather than growing a multipart copy path just for this. */
+export async function moveFileToTrash(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  deletedAtMs: number,
+): Promise<void> {
+  const dest = trashKey(deletedAtMs, key);
+  await client.send(
+    new CopyObjectCommand({ Bucket: bucket, CopySource: copySourceFor(bucket, key), Key: dest }),
+  );
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/** Moves every object under a folder to the trash location, sharing one
+ * `deletedAtMs` so the trash view can group them back into a single row.
+ * Always writes a marker for the folder itself at the trash location (even
+ * if the folder never had one of its own), so an empty folder — or one
+ * whose marker object doesn't exist — still groups and restores correctly. */
+export async function moveFolderToTrash(
+  client: S3Client,
+  bucket: string,
+  prefix: string,
+  deletedAtMs: number,
+): Promise<void> {
+  const keys = await listAllKeysUnder(client, bucket, prefix);
+  const hasOwnMarker = keys.includes(prefix);
+
+  for (const key of keys) {
+    await client.send(
+      new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: copySourceFor(bucket, key),
+        Key: trashKey(deletedAtMs, key),
+      }),
+    );
+  }
+  if (!hasOwnMarker) {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: trashKey(deletedAtMs, prefix),
+        Body: new Uint8Array(0),
+      }),
+    );
+  }
+
+  const CHUNK = 1000;
+  for (let i = 0; i < keys.length; i += CHUNK) {
+    const batch = keys.slice(i, i + CHUNK);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: batch.map((Key) => ({ Key })) },
+      }),
+    );
+  }
+}
+
+const RESTORE_CONFLICT_MESSAGE =
+  "Something's already there — restore skipped, the trashed copy is untouched.";
+
+async function existsAtKey(client: S3Client, bucket: string, key: string): Promise<boolean> {
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function existsUnderPrefix(client: S3Client, bucket: string, prefix: string): Promise<boolean> {
+  const res = await client.send(
+    new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, MaxKeys: 1 }),
+  );
+  return (res.Contents?.length ?? 0) > 0 || (res.KeyCount ?? 0) > 0;
+}
+
+/** Restores a single trashed file back to its original path. Throws a plain
+ * Error (not a raw SDK error) if something already lives there — the
+ * trashed copy is left untouched either way. */
+export async function restoreFileFromTrash(
+  client: S3Client,
+  bucket: string,
+  deletedAtMs: number,
+  originalKey: string,
+): Promise<void> {
+  if (await existsAtKey(client, bucket, originalKey)) {
+    throw new Error(RESTORE_CONFLICT_MESSAGE);
+  }
+  const src = trashKey(deletedAtMs, originalKey);
+  await client.send(
+    new CopyObjectCommand({ Bucket: bucket, CopySource: copySourceFor(bucket, src), Key: originalKey }),
+  );
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: src }));
+}
+
+/** Restores every object trashed together as one folder back under its
+ * original path. Throws a plain Error, leaving the trashed copy untouched,
+ * if anything already lives at that path. */
+export async function restoreFolderFromTrash(
+  client: S3Client,
+  bucket: string,
+  deletedAtMs: number,
+  originalPrefix: string,
+): Promise<void> {
+  if (await existsUnderPrefix(client, bucket, originalPrefix)) {
+    throw new Error(RESTORE_CONFLICT_MESSAGE);
+  }
+  const groupPrefix = trashKey(deletedAtMs, originalPrefix);
+  const trashedKeys = await listAllKeysUnder(client, bucket, groupPrefix);
+
+  for (const key of trashedKeys) {
+    const destKey = originalPrefix + key.slice(groupPrefix.length);
+    await client.send(
+      new CopyObjectCommand({ Bucket: bucket, CopySource: copySourceFor(bucket, key), Key: destKey }),
+    );
+  }
+
+  const CHUNK = 1000;
+  for (let i = 0; i < trashedKeys.length; i += CHUNK) {
+    const batch = trashedKeys.slice(i, i + CHUNK);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: batch.map((Key) => ({ Key })) },
+      }),
+    );
+  }
+}
+
+/** Permanently deletes one trashed row — every object under it if it was a
+ * folder, the single trashed object otherwise. */
+export async function deleteTrashItem(
+  client: S3Client,
+  bucket: string,
+  deletedAtMs: number,
+  originalKey: string,
+  kind: "file" | "folder",
+): Promise<void> {
+  if (kind === "file") {
+    await client.send(
+      new DeleteObjectCommand({ Bucket: bucket, Key: trashKey(deletedAtMs, originalKey) }),
+    );
+    return;
+  }
+  const groupPrefix = trashKey(deletedAtMs, originalKey);
+  const keys = await listAllKeysUnder(client, bucket, groupPrefix);
+  const CHUNK = 1000;
+  for (let i = 0; i < keys.length; i += CHUNK) {
+    const batch = keys.slice(i, i + CHUNK);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: batch.map((Key) => ({ Key })) },
+      }),
+    );
+  }
+}
+
+/** Every trashed item, grouped into one row per originally-deleted file or folder. */
+export async function listTrash(client: S3Client, bucket: string): Promise<TrashGroup[]> {
+  const objects: { key: string; size: number }[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const res = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: TRASH_PREFIX,
+        ContinuationToken: continuationToken,
+      }),
+    );
+    for (const obj of res.Contents ?? []) {
+      if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
+    }
+    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  const parsed = objects.flatMap(({ key, size }) => {
+    const p = parseTrashKey(key);
+    return p ? [{ trashKey: key, originalKey: p.originalKey, deletedAtMs: p.deletedAtMs, size }] : [];
+  });
+  return groupTrashObjects(parsed);
+}
+
+/** Permanently empties the entire trash. */
+export async function emptyTrash(client: S3Client, bucket: string): Promise<void> {
+  const keys = await listAllKeysUnder(client, bucket, TRASH_PREFIX);
+  const CHUNK = 1000;
   for (let i = 0; i < keys.length; i += CHUNK) {
     const batch = keys.slice(i, i + CHUNK);
     await client.send(
