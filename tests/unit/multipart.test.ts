@@ -68,7 +68,7 @@ describe("uploadTransfer — single-part path (< 16 MiB)", () => {
   test("happy path: PutObject ETag matches local MD5 → resolves", async () => {
     const body = new TextEncoder().encode("hello world");
     const reader = makeReader(body);
-    const expectedMd5 = md5Hex(body);
+    const expectedMd5 = await md5Hex(body);
     s3Mock.on(PutObjectCommand).resolves({ ETag: q(expectedMd5) });
 
     const transfer = makeTransfer({ size: body.length });
@@ -99,7 +99,7 @@ describe("uploadTransfer — single-part path (< 16 MiB)", () => {
   test("reports progress while reading chunks", async () => {
     const body = new Uint8Array(1000).fill(7);
     const reader = makeReader(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(md5Hex(body)) });
+    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
 
     const transfer = makeTransfer({ size: body.length });
     const store = new MemoryTransferStore();
@@ -137,7 +137,7 @@ describe("uploadTransfer — multipart path (>= 16 MiB)", () => {
     for (let i = 0; i < partCount; i++) {
       const offset = i * PART_SIZE;
       const len = Math.min(PART_SIZE, size - offset);
-      partHexes.push(md5Hex(body.slice(offset, offset + len)));
+      partHexes.push(await md5Hex(body.slice(offset, offset + len)));
     }
 
     s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-abc" });
@@ -150,7 +150,7 @@ describe("uploadTransfer — multipart path (>= 16 MiB)", () => {
     s3Mock.on(CompleteMultipartUploadCommand).resolves({});
     s3Mock.on(HeadObjectCommand).resolves({
       ContentLength: size,
-      ETag: q(compositeEtag(partHexes)),
+      ETag: q(await compositeEtag(partHexes)),
     });
 
     await expect(
@@ -181,7 +181,7 @@ describe("uploadTransfer — multipart path (>= 16 MiB)", () => {
     for (let i = 0; i < partCount; i++) {
       const offset = i * PART_SIZE;
       const len = Math.min(PART_SIZE, size - offset);
-      partHexes.push(md5Hex(body.slice(offset, offset + len)));
+      partHexes.push(await md5Hex(body.slice(offset, offset + len)));
     }
 
     // --- "First run": crash after part 1 completes. ---
@@ -203,7 +203,7 @@ describe("uploadTransfer — multipart path (>= 16 MiB)", () => {
     s3Mock.on(CompleteMultipartUploadCommand).resolves({});
     s3Mock.on(HeadObjectCommand).resolves({
       ContentLength: size,
-      ETag: q(compositeEtag(partHexes)),
+      ETag: q(await compositeEtag(partHexes)),
     });
 
     // --- "Restart": rebuild from the same store, resume. ---
@@ -237,7 +237,7 @@ describe("uploadTransfer — multipart path (>= 16 MiB)", () => {
     for (let i = 0; i < partCount; i++) {
       const offset = i * PART_SIZE;
       const len = Math.min(PART_SIZE, size - offset);
-      partHexes.push(md5Hex(body.slice(offset, offset + len)));
+      partHexes.push(await md5Hex(body.slice(offset, offset + len)));
     }
 
     s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-trunc" });
@@ -251,7 +251,7 @@ describe("uploadTransfer — multipart path (>= 16 MiB)", () => {
     // a truncated transfer that still returned success from the SDK.
     s3Mock.on(HeadObjectCommand).resolves({
       ContentLength: size - 50,
-      ETag: q(compositeEtag(partHexes)),
+      ETag: q(await compositeEtag(partHexes)),
     });
 
     await expect(

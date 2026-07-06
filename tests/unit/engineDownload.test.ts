@@ -92,7 +92,7 @@ describe("TransferEngine — download state machine", () => {
     const body = new TextEncoder().encode("remote file contents");
     s3Mock.on(GetObjectCommand).resolves({
       Body: bodyStreamOf(body) as never,
-      ETag: q(md5Hex(body)),
+      ETag: q(await md5Hex(body)),
       ContentLength: body.length,
     });
 
@@ -165,7 +165,7 @@ describe("TransferEngine — download state machine", () => {
     // Retry restarts the same download from scratch — no partial-resume for GET.
     s3Mock.on(GetObjectCommand).resolves({
       Body: bodyStreamOf(body) as never,
-      ETag: q(md5Hex(body)),
+      ETag: q(await md5Hex(body)),
       ContentLength: body.length,
     });
     await engine.retry(transfer.id);
@@ -175,11 +175,11 @@ describe("TransferEngine — download state machine", () => {
 
   test("mixed upload+download batch reports both counts on batch-finished", async () => {
     const uploadBody = new TextEncoder().encode("upload me");
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(md5Hex(uploadBody)) });
+    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(uploadBody)) });
     const downloadBody = new TextEncoder().encode("download me");
     s3Mock.on(GetObjectCommand).resolves({
       Body: bodyStreamOf(downloadBody) as never,
-      ETag: q(md5Hex(downloadBody)),
+      ETag: q(await md5Hex(downloadBody)),
       ContentLength: downloadBody.length,
     });
 
@@ -252,6 +252,9 @@ describe("TransferEngine — cancel", () => {
     const hangingPut = new Promise<never>((_, reject) => {
       rejectPut = reject;
     });
+    // If the abort lands before the SDK consumes the promise, the rejection
+    // would otherwise surface as an unhandled error in this test.
+    hangingPut.catch(() => {});
     s3Mock.on(PutObjectCommand).callsFake(() => hangingPut);
 
     const store = new MemoryTransferStore();
@@ -269,7 +272,10 @@ describe("TransferEngine — cancel", () => {
     const [transfer] = await engine.enqueue([
       { localPath: "/local/slow.txt", size: 3, key: "slow.txt" },
     ]);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "sending");
+    // "Sending" state now lands before the PUT is actually issued (hash
+    // setup is async) — wait for the request itself so the cancel really
+    // aborts an in-flight upload.
+    await waitUntil(() => s3Mock.commandCalls(PutObjectCommand).length > 0);
 
     engine.cancel(transfer.id);
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
@@ -371,7 +377,7 @@ describe("TransferEngine — cancel", () => {
       store: freshStore,
       concurrency: 1,
     });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(md5Hex(new Uint8Array([2]))) });
+    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(new Uint8Array([2]))) });
     await secondEngine.resumePending();
     await waitUntil(() => secondEngine.getTransfer(second.id)?.state.kind === "uploaded");
   });

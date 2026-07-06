@@ -98,7 +98,7 @@ export async function downloadTransfer(
   }
 
   const etag = stripQuotes(res.ETag ?? "");
-  const hasher = PLAIN_MD5_ETAG.test(etag) ? new Md5() : null;
+  const hasher = PLAIN_MD5_ETAG.test(etag) ? await Md5.create() : null;
   const expectedSize = res.ContentLength ?? transfer.size;
 
   const stream = bodyToWebStream(res.Body);

@@ -114,7 +114,7 @@ describe("TransferEngine — single-part happy path", () => {
   test("queued -> sending -> checking -> uploaded, persisted at every step", async () => {
     const body = new TextEncoder().encode("small file");
     const reader = makeReader({ "/local/a.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(md5Hex(body)) });
+    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
 
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
@@ -212,7 +212,7 @@ describe("TransferEngine — single-part happy path", () => {
     s3Mock
       .on(PutObjectCommand)
       .rejectsOnce({ name: "AccessDenied" })
-      .resolves({ ETag: q(md5Hex(body)) });
+      .resolves({ ETag: q(await md5Hex(body)) });
 
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
@@ -246,9 +246,9 @@ describe("TransferEngine — concurrency and batching", () => {
     });
     const reader = makeReader(files);
 
-    s3Mock.on(PutObjectCommand).callsFake((input) => {
+    s3Mock.on(PutObjectCommand).callsFake(async (input) => {
       const body = input.Body as Uint8Array;
-      return Promise.resolve({ ETag: q(md5Hex(body)) });
+      return { ETag: q(await md5Hex(body)) };
     });
 
     const store = new MemoryTransferStore();
@@ -283,7 +283,7 @@ describe("TransferEngine — resumePending", () => {
     const PART_SIZE = 8 * 1024 * 1024;
     const partHexes: string[] = [];
     for (let i = 0; i < 3; i++) {
-      partHexes.push(md5Hex(body.slice(i * PART_SIZE, (i + 1) * PART_SIZE)));
+      partHexes.push(await md5Hex(body.slice(i * PART_SIZE, (i + 1) * PART_SIZE)));
     }
 
     const store = new MemoryTransferStore();
@@ -317,7 +317,7 @@ describe("TransferEngine — resumePending", () => {
     const { compositeEtag } = await import("../../src/lib/md5");
     s3Mock.on(HeadObjectCommand).resolves({
       ContentLength: size,
-      ETag: q(compositeEtag(partHexes)),
+      ETag: q(await compositeEtag(partHexes)),
     });
 
     const engine = new TransferEngine({

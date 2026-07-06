@@ -29,6 +29,7 @@
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-sql": "^2.4.0",
     "@tauri-apps/plugin-store": "^2.4.3",
+    "hash-wasm": "^4.12.0",
     "motion": "^12.42.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

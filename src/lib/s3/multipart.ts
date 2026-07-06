@@ -87,7 +87,7 @@ async function uploadSinglePart(
 ): Promise<void> {
   const { client, bucket, reader, onProgress, signal } = deps;
   const size = transfer.size;
-  const hasher = new Md5();
+  const hasher = await Md5.create();
   const chunks: Uint8Array[] = [];
   const readChunkSize = PART_SIZE;
   let offset = 0;
@@ -224,7 +224,7 @@ async function uploadMultipart(
     { abortSignal: signal },
   );
 
-  const expectedEtag = compositeEtag(finalParts.map((p) => stripQuotes(p.etag)));
+  const expectedEtag = await compositeEtag(finalParts.map((p) => stripQuotes(p.etag)));
   const actualEtag = stripQuotes(head.ETag ?? "").toLowerCase();
 
   if (head.ContentLength !== transfer.size || actualEtag !== expectedEtag.toLowerCase()) {
