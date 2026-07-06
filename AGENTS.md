@@ -20,9 +20,17 @@ Single native backend, selected at compile time per platform — no env vars, no
 
 | Platform | Crate | Store |
 |---|---|---|
-| macOS | `security-framework` (standard `SecItemAdd`) | Data Protection Keychain (no prompts) |
+| macOS | `security-framework` (standard `SecItemAdd`) | login keychain |
 | Windows | `keyring` with `windows-native` | Credential Manager |
 | Linux | `keyring` with `sync-secret-service` | Secret Service (gnome-keyring / KWallet) |
+
+On macOS the login keychain's ACL trusts the app's code-signing identity, so
+local builds are signed with the self-signed `Lopload Dev` identity
+(`bundle.macOS.signingIdentity` in `tauri.conf.json`) — a stable identity
+means updates keep keychain access without re-prompting. CI overrides to
+ad-hoc signing via `APPLE_SIGNING_IDENTITY=-`. Migrating to the prompt-free
+Data Protection keychain requires a provisioning profile (paid Developer ID),
+tracked in the improvement plan.
 
 ## Architectural decisions
 

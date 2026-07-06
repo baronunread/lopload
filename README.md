@@ -65,7 +65,7 @@ Download from the [releases page](https://github.com/baronunread/lopload/release
 
 ### Security
 
-- Credentials live only in the OS keychain (or dev store). Never in SQLite, config files, or logs.
+- Credentials live only in the OS keychain. Never in SQLite, config files, or logs.
 - All S3 requests go through Rust via `@tauri-apps/plugin-http`. No CORS, no proxy, no third-party relay.
 - Error messages shown to the user are plain sentences. Raw SDK or XML error text never reaches the UI.
 - [Documentation](https://docs.lopload.com) *(coming soon)*
