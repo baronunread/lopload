@@ -42,7 +42,7 @@ export function StatusChip({ state, direction, onRetry }: StatusChipProps) {
         type="button"
         data-state="failed"
         onClick={onRetry}
-        className="lopload-settle cursor-pointer border-none bg-transparent p-0"
+        className="lopload-settle relative cursor-pointer border-none bg-transparent p-0 transition-transform after:absolute after:-inset-x-1 after:-inset-y-2 active:scale-[0.96]"
         aria-label={`${info.label}, click to retry`}
       >
         {badge}

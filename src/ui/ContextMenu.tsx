@@ -60,7 +60,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       ref={ref}
       role="menu"
       style={{ position: "fixed", top: pos.y, left: pos.x }}
-      className="z-50 min-w-40 rounded-lg bg-kumo-base p-1 shadow-lg ring-1 ring-kumo-line"
+      className="lopload-pop-in z-50 min-w-40 rounded-lg bg-kumo-base p-1 shadow-lg ring-1 ring-kumo-line"
     >
       {items.map((item) => (
         <button

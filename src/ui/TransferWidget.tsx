@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { CaretDownIcon, CaretUpIcon, FolderIcon, StopCircleIcon, XIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, FolderIcon, StopCircleIcon, XIcon } from "@phosphor-icons/react";
 import type { EngineEvent, Transfer, TransferState } from "../lib/types";
 import { useServices } from "./services";
 import { StatusChip } from "./StatusChip";
@@ -211,36 +211,35 @@ export function TransferWidget({
   return (
     <motion.div
       initial={{ opacity: 0, y: 24 }}
-      animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 24 }}
+      animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
       transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
-      className="fixed bottom-8 right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-lg bg-kumo-base shadow-lg ring-1 ring-kumo-line sm:w-96"
+      className="fixed bottom-8 right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line sm:w-96"
     >
-      <div className="flex items-center justify-between gap-2 bg-[#2d2e30] px-4 py-0 text-white">
+      <div className="flex items-center justify-between gap-2 border-b border-kumo-line bg-kumo-elevated px-4 py-0 text-kumo-strong">
         <button
           type="button"
           className="lopload-body flex min-w-0 flex-1 items-center gap-2 py-3 text-left font-medium"
           onClick={() => setCollapsed((c) => !c)}
           aria-expanded={!collapsed}
         >
-          <span className="truncate">{title}</span>
+          <span className="truncate tabular-nums">{title}</span>
         </button>
-        <div className="flex flex-shrink-0 items-center gap-1">
+        <div className="flex flex-shrink-0 items-center gap-2">
           <button
             type="button"
             aria-label={collapsed ? "Expand transfers" : "Collapse transfers"}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-white/80 hover:bg-white/10 hover:text-white"
+            className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
             onClick={() => setCollapsed((c) => !c)}
           >
-            {collapsed ? (
-              <CaretUpIcon size={16} />
-            ) : (
-              <CaretDownIcon size={16} />
-            )}
+            <CaretDownIcon
+              size={16}
+              className={`transition-transform duration-200 ${collapsed ? "rotate-180" : ""}`}
+            />
           </button>
           <button
             type="button"
             aria-label="Close"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-white/80 hover:bg-white/10 hover:text-white"
+            className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
             onClick={clearAll}
           >
             <XIcon size={16} />
@@ -249,7 +248,7 @@ export function TransferWidget({
       </div>
 
       {!collapsed && (
-        <ul className="flex flex-col gap-2 overflow-y-auto p-3">
+        <ul className="flex flex-col gap-2 overflow-y-auto p-2">
           {groupTransfers(visible).map((row) => {
             const isFolder = row.transfers.length > 1 || row.folderName !== undefined;
             const state = isFolder ? rowState(row.transfers) : row.transfers[0].state;
@@ -276,7 +275,7 @@ export function TransferWidget({
                     )}
                     <div className="min-w-0">
                       <p className="truncate font-medium">{name}</p>
-                      <p className="text-xs text-kumo-subtle">{subtitle}</p>
+                      <p className="text-xs text-kumo-subtle tabular-nums">{subtitle}</p>
                     </div>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">
@@ -295,7 +294,7 @@ export function TransferWidget({
                       <button
                         type="button"
                         aria-label={`Cancel ${isFolder ? row.folderName : row.transfers[0].key}`}
-                        className="flex h-8 w-8 items-center justify-center text-kumo-subtle hover:text-kumo-default"
+                        className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
                         onClick={() => {
                           setTransfers((prev) =>
                             prev.filter((existing) => !inFlightIds.includes(existing.id)),
@@ -310,7 +309,7 @@ export function TransferWidget({
                       <button
                         type="button"
                         aria-label={`Dismiss ${isFolder ? row.folderName : row.transfers[0].key}`}
-                        className="flex h-8 w-8 items-center justify-center text-kumo-subtle hover:text-kumo-default"
+                        className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
                         onClick={() => {
                           setDismissed((prev) => {
                             const next = new Set(prev);

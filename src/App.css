@@ -13,6 +13,11 @@
 
 body {
   margin: 0;
+  /* Desktop-app feel: UI chrome (labels, headings, table text) isn't
+     selectable — Cmd+A should act on files, not highlight the interface.
+     Form fields opt back in below. */
+  -webkit-user-select: none;
+  user-select: none;
   /* No hardcoded fallback hex here: --color-kumo-canvas is always defined
      by src/ui/theme.css (imported before this file takes effect via Kumo's
      cascade), and a flat fallback would defeat the light-dark() switch
@@ -20,10 +25,22 @@ body {
   background-color: var(--color-kumo-canvas);
 }
 
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 h1,
 h2,
 h3 {
   font-family: var(--font-heading, "Nunito", ui-rounded, system-ui, sans-serif);
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 /* A brief, gentle shake — used to mark a failed action (e.g. "Test
@@ -43,4 +60,26 @@ h3 {
 
 .lopload-shake {
   animation: lopload-shake 400ms ease-in-out;
+}
+
+/* One-shot enter animations for conditionally-mounted elements, where a
+   `transition` would never fire (there's no prior state to transition
+   from). Keyframes only animate `from` — they land on the element's own
+   resting styles. */
+@keyframes lopload-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes lopload-pop-in {
+  from {
+    opacity: 0;
+    scale: 0.98;
+  }
+}
+
+.lopload-pop-in {
+  transform-origin: top left;
+  animation: lopload-pop-in 120ms ease-out;
 }

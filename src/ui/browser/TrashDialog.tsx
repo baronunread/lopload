@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Button, Dialog, Empty, useKumoToastManager } from "@cloudflare/kumo";
+import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
+import { TrashSimpleIcon } from "@phosphor-icons/react";
 import { useServices, type TrashItem } from "../services";
 import { formatBytes, formatDate } from "../format";
 import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
@@ -90,7 +91,13 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
             Items in the Trash are removed permanently after 30 days.
           </Dialog.Description>
           {!loading && items.length === 0 ? (
-            <Empty title="Trash is empty" description="Deleted files and folders show up here." />
+            <div className="mt-4 flex flex-col items-center rounded-lg px-6 py-8 text-center ring-1 ring-inset ring-kumo-line">
+              <TrashSimpleIcon size={24} className="text-kumo-subtle" aria-hidden />
+              <p className="mt-2 text-sm font-medium">Trash is empty</p>
+              <p className="mt-0.5 text-sm text-kumo-subtle">
+                Deleted files and folders show up here.
+              </p>
+            </div>
           ) : (
             <ul className="-mr-2 mt-4 flex max-h-96 flex-col gap-2 overflow-auto pr-2">
               <AnimatePresence initial={false}>
@@ -138,16 +145,19 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
               </AnimatePresence>
             </ul>
           )}
-          <div className="mt-4 flex items-center justify-between">
-            <Button
-              variant="secondary-destructive"
-              style={SOLID_DANGER_TEXT_STYLE}
-              disabled={items.length === 0}
-              onClick={() => setPending({ kind: "empty" })}
-            >
-              Empty trash
-            </Button>
-            <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>Done</Dialog.Close>
+          <div className="mt-4 flex items-center">
+            {items.length > 0 && (
+              <Button
+                variant="secondary-destructive"
+                style={SOLID_DANGER_TEXT_STYLE}
+                onClick={() => setPending({ kind: "empty" })}
+              >
+                Empty trash
+              </Button>
+            )}
+            <Dialog.Close render={(p) => <Button variant="secondary" className="ml-auto" {...p} />}>
+              Done
+            </Dialog.Close>
           </div>
         </Dialog>
       </Dialog.Root>

@@ -42,7 +42,7 @@ export function Thumbnail({ connectionId, entryKey, name, kind }: ThumbnailProps
           src={url}
           preload="metadata"
           muted
-          className="lopload-settle h-8 w-8 rounded object-cover"
+          className="lopload-settle lopload-media-outline h-8 w-8 rounded object-cover"
           aria-label={`Preview of ${name}`}
         />
       );
@@ -51,7 +51,7 @@ export function Thumbnail({ connectionId, entryKey, name, kind }: ThumbnailProps
       <img
         src={url}
         alt={`Preview of ${name}`}
-        className="lopload-settle h-8 w-8 rounded object-cover"
+        className="lopload-settle lopload-media-outline h-8 w-8 rounded object-cover"
       />
     );
   }
