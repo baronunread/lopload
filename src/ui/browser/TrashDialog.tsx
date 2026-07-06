@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Button, Dialog, Empty, useKumoToastManager } from "@cloudflare/kumo";
 import { useServices, type TrashItem } from "../services";
 import { formatBytes, formatDate } from "../format";
@@ -91,41 +92,50 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
           {!loading && items.length === 0 ? (
             <Empty title="Trash is empty" description="Deleted files and folders show up here." />
           ) : (
-            <ul className="mt-4 flex max-h-96 flex-col gap-1 overflow-auto">
-              {items.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 ring-1 ring-kumo-line"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-kumo-strong">
-                      {displayName(item.originalKey)}
+            <ul className="-mr-2 mt-4 flex max-h-96 flex-col gap-2 overflow-auto pr-2">
+              <AnimatePresence initial={false}>
+                {items.map((item, index) => (
+                  <motion.li
+                    key={item.id}
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0, transition: { delay: Math.min(index * 0.03, 0.15) } }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex items-center justify-between gap-2 rounded-lg px-4 py-3 ring-1 ring-inset ring-kumo-line"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-kumo-strong">
+                        {displayName(item.originalKey)}
+                      </div>
+                      <div className="mt-1 truncate text-xs text-kumo-subtle">
+                        {formatBytes(item.size)} · deleted {formatDate(item.deletedAt)}
+                      </div>
+                      <div className="truncate text-xs text-kumo-subtle">
+                        Gone for good {formatDate(item.purgeAt)}
+                      </div>
                     </div>
-                    <div className="truncate text-xs text-kumo-subtle">
-                      {formatBytes(item.size)} · deleted {formatDate(item.deletedAt)} · gone for
-                      good {formatDate(item.purgeAt)}
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={busyId === item.id}
+                        onClick={() => void handleRestore(item)}
+                      >
+                        Restore
+                      </Button>
+                      <Button
+                        variant="secondary-destructive"
+                        style={SOLID_DANGER_TEXT_STYLE}
+                        size="sm"
+                        onClick={() => setPending({ kind: "delete-now", item })}
+                      >
+                        Delete now
+                      </Button>
                     </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      loading={busyId === item.id}
-                      onClick={() => void handleRestore(item)}
-                    >
-                      Restore
-                    </Button>
-                    <Button
-                      variant="secondary-destructive"
-                      style={SOLID_DANGER_TEXT_STYLE}
-                      size="sm"
-                      onClick={() => setPending({ kind: "delete-now", item })}
-                    >
-                      Delete now
-                    </Button>
-                  </div>
-                </li>
-              ))}
+                  </motion.li>
+                ))}
+              </AnimatePresence>
             </ul>
           )}
           <div className="mt-4 flex items-center justify-between">
