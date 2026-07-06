@@ -338,6 +338,45 @@ describe("RemoteBrowser", () => {
     });
   });
 
+  test("bulk download on a multi-selection enqueues files directly and folders recursively", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": MANY_ENTRIES },
+      downloadDirectoryResult: "/dest",
+      filesRecursiveByPrefix: {
+        "conn-1::photos/": [
+          { key: "photos/cat.png", size: 2048 },
+          { key: "photos/2024/dog.png", size: 4096 },
+        ],
+      },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("a.txt");
+
+    const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+    fireEvent.click(rowFor("photos"));
+    fireEvent.click(rowFor("a.txt"), { metaKey: true });
+
+    fireEvent.contextMenu(rowFor("a.txt"));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Download 2 items" }));
+
+    await waitFor(() => expect(services.enqueueDownloadsCalls.length).toBe(1));
+    const { connectionId, targets } = services.enqueueDownloadsCalls[0];
+    expect(connectionId).toBe("conn-1");
+    expect(targets).toEqual([
+      { key: "photos/cat.png", localPath: "/dest/photos/cat.png", size: 2048 },
+      { key: "photos/2024/dog.png", localPath: "/dest/photos/2024/dog.png", size: 4096 },
+      { key: "a.txt", localPath: "/dest/a.txt", size: 1 },
+    ]);
+  });
+
   test("the folder info dialog shows a loading state, then the computed size and last-changed date", async () => {
     const services = createFakeServices({
       entriesByPrefix: { "conn-1::": ROOT_ENTRIES },

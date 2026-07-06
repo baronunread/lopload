@@ -210,6 +210,36 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     );
   }
 
+  /** Downloads every selected row into one chosen destination directory:
+   * files land directly in it, folders are recreated recursively under
+   * their own names — a single picker for the whole selection. */
+  async function handleBulkDownload(selected: RemoteEntry[]) {
+    const destDir = await services.pickDownloadDirectory();
+    if (!destDir) return;
+    const downloads: { key: string; localPath: string; size: number }[] = [];
+    for (const entry of selected) {
+      if (entry.kind === "file") {
+        downloads.push({
+          key: entry.key,
+          localPath: `${destDir}/${entry.name}`,
+          size: entry.size ?? 0,
+        });
+        continue;
+      }
+      const files = await services.browser.listFilesRecursive(connectionId, entry.key);
+      const root = `${destDir}/${entry.name}`;
+      for (const f of files) {
+        downloads.push({
+          key: f.key,
+          localPath: `${root}/${f.key.slice(entry.key.length)}`,
+          size: f.size,
+        });
+      }
+    }
+    if (downloads.length === 0) return;
+    await services.engine.enqueueDownloads(connectionId, downloads);
+  }
+
   function navigate(next: string) {
     onNavigate(next);
     void services.connections.setLastPrefix(connectionId, next);
@@ -241,6 +271,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     if (entry && selection.selected.has(entry.key) && selection.selected.size > 1) {
       const selectedEntries = rows.filter((r) => selection.selected.has(r.key));
       return [
+        {
+          label: `Download ${selectedEntries.length} items`,
+          onSelect: () => void handleBulkDownload(selectedEntries),
+        },
         {
           label: `Delete ${selectedEntries.length} items`,
           danger: true,
