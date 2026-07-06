@@ -38,7 +38,7 @@ tracked in the improvement plan.
 2. **No CORS** — the Tauri webview uses `@tauri-apps/plugin-http` which goes through Rust.
 3. **SQLite** via `@tauri-apps/plugin-sql` for connection metadata + transfer state. **No secrets in SQLite.**
 4. **Credentials** only in OS keychain. Never SQLite, config files, or logs.
-5. **Transfer state machine**: `queued → sending → checking → uploaded | failed`. `failed` is sticky until user acts.
+5. **Transfer state machine**: `queued → sending → checking → uploaded | failed`. Transient network errors (`offline`, `connection-dropped`) auto-retry up to 3 times with backoff (re-queue, never shown as failed); only then `failed`, which is sticky until user acts.
 6. **Verification before "Uploaded ✓"**: local MD5 vs ETag (single) or HeadObject size+composite ETag (multipart).
 7. **Error classes**: `offline`, `credentials`, `storage-full`, `connection-dropped`, `verification`, `not-found`, `unknown`. Raw SDK text never reaches the UI.
 8. **Orphan sweep**: every 24h, abort multipart uploads >3d old with no local record. Silent.
