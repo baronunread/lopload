@@ -44,6 +44,7 @@ const transfers: Transfer[] = [
     localPath: "/tmp/clip.mp4",
     size: 100,
     partSize: 8 * 1024 * 1024,
+    direction: "upload",
     state: { kind: "failed", errorClass: "storage-full" },
     createdAt: 0,
     updatedAt: 0,
@@ -113,12 +114,15 @@ describe("jargon sweep", () => {
       { kind: "sending", percent: 10 },
       { kind: "checking" },
       { kind: "uploaded" },
+      { kind: "downloaded" },
       { kind: "failed", errorClass: "verification" },
     ];
     for (const state of states) {
-      const chip = render(<StatusChip state={state} />);
-      assertNoJargon(chip.container);
-      chip.unmount();
+      for (const direction of ["upload", "download"] as const) {
+        const chip = render(<StatusChip state={state} direction={direction} />);
+        assertNoJargon(chip.container);
+        chip.unmount();
+      }
     }
   });
 });

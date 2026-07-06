@@ -140,6 +140,7 @@ describe("RemoteBrowser", () => {
       localPath: "/tmp/readme.txt",
       size: 100,
       partSize: 8 * 1024 * 1024,
+      direction: "upload",
       state: { kind: "uploaded" },
       createdAt: 0,
       updatedAt: 0,
@@ -149,7 +150,7 @@ describe("RemoteBrowser", () => {
     await screen.findByText("readme.txt", {}, { timeout: 2000 });
   });
 
-  test("double-clicking a file opens a debug info dialog; folders still navigate", async () => {
+  test("double-clicking a file opens it with the default app; folders still navigate", async () => {
     const services = createFakeServices({
       entriesByPrefix: {
         "conn-1::": ROOT_ENTRIES,
@@ -166,13 +167,12 @@ describe("RemoteBrowser", () => {
     await screen.findByText("readme.txt");
 
     await user.dblClick(screen.getByText("readme.txt"));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/File info/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("readme.txt").length).toBeGreaterThan(0);
-    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(services.openFileCalls).toEqual([
+      { connectionId: "conn-1", key: "readme.txt", name: "readme.txt" },
+    ]);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    // Folders still navigate on double-click, without opening the dialog.
+    // Folders still navigate on double-click, without opening anything.
     await user.dblClick(screen.getByText("photos"));
     await screen.findByText("cat.png");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

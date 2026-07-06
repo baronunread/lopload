@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "opener:allow-open-path",
     "sql:default",
     "sql:allow-execute",
     {
@@ -16,6 +17,7 @@
     "fs:read-all",
     "fs:read-dirs",
     "fs:read-meta",
+    "fs:write-all",
     {
       "identifier": "fs:scope",
       "allow": [

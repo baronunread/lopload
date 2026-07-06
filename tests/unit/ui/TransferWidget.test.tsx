@@ -16,6 +16,7 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
     localPath: "/tmp/vacation.mp4",
     size: 100,
     partSize: 8 * 1024 * 1024,
+    direction: "upload",
     state: { kind: "sending", percent: 40 },
     createdAt: 0,
     updatedAt: 0,
@@ -280,7 +281,7 @@ describe("TransferWidget", () => {
 
     await screen.findByText("Uploading 1 item…");
     act(() => {
-      services.emit({ type: "batch-finished", uploaded: 2, failed: 1 });
+      services.emit({ type: "batch-finished", uploaded: 2, downloaded: 0, failed: 1 });
     });
 
     await waitFor(() => expect(summaries).toEqual(["2 files uploaded, 1 file failed"]));

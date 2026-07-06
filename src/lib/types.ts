@@ -29,12 +29,15 @@ export type ErrorClass =
   | "not-found"
   | "unknown";
 
-/** Exact status vocabulary from the spec — the UI renders these 1:1. */
+/** Exact status vocabulary from the spec — the UI renders these 1:1.
+ * "uploaded"/"downloaded" are the two terminal-success states, one per
+ * transfer direction; everything else is shared between both directions. */
 export type TransferState =
   | { kind: "queued" }
   | { kind: "sending"; percent: number }
   | { kind: "checking" }
   | { kind: "uploaded" }
+  | { kind: "downloaded" }
   | { kind: "failed"; errorClass: ErrorClass };
 
 export interface Transfer {
@@ -42,11 +45,13 @@ export interface Transfer {
   connectionId: string;
   /** Remote key, e.g. "videos/clip.mp4" (UI shows it as folder path + name). */
   key: string;
+  /** Local file path: source for an upload, destination for a download. */
   localPath: string;
   size: number;
   partSize: number;
-  /** Set once a multipart session exists; drives resume + orphan matching. */
+  /** Set once a multipart upload session exists; drives resume + orphan matching. */
   uploadId?: string;
+  direction: "upload" | "download";
   state: TransferState;
   createdAt: number;
   updatedAt: number;
@@ -93,7 +98,7 @@ export interface TransferStore {
 
 export type EngineEvent =
   | { type: "transfer-updated"; transfer: Transfer }
-  | { type: "batch-finished"; uploaded: number; failed: number };
+  | { type: "batch-finished"; uploaded: number; downloaded: number; failed: number };
 
 export interface PlainError {
   errorClass: ErrorClass;

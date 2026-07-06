@@ -17,7 +17,7 @@ import type {
   Transfer,
   TransferState,
 } from "../lib/types";
-import type { AppServices, PickedFile } from "./services";
+import type { AppServices, DownloadTarget, PickedFile } from "./services";
 
 /** A file in the fake remote tree, keyed by full key (e.g. "photos/2024/beach.jpg"). */
 interface FakeFile {
@@ -172,11 +172,16 @@ function deleteUnderKey(connectionId: string, key: string) {
 const TICK_MS = 150;
 const PERCENT_STEP = 18;
 
+/** Outcome-specific cleanup hooks so cancel() can stop whichever timer
+ * (the "sending" interval, or the "checking" timeout) is currently pending
+ * for a transfer. */
+const cancelHandles = new Map<string, () => void>();
+
 function runTransfer(
   connectionId: string,
   transfer: Transfer,
   shouldFail: boolean,
-  onSettled: (failed: boolean) => void,
+  onSettled: (outcome: "uploaded" | "downloaded" | "failed") => void,
 ) {
   const transfers = transfersFor(connectionId);
 
@@ -187,7 +192,7 @@ function runTransfer(
     emit({ type: "transfer-updated", transfer });
   };
 
-  // queued -> sending (ticking percent) -> checking -> uploaded | failed
+  // queued -> sending (ticking percent) -> checking -> uploaded/downloaded | failed
   update({ kind: "sending", percent: 0 });
 
   let percent = 0;
@@ -199,9 +204,16 @@ function runTransfer(
     }
     clearInterval(interval);
     update({ kind: "checking" });
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
+      cancelHandles.delete(transfer.id);
       if (shouldFail) {
         update({ kind: "failed", errorClass: "connection-dropped" });
+        onSettled("failed");
+        return;
+      }
+      if (transfer.direction === "download") {
+        update({ kind: "downloaded" });
+        onSettled("downloaded");
       } else {
         update({ kind: "uploaded" });
         // Like real S3, the uploaded file now exists in the remote tree.
@@ -210,25 +222,39 @@ function runTransfer(
           size: transfer.size,
           lastModified: Date.now(),
         });
+        onSettled("uploaded");
       }
-      onSettled(shouldFail);
     }, TICK_MS);
+    cancelHandles.set(transfer.id, () => clearTimeout(timeout));
   }, TICK_MS);
+  cancelHandles.set(transfer.id, () => clearInterval(interval));
 }
 
 // Tracks in-flight batches so we know when to emit batch-finished.
-const pendingBatches = new Map<string, { total: number; settled: number; uploaded: number; failed: number }>();
+const pendingBatches = new Map<
+  string,
+  { total: number; settled: number; uploaded: number; downloaded: number; failed: number }
+>();
 
-function noteBatchSettlement(connectionId: string, failed: boolean) {
+function noteBatchSettlement(
+  connectionId: string,
+  outcome: "uploaded" | "downloaded" | "failed",
+) {
   const batch = pendingBatches.get(connectionId);
   if (!batch) return;
   batch.settled += 1;
-  if (failed) batch.failed += 1;
+  if (outcome === "failed") batch.failed += 1;
+  else if (outcome === "downloaded") batch.downloaded += 1;
   else batch.uploaded += 1;
 
   if (batch.settled >= batch.total) {
     pendingBatches.delete(connectionId);
-    emit({ type: "batch-finished", uploaded: batch.uploaded, failed: batch.failed });
+    emit({
+      type: "batch-finished",
+      uploaded: batch.uploaded,
+      downloaded: batch.downloaded,
+      failed: batch.failed,
+    });
   }
 }
 
@@ -299,6 +325,16 @@ export function createDemoServices(): AppServices {
         }
         return { files: count, totalSize, lastModified };
       },
+      async listFilesRecursive(connectionId, prefix) {
+        const files = filesFor(connectionId);
+        const result: { key: string; size: number }[] = [];
+        for (const f of files.values()) {
+          if (!f.key.startsWith(prefix)) continue;
+          if (basename(f.key) === ".keep") continue;
+          result.push({ key: f.key, size: f.size });
+        }
+        return result;
+      },
     },
     engine: {
       async listTransfers(connectionId): Promise<Transfer[]> {
@@ -317,6 +353,7 @@ export function createDemoServices(): AppServices {
           localPath: f.path,
           size: f.size,
           partSize: 8 * 1024 * 1024,
+          direction: "upload",
           state: { kind: "queued" },
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -331,12 +368,46 @@ export function createDemoServices(): AppServices {
           total: created.length,
           settled: 0,
           uploaded: 0,
+          downloaded: 0,
           failed: 0,
         });
 
         for (const t of created) {
           const shouldFail = t.key.toLowerCase().includes("fail");
-          runTransfer(connectionId, t, shouldFail, (failed) => noteBatchSettlement(connectionId, failed));
+          runTransfer(connectionId, t, shouldFail, (outcome) => noteBatchSettlement(connectionId, outcome));
+        }
+      },
+      async enqueueDownloads(connectionId, targets: DownloadTarget[]) {
+        const transfers = transfersFor(connectionId);
+        const created: Transfer[] = targets.map((t) => ({
+          id: crypto.randomUUID(),
+          connectionId,
+          key: t.key,
+          localPath: t.localPath,
+          size: t.size,
+          partSize: 8 * 1024 * 1024,
+          direction: "download",
+          state: { kind: "queued" },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }));
+
+        for (const t of created) {
+          transfers.set(t.id, t);
+          emit({ type: "transfer-updated", transfer: t });
+        }
+
+        pendingBatches.set(connectionId, {
+          total: created.length,
+          settled: 0,
+          uploaded: 0,
+          downloaded: 0,
+          failed: 0,
+        });
+
+        for (const t of created) {
+          const shouldFail = t.key.toLowerCase().includes("fail");
+          runTransfer(connectionId, t, shouldFail, (outcome) => noteBatchSettlement(connectionId, outcome));
         }
       },
       async retry(transferId) {
@@ -346,15 +417,36 @@ export function createDemoServices(): AppServices {
           const restarted: Transfer = { ...existing, state: { kind: "queued" }, updatedAt: Date.now() };
           transfers.set(transferId, restarted);
           emit({ type: "transfer-updated", transfer: restarted });
-          pendingBatches.set(connectionId, { total: 1, settled: 0, uploaded: 0, failed: 0 });
+          pendingBatches.set(connectionId, { total: 1, settled: 0, uploaded: 0, downloaded: 0, failed: 0 });
           const shouldFail = restarted.key.toLowerCase().includes("fail");
-          runTransfer(connectionId, restarted, shouldFail, (failed) => noteBatchSettlement(connectionId, failed));
+          runTransfer(connectionId, restarted, shouldFail, (outcome) => noteBatchSettlement(connectionId, outcome));
           return;
         }
       },
       async dismiss(transferId) {
         for (const transfers of transfersByConnection.values()) {
           if (transfers.delete(transferId)) return;
+        }
+      },
+      async cancel(transferId) {
+        cancelHandles.get(transferId)?.();
+        cancelHandles.delete(transferId);
+        for (const [connectionId, transfers] of transfersByConnection.entries()) {
+          if (!transfers.delete(transferId)) continue;
+          const batch = pendingBatches.get(connectionId);
+          if (batch && batch.total > 0) {
+            batch.total -= 1;
+            if (batch.settled >= batch.total) {
+              pendingBatches.delete(connectionId);
+              emit({
+                type: "batch-finished",
+                uploaded: batch.uploaded,
+                downloaded: batch.downloaded,
+                failed: batch.failed,
+              });
+            }
+          }
+          return;
         }
       },
     },
@@ -373,6 +465,15 @@ export function createDemoServices(): AppServices {
         { path: "/demo/notes.txt", name: "notes.txt", size: 4_096 },
         { path: "/demo/cover.png", name: "cover.png", size: 1_800_000 },
       ];
+    },
+    async pickSaveDestination(defaultName) {
+      return `/demo/downloads/${defaultName}`;
+    },
+    async pickDownloadDirectory() {
+      return "/demo/downloads";
+    },
+    async openFile(connectionId, key, name) {
+      console.debug("[demo] openFile", connectionId, key, name);
     },
     onFileDrop() {
       return () => {};

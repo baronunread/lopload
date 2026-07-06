@@ -181,6 +181,34 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     }
   }
 
+  /** Downloads a single file (native "Save as" dialog) or a whole folder
+   * recursively (native folder picker, recreating the folder's own name and
+   * structure inside the chosen destination). */
+  async function handleDownload(entry: RemoteEntry) {
+    if (entry.kind === "file") {
+      const destination = await services.pickSaveDestination(entry.name);
+      if (!destination) return;
+      await services.engine.enqueueDownloads(connectionId, [
+        { key: entry.key, localPath: destination, size: entry.size ?? 0 },
+      ]);
+      return;
+    }
+
+    const destDir = await services.pickDownloadDirectory();
+    if (!destDir) return;
+    const files = await services.browser.listFilesRecursive(connectionId, entry.key);
+    if (files.length === 0) return;
+    const root = `${destDir}/${entry.name}`;
+    await services.engine.enqueueDownloads(
+      connectionId,
+      files.map((f) => ({
+        key: f.key,
+        localPath: `${root}/${f.key.slice(entry.key.length)}`,
+        size: f.size,
+      })),
+    );
+  }
+
   function navigate(next: string) {
     onNavigate(next);
     void services.connections.setLastPrefix(connectionId, next);
@@ -318,6 +346,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
             setPendingName(entry.name);
             setPending({ kind: "rename", entry });
           },
+        },
+        {
+          label: "Download",
+          onSelect: () => void handleDownload(entry),
         },
         {
           label: "Copy link",
@@ -537,7 +569,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                   {...(isFolder ? dropTargetHandlers(entry.key) : {})}
                   onDoubleClick={() => {
                     if (isFolder) navigate(entry.key);
-                    else setInfoEntry(entry);
+                    else void services.openFile(connectionId, entry.key, entry.name);
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();

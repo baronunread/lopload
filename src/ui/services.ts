@@ -33,6 +33,14 @@ export interface PickedFile {
   size: number;
 }
 
+/** A remote file handed to the engine for download, with the local
+ * destination path it should be written to. */
+export interface DownloadTarget {
+  key: string;
+  localPath: string;
+  size: number;
+}
+
 export interface ConnectionsService {
   list(): Promise<Connection[]>;
   /** Persists a new or edited connection. Credentials are saved separately via keychain. */
@@ -64,6 +72,9 @@ export interface BrowserService {
   getThumbnailUrl(connectionId: string, key: string): Promise<string | null>;
   /** Recursively computes file count, total size, and last-modified time under a folder. */
   folderInfo(connectionId: string, key: string): Promise<FolderInfo>;
+  /** Every file (not folder markers) under a folder prefix, with size — used
+   * to enqueue a recursive folder download. */
+  listFilesRecursive(connectionId: string, prefix: string): Promise<{ key: string; size: number }[]>;
 }
 
 export interface EngineService {
@@ -71,9 +82,13 @@ export interface EngineService {
   /** Subscribes to engine events; returns an unsubscribe function. */
   subscribe(cb: (event: EngineEvent) => void): () => void;
   enqueueFiles(connectionId: string, prefix: string, files: PickedFile[]): Promise<void>;
+  /** Enqueues one or more remote files for download, each to its own local destination. */
+  enqueueDownloads(connectionId: string, targets: DownloadTarget[]): Promise<void>;
   retry(transferId: string): Promise<void>;
   /** User has acknowledged a failed transfer; safe to stop showing it. */
   dismiss(transferId: string): Promise<void>;
+  /** Cancels a queued or in-flight transfer; aborts any in-flight request. */
+  cancel(transferId: string): Promise<void>;
 }
 
 export interface KeychainService {
@@ -88,6 +103,15 @@ export interface AppServices {
   keychain: KeychainService;
   /** Opens the native file picker; resolves with the files chosen (recursive for folders). */
   pickFiles(): Promise<PickedFile[]>;
+  /** Native "Save as" dialog for downloading a single file; suggests
+   * `defaultName`. Resolves with the chosen path, or null if cancelled. */
+  pickSaveDestination(defaultName: string): Promise<string | null>;
+  /** Native folder picker for downloading a folder's contents. Resolves
+   * with the chosen directory, or null if cancelled. */
+  pickDownloadDirectory(): Promise<string | null>;
+  /** Downloads a file to a temporary location and opens it with the
+   * system's default app for its type once the download is verified. */
+  openFile(connectionId: string, key: string, name: string): Promise<void>;
   /** Subscribes to OS-level drag-and-drop of files onto the window. Folders
    * are expanded recursively; each resulting file carries its size and a
    * name that preserves the relative path under any dropped folder.

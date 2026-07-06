@@ -88,13 +88,20 @@ export async function listEntries(
   return entries;
 }
 
-/** List every key under `prefix` (no delimiter) — used by recursive folder ops. */
-async function listAllKeysUnder(
+export interface RemoteObjectRef {
+  key: string;
+  size: number;
+}
+
+/** List every object under `prefix` (no delimiter), with size — used by
+ * recursive folder ops (rename/delete just need the keys; downloads also
+ * need each file's size). */
+async function listObjectsUnder(
   client: S3Client,
   bucket: string,
   prefix: string,
-): Promise<string[]> {
-  const keys: string[] = [];
+): Promise<RemoteObjectRef[]> {
+  const objects: RemoteObjectRef[] = [];
   let continuationToken: string | undefined;
   do {
     const res = await client.send(
@@ -105,11 +112,31 @@ async function listAllKeysUnder(
       }),
     );
     for (const obj of res.Contents ?? []) {
-      if (obj.Key) keys.push(obj.Key);
+      if (obj.Key) objects.push({ key: obj.Key, size: obj.Size ?? 0 });
     }
     continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
   } while (continuationToken);
-  return keys;
+  return objects;
+}
+
+/** List every key under `prefix` (no delimiter) — used by recursive folder ops. */
+async function listAllKeysUnder(
+  client: S3Client,
+  bucket: string,
+  prefix: string,
+): Promise<string[]> {
+  return (await listObjectsUnder(client, bucket, prefix)).map((o) => o.key);
+}
+
+/** Recursively lists every real file (not folder markers) under a folder
+ * prefix, with sizes — used to enqueue a recursive folder download. */
+export async function listFilesUnder(
+  client: S3Client,
+  bucket: string,
+  prefix: string,
+): Promise<RemoteObjectRef[]> {
+  const all = await listObjectsUnder(client, bucket, prefix);
+  return all.filter((o) => !o.key.endsWith("/"));
 }
 
 export interface FolderStats {

@@ -48,6 +48,9 @@ const MIGRATIONS = [
     size INTEGER NOT NULL,
     PRIMARY KEY (transfer_id, part_number)
   )`,
+  // Older databases predate the download direction; every existing row was
+  // an upload, hence the default.
+  `ALTER TABLE transfers ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'upload'`,
 ];
 
 let migrated: Promise<void> | null = null;
@@ -150,6 +153,7 @@ interface TransferRow {
   state: string;
   error_class: string | null;
   expected_md5: string | null;
+  direction: string;
   created_at: number;
   updated_at: number;
 }
@@ -172,6 +176,9 @@ function rowToTransfer(row: TransferRow): Transfer {
     case "uploaded":
       state = { kind: "uploaded" };
       break;
+    case "downloaded":
+      state = { kind: "downloaded" };
+      break;
     case "failed":
       state = {
         kind: "failed",
@@ -189,6 +196,7 @@ function rowToTransfer(row: TransferRow): Transfer {
     size: row.size,
     partSize: row.part_size,
     uploadId: row.upload_id ?? undefined,
+    direction: row.direction === "download" ? "download" : "upload",
     state,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -219,8 +227,8 @@ export class SqliteTransferStore implements TransferStore {
     await this.db.execute(
       `INSERT INTO transfers (
          id, connection_id, key, local_path, size, part_size, upload_id,
-         state, error_class, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         state, error_class, direction, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT(id) DO UPDATE SET
          upload_id = excluded.upload_id,
          state = excluded.state,
@@ -236,6 +244,7 @@ export class SqliteTransferStore implements TransferStore {
         t.uploadId ?? null,
         t.state.kind,
         errorClass,
+        t.direction,
         t.createdAt,
         t.updatedAt,
       ],
