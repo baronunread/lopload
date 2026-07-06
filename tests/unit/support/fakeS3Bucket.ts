@@ -61,7 +61,7 @@ export function installFakeS3(client: S3Client) {
       throw err;
     }
     const body = input.Body instanceof Uint8Array ? input.Body : new Uint8Array(0);
-    const etag = `"${md5Hex(body)}"`;
+    const etag = `"${await md5Hex(body)}"`;
     objects.set(partitionKey(input.Bucket!, input.Key!), {
       body,
       etag,

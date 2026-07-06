@@ -176,7 +176,14 @@ const MOCKS: Array<{ specifier: string; fake: () => unknown; real: unknown; rest
   { specifier: "../../../src/tauri/http", fake: () => ({ tauriFetch: globalThis.fetch }), real: REAL_HTTP },
   {
     specifier: "../../../src/tauri/tray",
-    fake: () => ({ setTrayStatus: () => {}, onRetryFailedRequested: () => () => {} }),
+    fake: () => ({
+      setTrayStatus: () => {},
+      setTrayConnections: () => {},
+      setTrayLastUpload: () => {},
+      onRetryFailedRequested: () => () => {},
+      onUploadFilesRequested: () => () => {},
+      onCopyLinkRequested: () => () => {},
+    }),
     real: REAL_TRAY,
   },
   {
