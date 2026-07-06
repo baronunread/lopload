@@ -143,18 +143,20 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// The tray menu's disabled first line, e.g. "Uploading 3 files — 42%",
-/// "2 uploads failed", or "Lopload is idle" when nothing needs attention.
-/// In-flight transfers take priority over failures — once uploads settle,
-/// any sticky failures surface here until retried or dismissed.
+/// The tray menu's disabled first line, e.g. "Transferring 3 files — 42%",
+/// "2 transfers failed", or "Lopload is idle" when nothing needs attention.
+/// Wording is direction-neutral since the engine carries uploads and
+/// downloads through the same counts. In-flight transfers take priority
+/// over failures — once they settle, any sticky failures surface here
+/// until retried or dismissed.
 fn format_status_line(uploading: i64, percent: f64, failed: i64) -> String {
     if uploading > 0 {
         let pct = percent.clamp(0.0, 100.0).round() as i64;
         let plural = if uploading == 1 { "" } else { "s" };
-        format!("Uploading {uploading} file{plural} — {pct}%")
+        format!("Transferring {uploading} file{plural} — {pct}%")
     } else if failed > 0 {
         let plural = if failed == 1 { "" } else { "s" };
-        format!("{failed} upload{plural} failed")
+        format!("{failed} transfer{plural} failed")
     } else {
         "Lopload is idle".to_string()
     }
@@ -166,12 +168,12 @@ fn format_retry_label(failed: i64) -> String {
     format!("Retry failed ({failed})")
 }
 
-/// "Quit" normally, or "Quit — N uploads will resume" while transfers are
+/// "Quit" normally, or "Quit — N transfers will resume" while transfers are
 /// in flight — they resume on next launch, so this is informational only.
 fn format_quit_label(uploading: i64) -> String {
     if uploading > 0 {
         let plural = if uploading == 1 { "" } else { "s" };
-        format!("Quit — {uploading} upload{plural} will resume")
+        format!("Quit — {uploading} transfer{plural} will resume")
     } else {
         "Quit".to_string()
     }
@@ -235,14 +237,14 @@ mod status_format_tests {
 
     #[test]
     fn status_line_prioritizes_uploading_over_failed() {
-        assert_eq!(format_status_line(3, 42.4, 2), "Uploading 3 files — 42%");
-        assert_eq!(format_status_line(1, 0.0, 0), "Uploading 1 file — 0%");
+        assert_eq!(format_status_line(3, 42.4, 2), "Transferring 3 files — 42%");
+        assert_eq!(format_status_line(1, 0.0, 0), "Transferring 1 file — 0%");
     }
 
     #[test]
     fn status_line_reports_failures_when_idle() {
-        assert_eq!(format_status_line(0, 0.0, 1), "1 upload failed");
-        assert_eq!(format_status_line(0, 0.0, 4), "4 uploads failed");
+        assert_eq!(format_status_line(0, 0.0, 1), "1 transfer failed");
+        assert_eq!(format_status_line(0, 0.0, 4), "4 transfers failed");
     }
 
     #[test]
@@ -259,14 +261,14 @@ mod status_format_tests {
     #[test]
     fn quit_label_reflects_in_flight_count() {
         assert_eq!(format_quit_label(0), "Quit");
-        assert_eq!(format_quit_label(1), "Quit — 1 upload will resume");
-        assert_eq!(format_quit_label(2), "Quit — 2 uploads will resume");
+        assert_eq!(format_quit_label(1), "Quit — 1 transfer will resume");
+        assert_eq!(format_quit_label(2), "Quit — 2 transfers will resume");
     }
 
     #[test]
     fn percent_clamps_to_valid_range() {
-        assert_eq!(format_status_line(1, 142.0, 0), "Uploading 1 file — 100%");
-        assert_eq!(format_status_line(1, -10.0, 0), "Uploading 1 file — 0%");
+        assert_eq!(format_status_line(1, 142.0, 0), "Transferring 1 file — 100%");
+        assert_eq!(format_status_line(1, -10.0, 0), "Transferring 1 file — 0%");
     }
 }
 
