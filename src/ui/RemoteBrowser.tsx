@@ -14,10 +14,11 @@ import {
   useKumoToastManager,
 } from "@cloudflare/kumo";
 import { FolderPlusIcon, HouseIcon, MagnifyingGlassIcon, UploadSimpleIcon } from "@phosphor-icons/react";
-import type { RemoteEntry } from "../lib/types";
-import { useServices, type FolderInfo } from "./services";
+import type { Connection, RemoteEntry } from "../lib/types";
+import { CredentialsUnreadableError, useServices, type FolderInfo } from "./services";
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { CredentialsReentryForm } from "./CredentialsReentryForm";
 import { SOLID_DANGER_BUTTON_STYLE } from "./dangerButton";
 import { DragGhost } from "./browser/DragGhost";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
@@ -51,6 +52,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [credentialsConnection, setCredentialsConnection] = useState<Connection | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry?: RemoteEntry } | null>(
     null,
   );
@@ -74,11 +76,23 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       const result = await services.browser.list(connectionId, prefix);
       setEntries(result);
       setLoadFailed(false);
-    } catch {
-      // e.g. missing keychain credentials or an unreachable endpoint —
-      // surface a retryable error state instead of an unhandled rejection.
+      setCredentialsConnection(null);
+    } catch (err) {
       setEntries([]);
-      setLoadFailed(true);
+      if (err instanceof CredentialsUnreadableError) {
+        // The OS keychain couldn't produce credentials for this connection
+        // (denied prompt, or an ACL mismatch after a signing identity
+        // change) — offer plain re-entry instead of a broken listing.
+        const connections = await services.connections.list();
+        const conn = connections.find((c) => c.id === connectionId) ?? null;
+        setCredentialsConnection(conn);
+        setLoadFailed(conn === null);
+      } else {
+        // e.g. an unreachable endpoint — surface a retryable error state
+        // instead of an unhandled rejection.
+        setCredentialsConnection(null);
+        setLoadFailed(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -479,7 +493,16 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         </div>
       </div>
 
-      {loadFailed ? (
+      {credentialsConnection ? (
+        <CredentialsReentryForm
+          connection={credentialsConnection}
+          onSaved={() => void refresh()}
+          onCancel={() => {
+            setCredentialsConnection(null);
+            setLoadFailed(true);
+          }}
+        />
+      ) : loadFailed ? (
         <Empty
           title="Couldn't load this storage"
           description="Check the connection's details and credentials, then try again."

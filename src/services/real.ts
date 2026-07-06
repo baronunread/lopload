@@ -49,6 +49,7 @@ import { tauriFetch } from "../tauri/http";
 import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
 import { onRetryFailedRequested, setTrayStatus } from "../tauri/tray";
 import { isImageName, isVideoName } from "../ui/format";
+import { CredentialsUnreadableError } from "../ui/services";
 import type {
   AppServices,
   ConnectionDraft,
@@ -131,7 +132,7 @@ class RealServices implements AppServices {
     let client = this.clients.get(connectionId);
     if (!client) {
       const credentials = await keychainGet(connectionId);
-      if (!credentials) throw new Error(`No stored credentials for connection: ${connectionId}`);
+      if (!credentials) throw new CredentialsUnreadableError(connectionId);
       client = createS3Client(conn, credentials, tauriFetch);
       this.clients.set(connectionId, client);
     }
