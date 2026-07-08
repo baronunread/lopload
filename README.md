@@ -56,6 +56,10 @@ Download from the [releases page](https://github.com/baronunread/lopload/release
 - **Resumable** — multipart uploads persist progress to disk. An app or machine restart resumes from the last completed part.
 - **Sticky failures** — failed transfers stay visible until you act on them. No auto-dismiss, no silent retry.
 - **Multi-connection** — switch between storage endpoints. Each remembers its last-browsed folder.
+- **Recoverable trash** — deletes move files to a Trash you can restore from, instead of destroying them immediately.
+- **Share links** — generate a presigned link with a picked expiry, right from the file row.
+- **Drag-and-drop moves** — drag files onto folders or breadcrumbs to move them, with a live drop-target indicator.
+- **Follows system theme** — light/dark follows the OS by default, with a manual toggle in the header.
 - **Orphan sweep** — abandoned multipart sessions older than 3 days are silently cleaned up.
 
 > [!TIP]
