@@ -93,7 +93,7 @@ jobs:
           echo "$ARCH" > src-tauri/target/release/bundle/updater-arch-darwin.txt
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.os }}
           path: src-tauri/target/release/bundle/
@@ -103,6 +103,10 @@ jobs:
     needs: [build]
     runs-on: ubuntu-22.04
     timeout-minutes: 5
+    # action-gh-release creates the release with the workflow GITHUB_TOKEN,
+    # which is read-only unless granted here.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v5
@@ -111,7 +115,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Download all bundle artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: bundle-*
           merge-multiple: true
@@ -120,7 +124,7 @@ jobs:
         run: bun run .github/scripts/build-latest-json.mjs
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Sig globs follow createUpdaterArtifacts: true (Tauri v2 native)
           # naming: .sig sits next to the bundle itself (.AppImage.sig,
