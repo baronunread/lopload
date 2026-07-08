@@ -64,14 +64,16 @@ export function RemoteBrowserRow({
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      <Table.Cell className="flex min-w-0 items-center gap-2 p-2 sm:p-3">
-        <Thumbnail
-          connectionId={connectionId}
-          entryKey={entry.key}
-          name={entry.name}
-          kind={entry.kind}
-        />
-        <span className="lopload-body cursor-default truncate select-none">{entry.name}</span>
+      <Table.Cell className="min-w-0 p-2 sm:p-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Thumbnail
+            connectionId={connectionId}
+            entryKey={entry.key}
+            name={entry.name}
+            kind={entry.kind}
+          />
+          <span className="lopload-body cursor-default truncate select-none">{entry.name}</span>
+        </div>
       </Table.Cell>
       <Table.Cell className="lopload-body whitespace-nowrap p-2 text-kumo-subtle tabular-nums sm:p-3">
         {size !== undefined ? formatBytes(size) : "—"}
