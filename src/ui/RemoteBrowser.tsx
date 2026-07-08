@@ -44,7 +44,7 @@ type FolderInfoState = { status: "loading" } | ({ status: "loaded" } & FolderInf
  * transparent box (never `display: contents` — backgrounds and rings don't
  * render on a box-less element). */
 function crumbDropClass(dragActive: boolean, isTarget: boolean): string {
-  const base = "-mx-1 inline-flex items-center rounded-md px-1 py-0.5";
+  const base = "inline-flex items-center rounded-md px-1 py-0.5";
   if (!dragActive) return base;
   return isTarget
     ? `${base} bg-kumo-brand/20 ring-1 ring-kumo-brand`
