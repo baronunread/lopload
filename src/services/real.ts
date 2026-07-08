@@ -11,7 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readDir, size as fileSize, stat } from "@tauri-apps/plugin-fs";
-import { tempDir } from "@tauri-apps/api/path";
+import { join as joinPath, tempDir } from "@tauri-apps/api/path";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { S3Client } from "@aws-sdk/client-s3";
 
@@ -52,6 +52,7 @@ import {
 } from "../lib/stores/sqlite";
 import { keychainDelete, keychainGet, keychainSet } from "../tauri/keychain";
 import { tauriFetch } from "../tauri/http";
+import { initFileLogSink } from "../tauri/logSink";
 import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
 import {
   onRetryFailedRequested,
@@ -179,6 +180,10 @@ class RealServices implements AppServices {
     if (engine) return engine;
     const { client, conn } = await this.getClient(connectionId);
     const store = await this.getTransferStore();
+    const [concurrency, autoRetry] = await Promise.all([
+      settingsGetConcurrentTransfers(),
+      settingsGetAutoRetry(),
+    ]);
     engine = new TransferEngine({
       client,
       bucket: conn.bucket,
@@ -186,6 +191,8 @@ class RealServices implements AppServices {
       reader: tauriFileReader,
       writer: tauriFileWriter,
       store,
+      concurrency,
+      autoRetryDelaysMs: autoRetry ? [1_000, 3_000, 9_000] : [],
     });
     engine.subscribe((event) => this.onEngineEvent(connectionId, event));
     this.engines.set(connectionId, engine);
@@ -532,12 +539,19 @@ class RealServices implements AppServices {
   }
 
   async pickSaveDestination(defaultName: string): Promise<string | null> {
-    const destination = await saveDialog({ defaultPath: defaultName });
+    const downloadDir = await settingsGetDefaultDownloadDir();
+    const defaultPath = downloadDir ? await joinPath(downloadDir, defaultName) : defaultName;
+    const destination = await saveDialog({ defaultPath });
     return destination ?? null;
   }
 
   async pickDownloadDirectory(): Promise<string | null> {
-    const selection = await openDialog({ multiple: false, directory: true });
+    const downloadDir = await settingsGetDefaultDownloadDir();
+    const selection = await openDialog({
+      multiple: false,
+      directory: true,
+      defaultPath: downloadDir ?? undefined,
+    });
     if (!selection) return null;
     return Array.isArray(selection) ? (selection[0] ?? null) : selection;
   }
@@ -725,6 +739,7 @@ export function createRealServices(): AppServices {
     singleton.startTrashSweep();
     singleton.startTrayRetryListening();
     singleton.startTrayUploadListening();
+    void initFileLogSink();
   }
   return singleton;
 }

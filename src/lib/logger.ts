@@ -7,6 +7,14 @@ export interface Logger {
   error: (msg: string, ...args: unknown[]) => void;
 }
 
+export type LogSink = (level: LogLevel, module: string, line: string) => void;
+
+let extraSinks: LogSink[] = [];
+
+export function addLogSink(sink: LogSink): void {
+  extraSinks.push(sink);
+}
+
 function log(level: LogLevel, module: string, msg: string, args: unknown[]) {
   const ts = new Date().toISOString();
   const line = `[${ts}] [${level.toUpperCase()}] [${module}] ${msg}${args.length ? " " + JSON.stringify(args) : ""}`;
@@ -15,6 +23,13 @@ function log(level: LogLevel, module: string, msg: string, args: unknown[]) {
     case "info": console.info(line); break;
     case "warn": console.warn(line); break;
     case "error": console.error(line); break;
+  }
+  for (const sink of extraSinks) {
+    try {
+      sink(level, module, line);
+    } catch {
+      // Sink failures must never break logging.
+    }
   }
 }
 

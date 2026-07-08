@@ -152,7 +152,35 @@ const MOCKS: Array<{ specifier: string; fake: () => unknown; real: unknown; rest
     }),
     real: REAL_TAURI_NOTIFICATION,
   },
-  { specifier: "@tauri-apps/api/path", fake: () => ({ tempDir: async () => "/fake-tmp" }), real: REAL_TAURI_PATH },
+  {
+    specifier: "@tauri-apps/plugin-store",
+    fake: () => {
+      const stores = new Map<string, Map<string, unknown>>();
+      // Minimal LazyStore replacement that avoids the invoke chain.
+      class FakeLazyStore {
+        private data = new Map<string, unknown>();
+        constructor(
+          _path: string,
+          opts?: { defaults?: Record<string, unknown>; autoSave?: number },
+        ) {
+          if (opts?.defaults) {
+            for (const [k, v] of Object.entries(opts.defaults)) {
+              this.data.set(k, v);
+            }
+          }
+        }
+        async get<T>(key: string): Promise<T | undefined> {
+          return this.data.get(key) as T;
+        }
+        async set(key: string, value: unknown): Promise<void> {
+          this.data.set(key, value);
+        }
+      }
+      return { LazyStore: FakeLazyStore };
+    },
+    real: null as never,
+  },
+  { specifier: "@tauri-apps/api/path", fake: () => ({ tempDir: async () => "/fake-tmp", appLogDir: async () => "/fake-logs", join: async (...parts: string[]) => parts.join("/") }), real: REAL_TAURI_PATH },
   {
     specifier: "@tauri-apps/api/webview",
     fake: () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }),

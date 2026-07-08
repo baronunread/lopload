@@ -9,6 +9,7 @@ export interface FakeFsModule {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   remove(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  writeTextFile(path: string, data: string, opts?: { append?: boolean; create?: boolean }): Promise<void>;
   SeekMode: { Start: number; Current: number; End: number };
   open(
     path: string,
@@ -38,6 +39,23 @@ export function createFakeFsModule(files: Map<string, Uint8Array>): FakeFsModule
       return [];
     },
     async mkdir() {},
+    async writeTextFile(path, data, opts) {
+      if (opts?.create && !files.has(path)) {
+        files.set(path, new TextEncoder().encode(data));
+      } else if (opts?.append) {
+        const existing = files.get(path);
+        if (existing) {
+          const merged = new Uint8Array(existing.length + data.length);
+          merged.set(existing);
+          merged.set(new TextEncoder().encode(data), existing.length);
+          files.set(path, merged);
+        } else {
+          files.set(path, new TextEncoder().encode(data));
+        }
+      } else {
+        files.set(path, new TextEncoder().encode(data));
+      }
+    },
     async remove(path) {
       files.delete(path);
     },
