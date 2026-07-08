@@ -17,15 +17,9 @@ use tauri::{
 };
 
 const MENU_ID_SHOW: &str = "show";
-const MENU_ID_RETRY: &str = "retry";
 const MENU_ID_UPLOAD_NONE: &str = "upload-none";
 const MENU_ID_QUIT: &str = "quit";
 const UPLOAD_ITEM_PREFIX: &str = "upload-conn:";
-
-/// Emitted when the user clicks "Retry failed" in the tray menu — the
-/// frontend is the only side that knows which transfers are failed, so it
-/// listens for this and calls `retry()` on each of them.
-pub const RETRY_FAILED_EVENT: &str = "tray://retry-failed";
 
 /// Emitted when the user clicks a per-connection "Upload files…" item, with
 /// the connection id as payload — the frontend owns the file picker and the
@@ -45,7 +39,6 @@ pub struct TrayConnection {
 /// `set_text`/`set_enabled` in place.
 struct TrayMenuItems<R: Runtime> {
     status: MenuItem<R>,
-    retry: MenuItem<R>,
     upload_submenu: Submenu<R>,
     quit: MenuItem<R>,
 }
@@ -72,13 +65,6 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let show_item = MenuItem::with_id(app, MENU_ID_SHOW, "Show Lopload", true, None::<&str>)?;
-    let retry_item = MenuItem::with_id(
-        app,
-        MENU_ID_RETRY,
-        format_retry_label(0),
-        false,
-        None::<&str>,
-    )?;
     let quit_item = MenuItem::with_id(app, MENU_ID_QUIT, format_quit_label(0), true, None::<&str>)?;
 
     // Starts empty (populated via tray_set_connections once the frontend
@@ -102,7 +88,6 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &status_item,
             &separator_top,
             &show_item,
-            &retry_item,
             &upload_submenu,
             &separator_bottom,
             &quit_item,
@@ -135,9 +120,6 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             }
             match id {
                 MENU_ID_SHOW => show_main_window(app),
-                MENU_ID_RETRY => {
-                    let _ = app.emit(RETRY_FAILED_EVENT, ());
-                }
                 MENU_ID_QUIT => app.exit(0),
                 _ => {}
             }
@@ -147,7 +129,6 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     app.manage(TrayState {
         items: TrayMenuItems {
             status: status_item,
-            retry: retry_item,
             upload_submenu,
             quit: quit_item,
         },
@@ -202,12 +183,6 @@ fn format_status_line(uploading: i64, percent: f64, failed: i64) -> String {
     }
 }
 
-/// "Retry failed (N)" — the item stays in the menu but disabled at N == 0,
-/// since `MenuItem` has no visibility toggle in Tauri 2.
-fn format_retry_label(failed: i64) -> String {
-    format!("Retry failed ({failed})")
-}
-
 fn format_quit_label(_uploading: i64) -> String {
     "Quit".to_string()
 }
@@ -230,16 +205,6 @@ pub fn tray_set_status<R: Runtime>(
         .items
         .status
         .set_text(format_status_line(uploading, percent, failed))
-        .map_err(|e| e.to_string())?;
-    state
-        .items
-        .retry
-        .set_text(format_retry_label(failed))
-        .map_err(|e| e.to_string())?;
-    state
-        .items
-        .retry
-        .set_enabled(failed > 0)
         .map_err(|e| e.to_string())?;
     state
         .items
@@ -328,12 +293,6 @@ mod status_format_tests {
     #[test]
     fn status_line_reports_idle() {
         assert_eq!(format_status_line(0, 0.0, 0), "Lopload is idle");
-    }
-
-    #[test]
-    fn retry_label_includes_count() {
-        assert_eq!(format_retry_label(0), "Retry failed (0)");
-        assert_eq!(format_retry_label(5), "Retry failed (5)");
     }
 
     #[test]
