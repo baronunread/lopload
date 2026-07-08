@@ -1,35 +1,38 @@
-import { useRef, useState, type DragEvent } from "react";
-
-/** Custom drag MIME type for internal row drag-to-move. Kept distinct from
- * the browser's native "Files" drag type (used for OS file drops, which are
- * handled separately via the Tauri onDragDropEvent bridge) so a move-drag
- * can never be mistaken for an incoming file upload. */
-export const MOVE_DRAG_TYPE = "application/x-lopload-key";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 export type DragChipVariant = "folder" | "file" | "files";
 
-export interface DragChipRefs {
-  chipRef: React.RefObject<HTMLDivElement | null>;
-  labelRef: React.RefObject<HTMLSpanElement | null>;
-  folderIconRef: React.RefObject<HTMLSpanElement | null>;
-  fileIconRef: React.RefObject<HTMLSpanElement | null>;
-  filesIconRef: React.RefObject<HTMLSpanElement | null>;
+/** Everything the ghost chip needs to render one in-progress drag. */
+export interface ActiveDrag {
+  keys: string[];
+  label: string;
+  variant: DragChipVariant;
   /** The dragged file's own thumbnail, shown instead of the generic file
    * glyph when the row being dragged has a rendered preview. */
-  thumbRef: React.RefObject<HTMLImageElement | null>;
+  thumbnailSrc?: string;
+  /** Where the ghost first appears (the press point); afterwards the hook
+   * moves it directly via `ghostRef`, off React's render path. */
+  x: number;
+  y: number;
 }
 
-/** Parses the payload written to the custom drag MIME type: a JSON array of
- * the keys being moved (one, or the whole selection). */
-export function parseDragKeys(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as string[];
-  } catch {
-    // Fall through — treat the raw string as a single legacy key.
-  }
-  return raw ? [raw] : [];
+export interface DragSpec {
+  keys: string[];
+  label: string;
+  variant: DragChipVariant;
+  thumbnailSrc?: string;
+  /** Fired once the press actually becomes a drag (threshold crossed) —
+   * e.g. to collapse the selection down to the dragged row. */
+  onBegin?: () => void;
 }
+
+/** How far the pointer must travel from the press point before a press
+ * becomes a drag — keeps plain clicks and double-clicks from ever starting
+ * one. */
+const DRAG_THRESHOLD_PX = 4;
+
+/** Ghost offset from the cursor, so the pointer never covers the chip. */
+const GHOST_OFFSET_PX = 14;
 
 export interface UseDragMoveOptions {
   /** Moves every key in `fromKeys` to live under `toPrefix`. */
@@ -37,139 +40,148 @@ export interface UseDragMoveOptions {
 }
 
 export interface UseDragMoveResult {
+  /** The drag in progress, if any — render the ghost chip off this. */
+  drag: ActiveDrag | null;
   dropTarget: string | null;
-  chipRefs: DragChipRefs;
-  /** Drag handlers for a valid drop target (a folder row, or an ancestor
-   * breadcrumb) that only react to internal row drags, never OS file drags. */
+  /** Attach to the ghost chip so the hook can move it with the cursor. */
+  ghostRef: React.RefObject<HTMLDivElement | null>;
+  /** Call from a row's onMouseDown; the press only becomes a drag once the
+   * cursor moves past the threshold, so clicks pass through untouched. */
+  beginPress: (e: ReactMouseEvent, spec: DragSpec) => void;
+  /** Hover handlers for a valid drop target (a folder row, or an ancestor
+   * breadcrumb). Only react while a drag is actually in progress. */
   dropTargetHandlers: (toPrefix: string) => {
-    onDragOver: (e: DragEvent) => void;
-    onDragEnter: (e: DragEvent) => void;
-    onDragLeave: (e: DragEvent) => void;
-    onDrop: (e: DragEvent) => void;
+    onMouseEnter: () => void;
+    onMouseLeave: () => void;
   };
-  /** Renders the compact "chip" drag image (a small preview centered under
-   * the cursor) instead of the browser's default, which would otherwise drag
-   * the whole (huge) row or its text. `thumbnailSrc` — the dragged file's
-   * already-rendered thumbnail URL, shown in place of the generic file
-   * glyph. */
-  showDragChip: (
-    e: DragEvent,
-    label: string,
-    variant: DragChipVariant,
-    thumbnailSrc?: string,
-  ) => void;
-  clearDropTarget: () => void;
 }
 
-/** Row drag-to-move: tracks the current drop target, renders a drag-ghost
- * chip in place of the browser's default drag image, and dispatches moves
- * via `onMove`. Independent of OS file drag-drop (uploads), which the caller
- * handles separately. */
+/**
+ * Row drag-to-move, driven entirely by pointer events instead of HTML5
+ * drag-and-drop. Native DnD can't work in the real app: with Tauri's
+ * `dragDropEnabled` on, wry replaces WKWebView's native drop handling (to
+ * emit its own file-drop events), so DOM drop events never fire for
+ * internal drags — the drag would start but could never land. Pointer
+ * events sidestep that, and the ghost becomes a live element that follows
+ * the cursor rather than a rasterized setDragImage snapshot (which WebKit
+ * rendered as a generic rectangle anyway).
+ */
 export function useDragMove({ onMove }: UseDragMoveOptions): UseDragMoveResult {
+  const [drag, setDrag] = useState<ActiveDrag | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
 
-  const chipRef = useRef<HTMLDivElement>(null);
-  const labelRef = useRef<HTMLSpanElement>(null);
-  const folderIconRef = useRef<HTMLSpanElement>(null);
-  const fileIconRef = useRef<HTMLSpanElement>(null);
-  const filesIconRef = useRef<HTMLSpanElement>(null);
-  const thumbRef = useRef<HTMLImageElement>(null);
+  const ghostRef = useRef<HTMLDivElement>(null);
+  // Listener-visible mirrors of the states above (document-level handlers
+  // are attached once per press and would otherwise close over stale values).
+  const dragRef = useRef<ActiveDrag | null>(null);
+  const dropTargetRef = useRef<string | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
-  function showDragChip(
-    e: DragEvent,
-    label: string,
-    variant: DragChipVariant,
-    thumbnailSrc?: string,
-  ) {
-    const chip = chipRef.current;
-    const labelEl = labelRef.current;
-    if (!chip || !labelEl) return;
-    const iconRefs = [
-      ["folder", folderIconRef],
-      ["file", fileIconRef],
-      ["files", filesIconRef],
-    ] as const;
-    labelEl.textContent = label;
-    const thumb = thumbRef.current;
-    const useThumb = thumbnailSrc !== undefined && thumb !== null;
-    if (useThumb) {
-      // Reusing the row's own (already decoded) thumbnail URL — setDragImage
-      // rasterizes synchronously, so a not-yet-loaded image would come out
-      // blank.
-      thumb.src = thumbnailSrc;
-      thumb.style.display = "";
-    }
-    for (const [key, ref] of iconRefs) {
-      if (ref.current) ref.current.style.display = !useThumb && key === variant ? "" : "none";
-    }
-    // WebKit (the real app's WKWebView) only rasterizes elements that are
-    // actually painted — an off-screen chip yields the OS's generic
-    // rectangle. Move it under the cursor for the snapshot, aligned with
-    // where the drag image will appear so the one-frame cameo reads as the
-    // drag image itself. (Chromium would be fine with off-screen, so this
-    // placement is purely for WebKit.)
-    chip.style.top = `${e.clientY - 20}px`;
-    chip.style.left = `${e.clientX - 20}px`;
-    try {
-      // Test environments (happy-dom/jsdom) either omit this or throw — the
-      // custom drag image is a visual nicety only, never load-bearing.
-      e.dataTransfer.setDragImage?.(chip, 20, 20);
-    } catch {
-      // ignored
-    }
-    // Chromium rasterizes synchronously inside setDragImage, but WebKit
-    // snapshots after the dragstart handler returns — so the chip must stay
-    // populated and painted until the next macrotask, then go back to being
-    // an empty off-screen template.
-    setTimeout(() => {
-      chip.style.top = "";
-      chip.style.left = "";
-      labelEl.textContent = "";
-      for (const [, ref] of iconRefs) {
-        if (ref.current) ref.current.style.display = "none";
-      }
-      if (thumb) {
-        thumb.style.display = "none";
-        thumb.removeAttribute("src");
-      }
-    }, 0);
+  function setDragBoth(value: ActiveDrag | null) {
+    dragRef.current = value;
+    setDrag(value);
   }
+
+  function setDropTargetBoth(value: string | null) {
+    dropTargetRef.current = value;
+    setDropTarget(value);
+  }
+
+  function positionGhost(x: number, y: number) {
+    const ghost = ghostRef.current;
+    if (!ghost) return;
+    ghost.style.left = `${x + GHOST_OFFSET_PX}px`;
+    ghost.style.top = `${y + GHOST_OFFSET_PX}px`;
+  }
+
+  function beginPress(e: ReactMouseEvent, spec: DragSpec) {
+    if (e.button !== 0) return;
+    // A press on the row's actions button (or any other control) is a
+    // button press, not a drag handle.
+    if (e.target instanceof Element && e.target.closest("button")) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+
+    const handleMove = (ev: MouseEvent) => {
+      if (!dragRef.current) {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+        spec.onBegin?.();
+        setDragBoth({
+          keys: spec.keys,
+          label: spec.label,
+          variant: spec.variant,
+          thumbnailSrc: spec.thumbnailSrc,
+          x: ev.clientX + GHOST_OFFSET_PX,
+          y: ev.clientY + GHOST_OFFSET_PX,
+        });
+        document.body.style.cursor = "grabbing";
+        return;
+      }
+      positionGhost(ev.clientX, ev.clientY);
+    };
+
+    const finish = (performDrop: boolean) => {
+      const activeDrag = dragRef.current;
+      const target = dropTargetRef.current;
+      cleanup();
+      if (performDrop && activeDrag && target !== null) {
+        void onMove(activeDrag.keys, target);
+      }
+    };
+
+    const handleUp = () => {
+      const dragged = dragRef.current !== null;
+      finish(true);
+      if (dragged) {
+        // The mouseup that ends a drag still produces a click on whatever
+        // row it happened over — swallow that one click so it can't
+        // reset the selection or trigger row actions.
+        const swallow = (clickEv: Event) => {
+          clickEv.stopPropagation();
+          clickEv.preventDefault();
+        };
+        document.addEventListener("click", swallow, { capture: true, once: true });
+        setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 0);
+      }
+    };
+
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") finish(false);
+    };
+
+    const cleanup = () => {
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+      document.removeEventListener("keydown", handleKey);
+      document.body.style.cursor = "";
+      setDragBoth(null);
+      setDropTargetBoth(null);
+      cleanupRef.current = null;
+    };
+
+    cleanupRef.current = cleanup;
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+    document.addEventListener("keydown", handleKey);
+  }
+
+  // A press can outlive the component (e.g. a re-list unmounts it mid-drag).
+  useEffect(() => {
+    return () => cleanupRef.current?.();
+  }, []);
 
   function dropTargetHandlers(toPrefix: string) {
     return {
-      onDragOver: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
+      onMouseEnter: () => {
+        if (dragRef.current) setDropTargetBoth(toPrefix);
       },
-      onDragEnter: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setDropTarget(toPrefix);
-      },
-      onDragLeave: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.stopPropagation();
-        setDropTarget((current) => (current === toPrefix ? null : current));
-      },
-      onDrop: (e: DragEvent) => {
-        if (!e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setDropTarget(null);
-        const fromKeys = parseDragKeys(e.dataTransfer.getData(MOVE_DRAG_TYPE));
-        void onMove(fromKeys, toPrefix);
+      onMouseLeave: () => {
+        if (dropTargetRef.current === toPrefix) setDropTargetBoth(null);
       },
     };
   }
 
-  return {
-    dropTarget,
-    chipRefs: { chipRef, labelRef, folderIconRef, fileIconRef, filesIconRef, thumbRef },
-    dropTargetHandlers,
-    showDragChip,
-    clearDropTarget: () => setDropTarget(null),
-  };
+  return { drag, dropTarget, ghostRef, beginPress, dropTargetHandlers };
 }

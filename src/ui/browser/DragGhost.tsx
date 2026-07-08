@@ -1,40 +1,38 @@
 import { FileIcon, FilesIcon, FolderIcon } from "@phosphor-icons/react";
-import type { DragChipRefs } from "./useDragMove";
+import type { ActiveDrag } from "./useDragMove";
 
 export interface DragGhostProps {
-  refs: DragChipRefs;
+  drag: ActiveDrag | null;
+  ghostRef: React.RefObject<HTMLDivElement | null>;
 }
 
-/** Custom drag image for row moves: a small chip (icon + name, or a count
- * when dragging multiple selected rows) centered under the cursor, instead
- * of the browser's default of the whole (huge) row. Parked off-screen while
- * idle; showDragChip moves it under the cursor for the duration of the
- * drag-image snapshot, because WebKit only rasterizes elements that are
- * actually painted (a detached or off-screen node yields the OS's generic
- * rectangle). */
-export function DragGhost({ refs }: DragGhostProps) {
+/** The chip that follows the cursor during a drag-to-move: the dragged
+ * file's thumbnail (or a type icon, or a count when dragging several rows)
+ * plus its name. A live element positioned by useDragMove — not a
+ * setDragImage snapshot, which WebKit renders as a generic rectangle. */
+export function DragGhost({ drag, ghostRef }: DragGhostProps) {
+  if (!drag) return null;
   return (
     <div
-      ref={refs.chipRef}
+      ref={ghostRef}
       aria-hidden
-      className="pointer-events-none fixed -top-[1000px] -left-[1000px] flex max-w-48 items-center gap-2 rounded-lg bg-kumo-base px-3 py-2 shadow-lg ring-1 ring-kumo-line"
+      style={{ left: drag.x, top: drag.y }}
+      className="lopload-pop-in pointer-events-none fixed z-50 flex max-w-48 items-center gap-2 rounded-full bg-kumo-elevated py-1.5 pl-2 pr-3 shadow-lg ring-1 ring-kumo-line"
     >
-      <span ref={refs.folderIconRef} style={{ display: "none" }}>
+      {drag.thumbnailSrc !== undefined ? (
+        <img
+          src={drag.thumbnailSrc}
+          alt=""
+          className="lopload-media-outline h-6 w-6 shrink-0 rounded-full object-cover"
+        />
+      ) : drag.variant === "folder" ? (
         <FolderIcon size={18} weight="fill" className="shrink-0 text-kumo-brand" />
-      </span>
-      <span ref={refs.fileIconRef} style={{ display: "none" }}>
-        <FileIcon size={18} className="shrink-0 text-kumo-subtle" />
-      </span>
-      <span ref={refs.filesIconRef} style={{ display: "none" }}>
+      ) : drag.variant === "files" ? (
         <FilesIcon size={18} className="shrink-0 text-kumo-subtle" />
-      </span>
-      <img
-        ref={refs.thumbRef}
-        alt=""
-        style={{ display: "none" }}
-        className="lopload-media-outline h-6 w-6 shrink-0 rounded object-cover"
-      />
-      <span ref={refs.labelRef} className="lopload-body truncate text-sm" />
+      ) : (
+        <FileIcon size={18} className="shrink-0 text-kumo-subtle" />
+      )}
+      <span className="lopload-body truncate text-sm">{drag.label}</span>
     </div>
   );
 }

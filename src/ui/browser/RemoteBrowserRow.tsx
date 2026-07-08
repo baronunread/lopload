@@ -1,7 +1,8 @@
 import { Button, Table } from "@cloudflare/kumo";
 import { DotsThreeVerticalIcon } from "@phosphor-icons/react";
-import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { RemoteEntry } from "../../lib/types";
+import type { FolderInfo } from "../services";
 import { formatBytes, formatDate } from "../format";
 import { Thumbnail } from "../Thumbnail";
 
@@ -10,16 +11,17 @@ export interface RemoteBrowserRowProps {
   connectionId: string;
   isSelected: boolean;
   isDropTarget: boolean;
-  /** Only present for folder rows — spread onto the <tr> to accept drops. */
+  /** Lazily computed size/modified stats for folder rows (S3 folders carry
+   * no metadata of their own); undefined while still loading. */
+  folderMeta?: FolderInfo;
+  /** Only present for folder rows — spread onto the <tr> so hovering it
+   * during a drag marks it as the drop target. */
   dropTargetHandlers?: {
-    onDragOver: (e: DragEvent) => void;
-    onDragEnter: (e: DragEvent) => void;
-    onDragLeave: (e: DragEvent) => void;
-    onDrop: (e: DragEvent) => void;
+    onMouseEnter: () => void;
+    onMouseLeave: () => void;
   };
   onClick: (e: ReactMouseEvent) => void;
-  onDragStart: (e: DragEvent) => void;
-  onDragEnd: () => void;
+  onMouseDown: (e: ReactMouseEvent) => void;
   onDoubleClick: () => void;
   onContextMenu: (e: ReactMouseEvent) => void;
   onActionsClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
@@ -34,15 +36,18 @@ export function RemoteBrowserRow({
   connectionId,
   isSelected,
   isDropTarget,
+  folderMeta,
   dropTargetHandlers,
   onClick,
-  onDragStart,
-  onDragEnd,
+  onMouseDown,
   onDoubleClick,
   onContextMenu,
   onActionsClick,
   style,
 }: RemoteBrowserRowProps) {
+  const isFolder = entry.kind === "folder";
+  const size = isFolder ? folderMeta?.totalSize : entry.size;
+  const lastModified = isFolder ? (folderMeta?.lastModified ?? undefined) : entry.lastModified;
   return (
     <Table.Row
       style={style}
@@ -53,10 +58,8 @@ export function RemoteBrowserRow({
             ? "bg-kumo-brand/10 ring-1 ring-inset ring-kumo-brand/50 hover:bg-kumo-brand/15"
             : "hover:bg-kumo-tint"
       }`}
-      draggable
       onClick={onClick}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      onMouseDown={onMouseDown}
       {...dropTargetHandlers}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
@@ -70,11 +73,11 @@ export function RemoteBrowserRow({
         />
         <span className="lopload-body cursor-default truncate select-none">{entry.name}</span>
       </Table.Cell>
-      <Table.Cell className="lopload-body whitespace-nowrap p-2 text-kumo-subtle sm:p-3">
-        {entry.kind === "file" ? formatBytes(entry.size ?? 0) : "—"}
+      <Table.Cell className="lopload-body whitespace-nowrap p-2 text-kumo-subtle tabular-nums sm:p-3">
+        {size !== undefined ? formatBytes(size) : "—"}
       </Table.Cell>
-      <Table.Cell className="hidden whitespace-nowrap p-2 lopload-body text-kumo-subtle sm:table-cell sm:p-3">
-        {formatDate(entry.lastModified)}
+      <Table.Cell className="hidden whitespace-nowrap p-2 lopload-body text-kumo-subtle tabular-nums sm:table-cell sm:p-3">
+        {lastModified !== undefined ? formatDate(lastModified) : "—"}
       </Table.Cell>
       <Table.Cell className="p-1 text-right sm:p-2">
         <Button

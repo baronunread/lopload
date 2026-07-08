@@ -1,8 +1,9 @@
 import { Table } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretUpIcon } from "@phosphor-icons/react";
-import { useRef, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RemoteEntry } from "../../lib/types";
+import type { FolderInfo } from "../services";
 import { RemoteBrowserRow } from "./RemoteBrowserRow";
 import type { SortKey, SortState } from "./sort";
 
@@ -13,17 +14,16 @@ export interface RemoteBrowserTableProps {
   connectionId: string;
   selected: Set<string>;
   dropTarget: string | null;
+  /** Lazily computed per-folder stats, keyed by folder key. */
+  folderMeta: Record<string, FolderInfo>;
   dropTargetHandlersFor: (entry: RemoteEntry) =>
     | {
-        onDragOver: (e: DragEvent) => void;
-        onDragEnter: (e: DragEvent) => void;
-        onDragLeave: (e: DragEvent) => void;
-        onDrop: (e: DragEvent) => void;
+        onMouseEnter: () => void;
+        onMouseLeave: () => void;
       }
     | undefined;
   onRowClick: (entry: RemoteEntry, e: ReactMouseEvent) => void;
-  onRowDragStart: (entry: RemoteEntry, e: DragEvent) => void;
-  onRowDragEnd: () => void;
+  onRowMouseDown: (entry: RemoteEntry, e: ReactMouseEvent) => void;
   onRowDoubleClick: (entry: RemoteEntry) => void;
   onRowContextMenu: (entry: RemoteEntry, e: ReactMouseEvent) => void;
   onRowActionsClick: (entry: RemoteEntry, e: ReactMouseEvent<HTMLButtonElement>) => void;
@@ -74,10 +74,10 @@ export function RemoteBrowserTable({
   connectionId,
   selected,
   dropTarget,
+  folderMeta,
   dropTargetHandlersFor,
   onRowClick,
-  onRowDragStart,
-  onRowDragEnd,
+  onRowMouseDown,
   onRowDoubleClick,
   onRowContextMenu,
   onRowActionsClick,
@@ -143,10 +143,10 @@ export function RemoteBrowserTable({
                 connectionId={connectionId}
                 isSelected={selected.has(entry.key)}
                 isDropTarget={isFolder && dropTarget === entry.key}
+                folderMeta={isFolder ? folderMeta[entry.key] : undefined}
                 dropTargetHandlers={dropTargetHandlersFor(entry)}
                 onClick={(e) => onRowClick(entry, e)}
-                onDragStart={(e) => onRowDragStart(entry, e)}
-                onDragEnd={onRowDragEnd}
+                onMouseDown={(e) => onRowMouseDown(entry, e)}
                 onDoubleClick={() => onRowDoubleClick(entry)}
                 onContextMenu={(e) => onRowContextMenu(entry, e)}
                 onActionsClick={(e) => onRowActionsClick(entry, e)}

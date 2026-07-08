@@ -41,23 +41,14 @@ function Harness() {
   );
 }
 
-/** Minimal DataTransfer stand-in — jsdom doesn't implement the real one, but
- * fireEvent happily accepts anything shaped like it as the event's payload. */
-function makeDataTransfer() {
-  const store = new Map<string, string>();
-  const types: string[] = [];
-  return {
-    effectAllowed: "none",
-    dropEffect: "none",
-    types,
-    setData(type: string, value: string) {
-      if (!types.includes(type)) types.push(type);
-      store.set(type, value);
-    },
-    getData(type: string) {
-      return store.get(type) ?? "";
-    },
-  };
+/** Drives the pointer-based drag-to-move (internal moves don't use HTML5
+ * DnD — Tauri swallows DOM drop events): press the source row, move past
+ * the drag threshold, hover the target, release. */
+function dragRowTo(source: HTMLElement, target: HTMLElement) {
+  fireEvent.mouseDown(source, { button: 0, clientX: 10, clientY: 10 });
+  fireEvent.mouseMove(document, { clientX: 60, clientY: 60 });
+  fireEvent.mouseOver(target);
+  fireEvent.mouseUp(document);
 }
 
 describe("RemoteBrowser", () => {
@@ -207,7 +198,7 @@ describe("RemoteBrowser", () => {
     await screen.findByText("readme.txt", {}, { timeout: 2000 });
   });
 
-  test("double-clicking a file opens it with the default app; folders still navigate", async () => {
+  test("double-clicking a file opens its info dialog; folders still navigate", async () => {
     const services = createFakeServices({
       entriesByPrefix: {
         "conn-1::": ROOT_ENTRIES,
@@ -223,11 +214,15 @@ describe("RemoteBrowser", () => {
     );
     await screen.findByText("readme.txt");
 
+    // Double-click must never kick off a location-less download — it shows
+    // the file's details instead.
     await user.dblClick(screen.getByText("readme.txt"));
-    expect(services.openFileCalls).toEqual([
-      { connectionId: "conn-1", key: "readme.txt", name: "readme.txt" },
-    ]);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("File info")).toBeInTheDocument();
+    expect(services.openFileCalls).toEqual([]);
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     // Folders still navigate on double-click, without opening anything.
     await user.dblClick(screen.getByText("photos"));
@@ -274,10 +269,7 @@ describe("RemoteBrowser", () => {
     expect(fileRow).toBeTruthy();
     expect(folderRow).toBeTruthy();
 
-    const dataTransfer = makeDataTransfer();
-    fireEvent.dragStart(fileRow as HTMLElement, { dataTransfer });
-    fireEvent.dragEnter(folderRow as HTMLElement, { dataTransfer });
-    fireEvent.drop(folderRow as HTMLElement, { dataTransfer });
+    dragRowTo(fileRow as HTMLElement, folderRow as HTMLElement);
 
     await screen.findByText("readme.txt"); // still rendered while the move resolves
     expect(services.moveCalls).toContainEqual({
@@ -305,10 +297,7 @@ describe("RemoteBrowser", () => {
     fireEvent.click(rowFor("a.txt"));
     fireEvent.click(rowFor("c.txt"), { shiftKey: true });
 
-    const dataTransfer = makeDataTransfer();
-    fireEvent.dragStart(rowFor("b.txt"), { dataTransfer });
-    fireEvent.dragEnter(rowFor("photos"), { dataTransfer });
-    fireEvent.drop(rowFor("photos"), { dataTransfer });
+    dragRowTo(rowFor("b.txt"), rowFor("photos"));
 
     await waitFor(() => {
       expect(services.moveCalls).toContainEqual({
@@ -352,10 +341,7 @@ describe("RemoteBrowser", () => {
 
     // Dragging a.txt now moves only itself — if Escape hadn't cleared the
     // two-row selection, this would have moved b.txt along with it.
-    const dataTransfer = makeDataTransfer();
-    fireEvent.dragStart(rowFor("a.txt"), { dataTransfer });
-    fireEvent.dragEnter(rowFor("photos"), { dataTransfer });
-    fireEvent.drop(rowFor("photos"), { dataTransfer });
+    dragRowTo(rowFor("a.txt"), rowFor("photos"));
 
     await waitFor(() => {
       expect(services.moveCalls).toEqual([
@@ -551,10 +537,10 @@ describe("RemoteBrowser", () => {
     await screen.findByText("a.txt");
     expect(filterInput).toHaveValue("");
 
-    const dataTransfer = makeDataTransfer();
-    fireEvent.dragStart(screen.getByText("a.txt").closest("tr") as HTMLElement, { dataTransfer });
-    fireEvent.dragEnter(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer });
-    fireEvent.drop(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer });
+    dragRowTo(
+      screen.getByText("a.txt").closest("tr") as HTMLElement,
+      screen.getByText("photos").closest("tr") as HTMLElement,
+    );
 
     await waitFor(() => {
       expect(services.moveCalls).toContainEqual({
@@ -567,10 +553,10 @@ describe("RemoteBrowser", () => {
     // A second Escape (filter already empty) clears the selection.
     fireEvent.click(screen.getByText("b.txt").closest("tr") as HTMLElement);
     fireEvent.keyDown(document, { key: "Escape" });
-    const dataTransfer2 = makeDataTransfer();
-    fireEvent.dragStart(screen.getByText("c.txt").closest("tr") as HTMLElement, { dataTransfer: dataTransfer2 });
-    fireEvent.dragEnter(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer: dataTransfer2 });
-    fireEvent.drop(screen.getByText("photos").closest("tr") as HTMLElement, { dataTransfer: dataTransfer2 });
+    dragRowTo(
+      screen.getByText("c.txt").closest("tr") as HTMLElement,
+      screen.getByText("photos").closest("tr") as HTMLElement,
+    );
 
     await waitFor(() => {
       expect(services.moveCalls).toContainEqual({

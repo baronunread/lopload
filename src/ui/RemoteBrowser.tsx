@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type DragEvent,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Breadcrumbs,
   Button,
@@ -26,11 +20,12 @@ import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { CredentialsReentryForm } from "./CredentialsReentryForm";
 import { DragGhost } from "./browser/DragGhost";
+import { MoveToDialog } from "./browser/MoveToDialog";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
 import { TrashDialog } from "./browser/TrashDialog";
 import { filterEntries } from "./browser/filter";
 import { DEFAULT_SORT, nextSortState, sortEntries, type SortKey } from "./browser/sort";
-import { useDragMove, MOVE_DRAG_TYPE } from "./browser/useDragMove";
+import { useDragMove } from "./browser/useDragMove";
 import { useSelection } from "./browser/useSelection";
 
 export interface RemoteBrowserProps {
@@ -42,6 +37,19 @@ export interface RemoteBrowserProps {
 type PendingAction = { kind: "new-folder" } | { kind: "rename"; entry: RemoteEntry };
 
 type FolderInfoState = { status: "loading" } | ({ status: "loaded" } & FolderInfo);
+
+/** Breadcrumb ancestors are drop targets during a drag-to-move: every
+ * candidate gets a dashed hint ring so it reads as droppable at all, and
+ * the hovered one lights up like folder rows do. Idle crumbs keep a
+ * transparent box (never `display: contents` — backgrounds and rings don't
+ * render on a box-less element). */
+function crumbDropClass(dragActive: boolean, isTarget: boolean): string {
+  const base = "-mx-1 inline-flex items-center rounded-md px-1 py-0.5";
+  if (!dragActive) return base;
+  return isTarget
+    ? `${base} bg-kumo-brand/20 ring-1 ring-kumo-brand`
+    : `${base} ring-1 ring-dashed ring-kumo-line`;
+}
 
 /** How long to wait, after the last relevant engine event, before re-listing
  * the current folder — batches of many files each finishing individually
@@ -67,6 +75,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const [filterQuery, setFilterQuery] = useState("");
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [showTrash, setShowTrash] = useState(false);
+  const [moveTargets, setMoveTargets] = useState<string[] | null>(null);
+  const [folderMeta, setFolderMeta] = useState<Record<string, FolderInfo>>({});
   const toasts = useKumoToastManager();
 
   const rows = sortEntries(filterEntries(entries, filterQuery), sort);
@@ -165,6 +175,24 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     return () => document.removeEventListener("keydown", handleSelectAll);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
+
+  // S3 folders carry no size/date of their own, so after every listing the
+  // stats for each folder row are computed in the background (one recursive
+  // list per folder) and fill in as they arrive; rows show "—" meanwhile.
+  useEffect(() => {
+    let cancelled = false;
+    setFolderMeta({});
+    for (const entry of entries) {
+      if (entry.kind !== "folder") continue;
+      void services.browser.folderInfo(connectionId, entry.key).then((info) => {
+        if (!cancelled) setFolderMeta((prev) => ({ ...prev, [entry.key]: info }));
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries]);
 
   // Computes the folder info dialog's stats on demand once it's opened for a
   // folder — S3 "folders" have no metadata of their own to show up-front.
@@ -288,9 +316,13 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
    * keeping its own name. */
   async function moveOne(fromKey: string, toPrefix: string): Promise<void> {
     if (!fromKey || fromKey === toPrefix) return;
-    const name = entries.find((e) => e.key === fromKey)?.name;
-    if (!name) return;
-    const toKey = `${toPrefix}${name}`;
+    const entry = entries.find((e) => e.key === fromKey);
+    if (!entry) return;
+    // Folder destinations must keep the trailing slash — both backends
+    // splice child keys as `toKey + rest`, so "docs/photos" (no slash)
+    // would silently corrupt every moved key.
+    const toKey =
+      entry.kind === "folder" ? `${toPrefix}${entry.name}/` : `${toPrefix}${entry.name}`;
     if (toKey === fromKey) return;
     await services.browser.move(connectionId, fromKey, toKey);
   }
@@ -298,7 +330,15 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   /** Moves every dragged key to live under `toPrefix` — a single row, or the
    * whole selection when dragging one of several selected rows. */
   async function handleMove(fromKeys: string[], toPrefix: string) {
-    await Promise.all(fromKeys.map((key) => moveOne(key, toPrefix)));
+    try {
+      await Promise.all(fromKeys.map((key) => moveOne(key, toPrefix)));
+    } catch (err) {
+      toasts.add({
+        variant: "error",
+        title: "Couldn't move",
+        description: err instanceof Error ? err.message : "Something went wrong.",
+      });
+    }
     await refresh();
   }
 
@@ -346,6 +386,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           onSelect: () => void handleBulkDownload(selectedEntries),
         },
         {
+          label: `Move ${selectedEntries.length} items to…`,
+          onSelect: () => setMoveTargets(selectedEntries.map((r) => r.key)),
+        },
+        {
           label: `Move ${selectedEntries.length} items to Trash`,
           danger: true,
           onSelect: () => void handleBulkDeleteToTrash(selectedEntries),
@@ -376,6 +420,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           onSelect: () => void handleDownload(entry),
         },
         {
+          label: "Move to…",
+          onSelect: () => setMoveTargets([entry.key]),
+        },
+        {
           label: "Copy link",
           onSelect: () => {
             void services.browser.copyLink(connectionId, entry.key).then((link) => {
@@ -397,34 +445,31 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     return items;
   }
 
-  function handleRowDragStart(entry: RemoteEntry, e: DragEvent) {
+  function handleRowMouseDown(entry: RemoteEntry, e: ReactMouseEvent) {
     const isFolder = entry.kind === "folder";
     const isSelected = selection.selected.has(entry.key);
     const isMultiDrag = isSelected && selection.selected.size > 1;
     const dragKeys = isMultiDrag ? Array.from(selection.selected) : [entry.key];
-    if (!isMultiDrag) {
-      selection.setSelected(new Set([entry.key]));
-    }
-    e.dataTransfer.setData(MOVE_DRAG_TYPE, JSON.stringify(dragKeys));
-    e.dataTransfer.effectAllowed = "move";
-    const label = dragKeys.length > 1 ? `${dragKeys.length} items` : entry.name;
     // Single-file drags reuse the row's rendered thumbnail (if it has one)
     // so the chip shows the file itself rather than a generic glyph.
     const thumbnailSrc =
       dragKeys.length === 1 && !isFolder && e.currentTarget instanceof HTMLElement
         ? (e.currentTarget.querySelector("img")?.src ?? undefined)
         : undefined;
-    dragMove.showDragChip(
-      e,
-      label,
-      dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file",
+    dragMove.beginPress(e, {
+      keys: dragKeys,
+      label: dragKeys.length > 1 ? `${dragKeys.length} items` : entry.name,
+      variant: dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file",
       thumbnailSrc,
-    );
+      onBegin: () => {
+        if (!isMultiDrag) selection.setSelected(new Set([entry.key]));
+      },
+    });
   }
 
   function handleRowDoubleClick(entry: RemoteEntry) {
     if (entry.kind === "folder") navigate(entry.key);
-    else void services.openFile(connectionId, entry.key, entry.name);
+    else setInfoEntry(entry);
   }
 
   function handleRowActionsClick(entry: RemoteEntry, e: ReactMouseEvent<HTMLButtonElement>) {
@@ -462,23 +507,22 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
+      // Internal row moves are pointer-driven (see useDragMove), so any
+      // HTML5 drag reaching these handlers is an OS file drag — show the
+      // upload overlay.
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
         e.preventDefault();
         dragCounter.current += 1;
         setDragging(true);
       }}
-      onDragLeave={(e) => {
-        if (e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
+      onDragLeave={() => {
         dragCounter.current -= 1;
         if (dragCounter.current <= 0) setDragging(false);
       }}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
         e.preventDefault();
       }}
       onDrop={(e) => {
-        if (e.dataTransfer.types.includes(MOVE_DRAG_TYPE)) return;
         e.preventDefault();
       }}
       onClick={() => selection.clear()}
@@ -486,7 +530,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Breadcrumbs>
           <span
-            className={`contents ${dragMove.dropTarget === "" ? "rounded bg-kumo-tint" : ""}`}
+            className={crumbDropClass(dragMove.drag !== null, dragMove.dropTarget === "")}
             onClick={(e) => {
               e.preventDefault();
               navigate("");
@@ -507,7 +551,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                   <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
                 ) : (
                   <span
-                    className={`contents ${dragMove.dropTarget === segPrefix ? "rounded bg-kumo-tint" : ""}`}
+                    className={crumbDropClass(
+                      dragMove.drag !== null,
+                      dragMove.dropTarget === segPrefix,
+                    )}
                     onClick={(e) => {
                       e.preventDefault();
                       navigate(segPrefix);
@@ -593,6 +640,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           connectionId={connectionId}
           selected={selection.selected}
           dropTarget={dragMove.dropTarget}
+          folderMeta={folderMeta}
           dropTargetHandlersFor={(entry) =>
             entry.kind === "folder" ? dragMove.dropTargetHandlers(entry.key) : undefined
           }
@@ -600,11 +648,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
             e.stopPropagation();
             selection.handleRowClick(entry, e);
           }}
-          onRowDragStart={(entry, e) => {
-            e.stopPropagation();
-            handleRowDragStart(entry, e);
-          }}
-          onRowDragEnd={dragMove.clearDropTarget}
+          onRowMouseDown={handleRowMouseDown}
           onRowDoubleClick={handleRowDoubleClick}
           onRowContextMenu={handleRowContextMenu}
           onRowActionsClick={handleRowActionsClick}
@@ -662,11 +706,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         {infoEntry && (
           <Dialog className="p-6">
             <Dialog.Title>
-              {infoEntry.kind === "folder" ? "Folder info" : "File info"} (debug placeholder)
+              {infoEntry.kind === "folder" ? "Folder info" : "File info"}
             </Dialog.Title>
-            <Dialog.Description>
-              Raw listing data, shown as-is — a real detail view will replace this.
-            </Dialog.Description>
             <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
               <dt className="text-kumo-subtle">Name</dt>
               <dd className="break-all">{infoEntry.name}</dd>
@@ -711,7 +752,17 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         </div>
       )}
 
-      <DragGhost refs={dragMove.chipRefs} />
+      <DragGhost drag={dragMove.drag} ghostRef={dragMove.ghostRef} />
+
+      {moveTargets && (
+        <MoveToDialog
+          connectionId={connectionId}
+          sourceKeys={moveTargets}
+          currentPrefix={prefix}
+          onClose={() => setMoveTargets(null)}
+          onMove={handleMove}
+        />
+      )}
 
       {showTrash && (
         <TrashDialog
