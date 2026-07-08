@@ -118,10 +118,16 @@ describe("deleteFile", () => {
 });
 
 describe("copyLink", () => {
-  test("returns a presigned GET URL", async () => {
-    const url = await copyLink(client, "my-bucket", "a/b.txt");
+  test("returns a presigned GET URL with the requested expiry", async () => {
+    const url = await copyLink(client, "my-bucket", "a/b.txt", 3600);
     expect(url).toContain("a/b.txt");
     expect(url).toContain("X-Amz-Expires=");
+    const expiresMatch = url.match(/X-Amz-Expires=(\d+)/);
+    expect(expiresMatch?.[1]).toBe("3600");
+  });
+
+  test("caps the expiry at SigV4's 7-day hard maximum", async () => {
+    const url = await copyLink(client, "my-bucket", "a/b.txt", 30 * 24 * 60 * 60);
     const expiresMatch = url.match(/X-Amz-Expires=(\d+)/);
     expect(expiresMatch?.[1]).toBe(String(7 * 24 * 60 * 60));
   });

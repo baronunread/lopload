@@ -474,16 +474,22 @@ export async function createFolder(
   );
 }
 
-const COPY_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
+/** SigV4's hard ceiling on presigned URL lifetime — AWS (and S3-compatible
+ * stores like MinIO) reject anything past this. Callers must pick an expiry
+ * at or under this value. */
+export const MAX_COPY_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
 
-/** Presigned GET URL, valid for 7 days. */
+/** Presigned GET URL, valid for `expiresInSeconds` (capped at
+ * MAX_COPY_LINK_EXPIRY_SECONDS, SigV4's hard maximum). */
 export async function copyLink(
   client: S3Client,
   bucket: string,
   key: string,
+  expiresInSeconds: number,
 ): Promise<string> {
   const command = new GetObjectCommand({ Bucket: bucket, Key: key });
-  return getSignedUrl(client, command, { expiresIn: COPY_LINK_EXPIRY_SECONDS });
+  const expiresIn = Math.min(expiresInSeconds, MAX_COPY_LINK_EXPIRY_SECONDS);
+  return getSignedUrl(client, command, { expiresIn });
 }
 
 export type TestConnectionResult = { ok: true } | { ok: false; error: PlainError };

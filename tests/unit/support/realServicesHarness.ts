@@ -179,10 +179,8 @@ const MOCKS: Array<{ specifier: string; fake: () => unknown; real: unknown; rest
     fake: () => ({
       setTrayStatus: () => {},
       setTrayConnections: () => {},
-      setTrayLastUpload: () => {},
       onRetryFailedRequested: () => () => {},
       onUploadFilesRequested: () => () => {},
-      onCopyLinkRequested: () => () => {},
     }),
     real: REAL_TRAY,
   },

@@ -119,8 +119,8 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       async delete(_connectionId, key) {
         deleteCalls.push(key);
       },
-      async copyLink(_connectionId, key) {
-        return `https://example.test/${key}`;
+      async copyLink(_connectionId, key, expiresInSeconds) {
+        return `https://example.test/${key}?expires=${expiresInSeconds}`;
       },
       async getThumbnailUrl() {
         return null;

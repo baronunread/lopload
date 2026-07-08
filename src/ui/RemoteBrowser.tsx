@@ -22,6 +22,7 @@ import { CredentialsReentryForm } from "./CredentialsReentryForm";
 import { DragGhost } from "./browser/DragGhost";
 import { MoveToDialog } from "./browser/MoveToDialog";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
+import { ShareLinkDialog } from "./browser/ShareLinkDialog";
 import { TrashDialog } from "./browser/TrashDialog";
 import { filterEntries } from "./browser/filter";
 import { DEFAULT_SORT, nextSortState, sortEntries, type SortKey } from "./browser/sort";
@@ -76,6 +77,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [showTrash, setShowTrash] = useState(false);
   const [moveTargets, setMoveTargets] = useState<string[] | null>(null);
+  const [shareEntry, setShareEntry] = useState<RemoteEntry | null>(null);
   const [folderMeta, setFolderMeta] = useState<Record<string, FolderInfo>>({});
   const toasts = useKumoToastManager();
 
@@ -423,14 +425,9 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           label: "Move to…",
           onSelect: () => setMoveTargets([entry.key]),
         },
-        {
-          label: "Copy link",
-          onSelect: () => {
-            void services.browser.copyLink(connectionId, entry.key).then((link) => {
-              void navigator.clipboard?.writeText(link);
-            });
-          },
-        },
+        ...(entry.kind === "file"
+          ? [{ label: "Copy link…", onSelect: () => setShareEntry(entry) }]
+          : []),
         {
           label: entry.kind === "folder" ? "Folder info" : "File info",
           onSelect: () => setInfoEntry(entry),
@@ -761,6 +758,15 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           currentPrefix={prefix}
           onClose={() => setMoveTargets(null)}
           onMove={handleMove}
+        />
+      )}
+
+      {shareEntry && (
+        <ShareLinkDialog
+          connectionId={connectionId}
+          fileKey={shareEntry.key}
+          fileName={shareEntry.name}
+          onClose={() => setShareEntry(null)}
         />
       )}
 

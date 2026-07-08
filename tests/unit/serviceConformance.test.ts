@@ -311,7 +311,7 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
   test("browser.copyLink returns a URL", async () => {
     const services = await impl.services();
     const conn = await makeConnection(services);
-    const link = await services.browser.copyLink(conn.id, "some/file.txt");
+    const link = await services.browser.copyLink(conn.id, "some/file.txt", 3600);
     expect(typeof link).toBe("string");
     expect(link.startsWith("http")).toBe(true);
   });
