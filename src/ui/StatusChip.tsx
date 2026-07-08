@@ -15,30 +15,19 @@ export interface StatusChipProps {
   direction?: Transfer["direction"];
 }
 
-/**
- * Renders one of the status states from the spec as a labeled chip (six
- * counting both terminal-success states, "Uploaded ✓"/"Downloaded ✓").
- * "Sending" additionally shows a live Meter.
- */
 export function StatusChip({ state, direction }: StatusChipProps) {
   const info = chipInfo(state, direction);
-  const badge = (
-    <Badge
-      variant={VARIANT_BY_VISUAL[info.visual]}
-      className={info.visual === "amber-pulse" ? "animate-pulse" : undefined}
-    >
-      {info.label}
-    </Badge>
-  );
+  const sending = state.kind === "sending";
 
-  if (state.kind === "sending") {
+  if (sending) {
     return (
-      <div data-state="sending" className="flex min-w-40 flex-col gap-1">
-        {badge}
+      <div data-state="sending" className="flex min-w-40 items-center">
         <Meter
-          label={direction === "download" ? "Downloading" : "Sending"}
+          label={direction === "download" ? "Downloading" : "Uploading"}
           value={state.percent}
-          showValue={false}
+          showValue
+          className="w-full"
+          trackClassName="!h-1"
           indicatorClassName="bg-kumo-warning"
         />
       </div>
@@ -47,7 +36,12 @@ export function StatusChip({ state, direction }: StatusChipProps) {
 
   return (
     <span data-state={info.state} className="lopload-settle inline-flex">
-      {badge}
+      <Badge
+        variant={VARIANT_BY_VISUAL[info.visual]}
+        className={info.visual === "amber-pulse" ? "animate-pulse" : undefined}
+      >
+        {info.label}
+      </Badge>
     </span>
   );
 }

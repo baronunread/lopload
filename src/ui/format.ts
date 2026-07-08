@@ -5,7 +5,7 @@ import type { Transfer, TransferState } from "../lib/types";
 /** The exact five chip labels from the spec table — order matters for docs, not for logic. */
 export const STATUS_LABELS = {
   queued: "Queued",
-  sending: "Sending",
+  sending: "Uploading",
   checking: "Checking",
   uploaded: "Uploaded ✓",
   downloaded: "Downloaded ✓",

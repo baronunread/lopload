@@ -11,7 +11,7 @@ describe("StatusChip", () => {
       { state: { kind: "queued" }, label: "Queued", dataState: "queued" },
       {
         state: { kind: "sending", percent: 42 },
-        label: "Sending - 42%",
+        label: "Uploading",
         dataState: "sending",
       },
       { state: { kind: "checking" }, label: "Checking", dataState: "checking" },
