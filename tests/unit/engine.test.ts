@@ -5,13 +5,14 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 
+import { createCRC32 } from "hash-wasm";
+
 import {
   STATE_TRANSITIONS,
   TransferEngine,
   canTransition,
 } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
-import { md5Hex } from "../../src/lib/md5";
 import type { EngineEvent, Transfer, TransferState } from "../../src/lib/types";
 import type { LocalFileReader } from "../../src/lib/s3/multipart";
 
@@ -37,8 +38,12 @@ function makeReader(files: Record<string, Uint8Array>): LocalFileReader {
   };
 }
 
-function q(hex: string): string {
-  return `"${hex}"`;
+async function crc32Base64(bytes: Uint8Array): Promise<string> {
+  const h = await createCRC32();
+  h.init();
+  h.update(bytes);
+  const raw = h.digest("binary") as Uint8Array;
+  return btoa(String.fromCharCode(...raw));
 }
 
 const ALL_STATES: TransferState["kind"][] = [
@@ -114,7 +119,7 @@ describe("TransferEngine — single-part upload", () => {
   test("queued -> sending -> checking -> uploaded, persisted at every step", async () => {
     const body = new TextEncoder().encode("small file");
     const reader = makeReader({ "/local/a.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
+    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: await crc32Base64(body) });
 
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
@@ -151,10 +156,10 @@ describe("TransferEngine — single-part upload", () => {
     expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 1, downloaded: 0, failed: 0 });
   });
 
-  test("ETag mismatch -> failed with errorClass verification, sticky", async () => {
+  test("ChecksumCRC32 mismatch -> failed with errorClass verification, sticky", async () => {
     const body = new TextEncoder().encode("mismatched");
     const reader = makeReader({ "/local/b.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q("f".repeat(32)) });
+    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: "AAAAAA==" });
 
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
@@ -212,7 +217,7 @@ describe("TransferEngine — single-part upload", () => {
     s3Mock
       .on(PutObjectCommand)
       .rejectsOnce({ name: "AccessDenied" })
-      .resolves({ ETag: q(await md5Hex(body)) });
+      .resolves({ ChecksumCRC32: await crc32Base64(body) });
 
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
@@ -246,9 +251,14 @@ describe("TransferEngine — concurrency and batching", () => {
     });
     const reader = makeReader(files);
 
+    async function bodyToBytes(body: unknown): Promise<Uint8Array> {
+      if (body instanceof Uint8Array) return body;
+      if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+      return new Uint8Array(0);
+    }
     s3Mock.on(PutObjectCommand).callsFake(async (input) => {
-      const body = input.Body as Uint8Array;
-      return { ETag: q(await md5Hex(body)) };
+      const body = await bodyToBytes(input.Body);
+      return { ChecksumCRC32: await crc32Base64(body) };
     });
 
     const store = new MemoryTransferStore();

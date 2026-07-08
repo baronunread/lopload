@@ -1,7 +1,8 @@
 import { Upload } from "@aws-sdk/lib-storage";
+import { ChecksumAlgorithm } from "@aws-sdk/client-s3";
+import { createCRC32 } from "hash-wasm";
 
 import type { Transfer } from "../types";
-import { Md5, bytesToHex } from "../md5";
 import { createLogger } from "../logger";
 
 const log = createLogger("upload");
@@ -29,20 +30,14 @@ export interface UploadDeps {
   signal?: AbortSignal;
 }
 
-function stripQuotes(etag: string): string {
-  return etag.replace(/^"|"$/g, "");
-}
-
-/** A plain single-part ETag is a bare 32-hex-char MD5 we can verify against. */
-const PLAIN_MD5_ETAG = /^[0-9a-f]{32}$/i;
-
 export async function uploadTransfer(
   transfer: Transfer,
   deps: UploadDeps,
 ): Promise<void> {
   const { client, bucket, reader, onProgress, signal } = deps;
   const size = transfer.size;
-  const hasher = await Md5.create();
+  const hasher = await createCRC32();
+  hasher.init();
   const chunks: Uint8Array[] = [];
   let offset = 0;
 
@@ -55,12 +50,18 @@ export async function uploadTransfer(
     onProgress?.(offset, size);
   }
 
-  const localMd5Hex = bytesToHex(hasher.digest());
+  const crc32Bytes = hasher.digest("binary") as Uint8Array;
+  const localCrc32 = btoa(String.fromCharCode(...crc32Bytes));
   const body = new Blob(chunks);
 
   const upload = new Upload({
     client,
-    params: { Bucket: bucket, Key: transfer.key, Body: body },
+    params: {
+      Bucket: bucket,
+      Key: transfer.key,
+      Body: body,
+      ChecksumAlgorithm: ChecksumAlgorithm.CRC32,
+    },
     queueSize: 4,
     partSize: PART_SIZE,
     leavePartsOnError: false,
@@ -71,9 +72,8 @@ export async function uploadTransfer(
   }
 
   const result = await upload.done();
-  const serverEtag = stripQuotes(result.ETag ?? "").toLowerCase();
 
-  if (PLAIN_MD5_ETAG.test(serverEtag) && serverEtag !== localMd5Hex.toLowerCase()) {
+  if (result.ChecksumCRC32 && result.ChecksumCRC32 !== localCrc32) {
     throw new VerificationError(
       "The uploaded file's checksum did not match what was sent.",
     );

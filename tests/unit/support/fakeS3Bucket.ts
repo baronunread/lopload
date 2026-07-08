@@ -24,6 +24,7 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 
+import { createCRC32 } from "hash-wasm";
 import { md5Hex } from "../../../src/lib/md5";
 
 interface StoredObject {
@@ -41,6 +42,14 @@ function shouldFail(...values: (string | undefined)[]): boolean {
 }
 
 const SLOW_DELAY_MS = 60;
+
+async function crc32Base64(bytes: Uint8Array): Promise<string> {
+  const h = await createCRC32();
+  h.init();
+  h.update(bytes);
+  const raw = h.digest("binary") as Uint8Array;
+  return btoa(String.fromCharCode(...raw));
+}
 
 async function bodyToBytes(body: unknown): Promise<Uint8Array> {
   if (body instanceof Uint8Array) return body;
@@ -85,12 +94,13 @@ export function installFakeS3(client: S3Client) {
     }
     const body = await bodyToBytes(input.Body);
     const etag = `"${await md5Hex(body)}"`;
+    const crc32 = await crc32Base64(body);
     objects.set(partitionKey(input.Bucket!, input.Key!), {
       body,
       etag,
       lastModified: new Date(),
     });
-    return { ETag: etag };
+    return { ETag: etag, ChecksumCRC32: crc32 };
   });
 
   s3Mock.on(GetObjectCommand).callsFake(async (input) => {

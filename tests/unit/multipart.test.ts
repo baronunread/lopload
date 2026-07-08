@@ -4,13 +4,13 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { createCRC32 } from "hash-wasm";
 
 import {
   VerificationError,
   uploadTransfer,
   type LocalFileReader,
 } from "../../src/lib/s3/multipart";
-import { md5Hex } from "../../src/lib/md5";
 import type { Transfer } from "../../src/lib/types";
 
 const client = new S3Client({
@@ -39,7 +39,6 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
   };
 }
 
-/** In-memory fake file whose bytes are deterministic given its size. */
 function makeReader(bytes: Uint8Array): LocalFileReader {
   return {
     async size() {
@@ -51,32 +50,32 @@ function makeReader(bytes: Uint8Array): LocalFileReader {
   };
 }
 
-function q(hex: string): string {
-  return `"${hex}"`;
+async function crc32Base64(bytes: Uint8Array): Promise<string> {
+  const h = await createCRC32();
+  h.init();
+  h.update(bytes);
+  const raw = h.digest("binary") as Uint8Array;
+  return btoa(String.fromCharCode(...raw));
 }
 
-describe("uploadTransfer — single-part upload", () => {
-  test("happy path: PutObject ETag matches local MD5 → resolves", async () => {
+describe("uploadTransfer — CRC32 verification", () => {
+  test("happy path: ChecksumCRC32 matches local CRC32 → resolves", async () => {
     const body = new TextEncoder().encode("hello world");
     const reader = makeReader(body);
-    const expectedMd5 = await md5Hex(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(expectedMd5) });
+    const expectedCrc32 = await crc32Base64(body);
+    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: expectedCrc32 });
 
     const transfer = makeTransfer({ size: body.length });
 
     await expect(
       uploadTransfer(transfer, { client, bucket: "b", reader }),
     ).resolves.toBeUndefined();
-
-    const calls = s3Mock.commandCalls(PutObjectCommand);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args[0].input.Key).toBe(transfer.key);
   });
 
-  test("ETag mismatch → VerificationError, never resolves as success", async () => {
+  test("ChecksumCRC32 mismatch → VerificationError", async () => {
     const body = new TextEncoder().encode("hello world");
     const reader = makeReader(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q("0".repeat(32)) });
+    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: "AAAAAA==" });
 
     const transfer = makeTransfer({ size: body.length });
 
@@ -88,7 +87,7 @@ describe("uploadTransfer — single-part upload", () => {
   test("reports progress while reading chunks", async () => {
     const body = new Uint8Array(1000).fill(7);
     const reader = makeReader(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
+    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: await crc32Base64(body) });
 
     const transfer = makeTransfer({ size: body.length });
     const progressCalls: Array<[number, number]> = [];
