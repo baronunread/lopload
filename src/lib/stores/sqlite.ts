@@ -179,8 +179,7 @@ function rowToTransfer(row: TransferRow): Transfer {
       break;
     case "sending":
       // Percent is in-memory-only progress, not persisted per PLAN.md's
-      // schema; a reloaded "sending" transfer resumes at 0 until the
-      // engine's resume logic recomputes real progress from parts.
+      // schema; a reloaded "sending" transfer will be marked as failed.
       state = { kind: "sending", percent: 0 };
       break;
     case "checking":

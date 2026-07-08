@@ -208,15 +208,8 @@ fn format_retry_label(failed: i64) -> String {
     format!("Retry failed ({failed})")
 }
 
-/// "Quit" normally, or "Quit — N transfers will resume" while transfers are
-/// in flight — they resume on next launch, so this is informational only.
-fn format_quit_label(uploading: i64) -> String {
-    if uploading > 0 {
-        let plural = if uploading == 1 { "" } else { "s" };
-        format!("Quit — {uploading} transfer{plural} will resume")
-    } else {
-        "Quit".to_string()
-    }
+fn format_quit_label(_uploading: i64) -> String {
+    "Quit".to_string()
 }
 
 /// Pushes engine-derived state to the tray menu: the status line, the
@@ -344,10 +337,9 @@ mod status_format_tests {
     }
 
     #[test]
-    fn quit_label_reflects_in_flight_count() {
+    fn quit_label_is_always_quit() {
         assert_eq!(format_quit_label(0), "Quit");
-        assert_eq!(format_quit_label(1), "Quit — 1 transfer will resume");
-        assert_eq!(format_quit_label(2), "Quit — 2 transfers will resume");
+        assert_eq!(format_quit_label(9), "Quit");
     }
 
     #[test]

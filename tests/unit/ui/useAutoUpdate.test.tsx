@@ -58,7 +58,7 @@ describe("useAutoUpdate", () => {
     await screen.findByText("Restart to update.");
   });
 
-  test("mentions in-flight transfers resuming instead of hiding the restart action", async () => {
+  test("warns about in-flight transfers being interrupted instead of hiding the restart action", async () => {
     const services = createFakeServices({ updateVersion: "9.9.9" });
     render(
       <ServicesProvider value={services}>
@@ -72,7 +72,7 @@ describe("useAutoUpdate", () => {
     });
 
     const button = await screen.findByRole("button", { name: "Restart and update" });
-    expect(screen.getByText((text) => text.includes("still going"))).toBeInTheDocument();
+    expect(screen.getByText((text) => text.includes("will be interrupted"))).toBeInTheDocument();
     expect(button).toBeInTheDocument();
   });
 

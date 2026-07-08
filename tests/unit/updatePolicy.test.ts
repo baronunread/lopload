@@ -32,10 +32,10 @@ describe("buildUpdateNotice", () => {
     expect(notice.actionLabel).toBe("Restart and update");
   });
 
-  test("reassures about in-flight transfers resuming, without blocking the action", () => {
+  test("warns about in-flight transfers being interrupted, without blocking the action", () => {
     const notice = buildUpdateNotice(true);
     expect(notice.body.toLowerCase()).toContain("transfers");
-    expect(notice.body.toLowerCase()).toMatch(/pick up|resum/);
+    expect(notice.body.toLowerCase()).toMatch(/interrupted|failed/);
     expect(notice.actionLabel).toBe("Restart and update");
   });
 });

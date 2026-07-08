@@ -58,7 +58,6 @@ export class InvalidTransitionError extends Error {
 }
 
 const CONCURRENCY = 3;
-const RESUMABLE_STATES: TransferState["kind"][] = ["queued", "sending", "checking"];
 
 /** Error classes worth retrying automatically — transient network trouble.
  * Everything else (credentials, verification, not-found…) fails immediately
@@ -124,8 +123,7 @@ export class TransferEngine {
    * or silently resurrecting the transfer after the fact. */
   private readonly cancelledIds = new Set<string>();
   private readonly autoRetryDelaysMs: number[];
-  /** Automatic retries consumed per transfer. In-memory only: a restart
-   * resets the budget, which is fine — resume-on-restart re-attempts anyway. */
+  /** Automatic retries consumed per transfer. In-memory only: a restart resets the budget. */
   private readonly autoRetryAttempts = new Map<string, number>();
   /** Pending backoff timers, so cancel() can stop a scheduled retry. */
   private readonly autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -270,21 +268,25 @@ export class TransferEngine {
   }
 
   /**
-   * Reload transfers left mid-flight (queued/sending/checking) from the
-   * store — called on app startup so an interrupted transfer resumes
-   * instead of vanishing.
+   * Reload transfers left in the store from a previous session. Non-terminal
+   * transfers (queued/sending/checking) are marked as failed so the user can
+   * see them and decide to retry, rather than silently re-queuing with zero
+   * progress.
    */
   async resumePending(): Promise<void> {
     const all = await this.store.list(this.connectionId);
     for (const transfer of all) {
-      this.transfers.set(transfer.id, transfer);
-      if (RESUMABLE_STATES.includes(transfer.state.kind)) {
-        if (!this.queue.includes(transfer.id) && !this.active.has(transfer.id)) {
-          this.queue.push(transfer.id);
-        }
+      if (
+        transfer.state.kind === "queued" ||
+        transfer.state.kind === "sending" ||
+        transfer.state.kind === "checking"
+      ) {
+        transfer.state = { kind: "failed", errorClass: "unknown" };
+        transfer.updatedAt = this.now();
+        await this.store.save(transfer);
       }
+      this.transfers.set(transfer.id, transfer);
     }
-    void this.pump();
   }
 
   private async setState(transfer: Transfer, next: TransferState): Promise<void> {
@@ -413,10 +415,9 @@ export class TransferEngine {
       if (this.cancelledIds.has(id)) {
         // Deliberately cancelled — not a failure, and already dropped from
         // the live transfer list by cancel(); nothing further to persist.
-        // (cancelledIds is never cleared for this id: within one engine
+        // cancelledIds is never cleared for this id: within one engine
         // instance a cancelled transfer is dead for good — retry()/pump()
-        // can't resurrect it since it's no longer in `this.transfers`
-        // either; only a fresh engine's resumePending() picks it back up.)
+        // can't resurrect it since it's no longer in `this.transfers` either.
         return;
       }
       const errorClass: ErrorClass =

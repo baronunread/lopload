@@ -20,15 +20,12 @@ export interface UpdateNotice {
   actionLabel: string;
 }
 
-/** Copy for the "an update is ready" notice. When transfers are still in
- * flight we don't hide or block the action — the engine resumes any
- * interrupted transfer on restart — but we do reassure the user instead of
- * silently going ahead, per "offer and defer, don't force". */
+/** Copy for the "an update is ready" notice. */
 export function buildUpdateNotice(hasTransfersInFlight: boolean): UpdateNotice {
   if (hasTransfersInFlight) {
     return {
       title: "A new version is ready",
-      body: "Restart to update. Your transfers are still going — they'll pick up right where they left off once Lopload reopens.",
+      body: "Your transfers will be interrupted. They'll show as failed after restart — tap to retry.",
       actionLabel: "Restart and update",
     };
   }

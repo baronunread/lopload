@@ -439,68 +439,72 @@ describe("TransferEngine — concurrency and batching", () => {
 });
 
 describe("TransferEngine — resumePending", () => {
-  test("transfers left in sending/queued/checking reload and resume on startup", async () => {
-    const size = 24 * 1024 * 1024; // multipart, 3 parts @ 8 MiB
-    const body = new Uint8Array(size);
-    for (let i = 0; i < size; i++) body[i] = i % 251;
-    const reader = makeReader({ "/local/big.bin": body });
-
-    const PART_SIZE = 8 * 1024 * 1024;
-    const partHexes: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      partHexes.push(await md5Hex(body.slice(i * PART_SIZE, (i + 1) * PART_SIZE)));
-    }
-
+  test("non-terminal transfers are marked as failed, not auto-resumed", async () => {
     const store = new MemoryTransferStore();
     const now = Date.now();
-    const stuckTransfer: Transfer = {
+    const sendingTransfer: Transfer = {
       id: "stuck-1",
       connectionId: "conn-1",
       key: "big.bin",
       localPath: "/local/big.bin",
-      size,
-      partSize: PART_SIZE,
-      uploadId: "upload-stuck",
+      size: 100,
       direction: "upload",
       state: { kind: "sending", percent: 33 },
       createdAt: now,
       updatedAt: now,
     };
-    await store.save(stuckTransfer);
-    await store.saveParts([
-      { transferId: "stuck-1", partNumber: 1, etag: q(partHexes[0]), size: PART_SIZE },
-    ]);
-
-    s3Mock.on(ListPartsCommand).resolves({
-      Parts: [{ PartNumber: 1, ETag: q(partHexes[0]), Size: PART_SIZE }],
-    });
-    s3Mock.on(UploadPartCommand).callsFake((input) => {
-      const n = input.PartNumber as number;
-      return Promise.resolve({ ETag: q(partHexes[n - 1]) });
-    });
-    s3Mock.on(CompleteMultipartUploadCommand).resolves({});
-    const { compositeEtag } = await import("../../src/lib/md5");
-    s3Mock.on(HeadObjectCommand).resolves({
-      ContentLength: size,
-      ETag: q(await compositeEtag(partHexes)),
-    });
+    const queuedTransfer: Transfer = {
+      id: "stuck-2",
+      connectionId: "conn-1",
+      key: "other.bin",
+      localPath: "/local/other.bin",
+      size: 50,
+      direction: "upload",
+      state: { kind: "queued" },
+      createdAt: now,
+      updatedAt: now,
+    };
+    const doneTransfer: Transfer = {
+      id: "done-1",
+      connectionId: "conn-1",
+      key: "done.bin",
+      localPath: "/local/done.bin",
+      size: 10,
+      direction: "upload",
+      state: { kind: "uploaded" },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.save(sendingTransfer);
+    await store.save(queuedTransfer);
+    await store.save(doneTransfer);
 
     const engine = new TransferEngine({
       client,
       bucket: "b",
       connectionId: "conn-1",
-      reader,
+      reader: makeReader({}),
       store,
     });
 
     await engine.resumePending();
-    await waitUntil(() => engine.getTransfer("stuck-1")?.state.kind === "uploaded");
 
-    // CreateMultipartUpload never called — the uploadId already existed.
-    expect(s3Mock.commandCalls(CreateMultipartUploadCommand)).toHaveLength(0);
-    // Only the missing parts (2, 3) got uploaded.
-    const uploadCalls = s3Mock.commandCalls(UploadPartCommand);
-    expect(uploadCalls.map((c) => c.args[0].input.PartNumber).sort()).toEqual([2, 3]);
+    // Non-terminal transfers are now failed.
+    const s1 = engine.getTransfer("stuck-1");
+    expect(s1?.state.kind).toBe("failed");
+    const s2 = engine.getTransfer("stuck-2");
+    expect(s2?.state.kind).toBe("failed");
+
+    // Terminal transfers keep their state.
+    const d = engine.getTransfer("done-1");
+    expect(d?.state.kind).toBe("uploaded");
+
+    // Also persisted to store.
+    expect((await store.get("stuck-1"))?.state.kind).toBe("failed");
+    expect((await store.get("stuck-2"))?.state.kind).toBe("failed");
+
+    // Nothing was re-queued — engine.queue is empty.
+    expect(engine["queue"]).toEqual([]);
   });
 });
 
