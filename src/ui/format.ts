@@ -84,6 +84,20 @@ export function isVideoName(name: string): boolean {
   return VIDEO_EXT.test(name);
 }
 
+export function formatSpeed(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec < 0) return "—";
+  if (bytesPerSec < 1) return "0 B/s";
+  const units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
+  let value = bytesPerSec;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  const rounded = i === 0 ? value : Math.round(value * 10) / 10;
+  return `${rounded} ${units[i]}`;
+}
+
 /** Splits a remote key into breadcrumb segments, e.g. "a/b/c.txt" -> ["a", "b"]. */
 export function segmentsForPrefix(prefix: string): string[] {
   return prefix.split("/").filter(Boolean);

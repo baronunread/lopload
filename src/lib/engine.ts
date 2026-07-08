@@ -17,7 +17,10 @@ import type {
   TransferState,
   TransferStore,
 } from "./types";
+import { createLogger } from "./logger";
 import { classifyError } from "./errors";
+
+const log = createLogger("engine");
 import {
   PART_SIZE,
   VerificationError,
@@ -126,6 +129,8 @@ export class TransferEngine {
   private readonly autoRetryAttempts = new Map<string, number>();
   /** Pending backoff timers, so cancel() can stop a scheduled retry. */
   private readonly autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Per-transfer speed tracking: last byte count + wall-clock timestamp. */
+  private readonly speedTrackers = new Map<string, { lastBytes: number; lastTime: number }>();
 
   private batchUploaded = 0;
   private batchDownloaded = 0;
@@ -205,6 +210,7 @@ export class TransferEngine {
       this.queue.push(transfer.id);
       this.emit({ type: "transfer-updated", transfer: { ...transfer } });
       created.push(transfer);
+      log.debug("enqueued", direction, transfer.key, transfer.id);
     }
     void this.pump();
     return created;
@@ -215,6 +221,7 @@ export class TransferEngine {
   async retry(transferId: string): Promise<void> {
     const transfer = this.transfers.get(transferId);
     if (!transfer || transfer.state.kind !== "failed") return;
+    log.info("retry", transfer.key, transfer.id);
     this.acknowledged.delete(transferId);
     // A user-initiated retry restores the full automatic-retry budget.
     this.autoRetryAttempts.delete(transferId);
@@ -245,6 +252,8 @@ export class TransferEngine {
    * transfer back up and continues it rather than starting over.
    */
   cancel(transferId: string): void {
+    const t = this.transfers.get(transferId);
+    log.info("cancel", t?.key ?? transferId, transferId);
     this.cancelledIds.add(transferId);
     const controller = this.abortControllers.get(transferId);
     controller?.abort();
@@ -255,6 +264,7 @@ export class TransferEngine {
       this.autoRetryTimers.delete(transferId);
     }
     this.autoRetryAttempts.delete(transferId);
+    this.speedTrackers.delete(transferId);
     const queueIdx = this.queue.indexOf(transferId);
     if (queueIdx !== -1) this.queue.splice(queueIdx, 1);
     this.active.delete(transferId);
@@ -281,6 +291,7 @@ export class TransferEngine {
 
   private async setState(transfer: Transfer, next: TransferState): Promise<void> {
     if (!canTransition(transfer.state, next)) {
+      log.warn("invalid transition", transfer.id, transfer.state.kind, "->", next.kind);
       throw new InvalidTransitionError(transfer.state, next);
     }
     transfer.state = next;
@@ -356,7 +367,21 @@ export class TransferEngine {
 
       const onProgress = (sent: number, total: number) => {
         const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 100;
-        void this.setState(transfer, { kind: "sending", percent });
+        let speedBytesPerSec: number | undefined;
+        const tracker = this.speedTrackers.get(id);
+        const now = Date.now();
+        if (tracker) {
+          const elapsedMs = now - tracker.lastTime;
+          const bytesDelta = sent - tracker.lastBytes;
+          if (elapsedMs > 0 && bytesDelta > 0) {
+            speedBytesPerSec = Math.round((bytesDelta / elapsedMs) * 1000);
+          }
+          tracker.lastBytes = sent;
+          tracker.lastTime = now;
+        } else {
+          this.speedTrackers.set(id, { lastBytes: sent, lastTime: now });
+        }
+        void this.setState(transfer, { kind: "sending", percent, speedBytesPerSec });
       };
 
       if (transfer.direction === "download") {
@@ -403,6 +428,7 @@ export class TransferEngine {
       if (current.state.kind === "uploaded" || current.state.kind === "downloaded") return;
       const attempts = this.autoRetryAttempts.get(id) ?? 0;
       if (AUTO_RETRY_CLASSES.has(errorClass) && attempts < this.autoRetryDelaysMs.length) {
+        log.warn("auto-retry", current.key, errorClass, `attempt ${attempts + 1}`);
         this.autoRetryAttempts.set(id, attempts + 1);
         await this.setState(current, { kind: "queued" });
         const timer = setTimeout(() => {
@@ -414,6 +440,7 @@ export class TransferEngine {
         this.autoRetryTimers.set(id, timer);
         return;
       }
+      log.error("transfer failed", current.key, errorClass, err instanceof Error ? err.message : "");
       this.autoRetryAttempts.delete(id);
       try {
         await this.setState(current, { kind: "failed", errorClass });

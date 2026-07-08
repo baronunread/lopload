@@ -9,6 +9,8 @@ import { Onboarding } from "./Onboarding";
 import { RemoteBrowser } from "./RemoteBrowser";
 import { TransferWidget } from "./TransferWidget";
 import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
+import { GearIcon } from "@phosphor-icons/react";
+import { SettingsDialog } from "./SettingsDialog";
 import { ThemeToggle } from "./ThemeToggle";
 
 /** Shows the "restart to update" toast once an update is found, and keeps
@@ -41,6 +43,7 @@ function AppShellInner() {
   const [prefix, setPrefix] = useState("");
   const [showSetup, setShowSetup] = useState(false);
   const [showManage, setShowManage] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     void services.connections.list().then((list) => {
@@ -103,9 +106,21 @@ function AppShellInner() {
             onAddStorage={() => setShowSetup(true)}
             onManageStorage={() => setShowManage(true)}
           />
+          <button
+            type="button"
+            aria-label="Settings"
+            className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
+            onClick={() => setShowSettings(true)}
+          >
+            <GearIcon size={16} />
+          </button>
           <ThemeToggle />
         </div>
       </header>
+
+      {showSettings && (
+        <SettingsDialog onClose={() => setShowSettings(false)} />
+      )}
 
       {showSetup && (
         <AddStorageDialog onSaved={handleSaved} onClose={() => setShowSetup(false)} />

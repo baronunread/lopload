@@ -14,6 +14,9 @@ export interface AutoUpdateState {
   notice: UpdateNotice | null;
   installAndRelaunch(): void;
   dismiss(): void;
+  /** Force-check for an update now, bypassing the periodic throttle.
+   * Resolves with the version string if found, or null. */
+  checkNow(): Promise<string | null>;
 }
 
 export function useAutoUpdate(): AutoUpdateState {
@@ -21,8 +24,13 @@ export function useAutoUpdate(): AutoUpdateState {
   const [version, setVersion] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [hasTransfersInFlight, setHasTransfersInFlight] = useState(false);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
   const inFlightIds = useRef(new Set<string>());
   const lastCheckedAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    void services.updates.isAutoUpdateEnabled().then(setAutoUpdateEnabled);
+  }, [services]);
 
   useEffect(() => {
     return services.engine.subscribe((event: EngineEvent) => {
@@ -40,6 +48,7 @@ export function useAutoUpdate(): AutoUpdateState {
     let cancelled = false;
 
     async function runCheck() {
+      if (!autoUpdateEnabled) return;
       const now = Date.now();
       if (!shouldCheckForUpdate(now, lastCheckedAt.current)) return;
       lastCheckedAt.current = now;
@@ -53,7 +62,7 @@ export function useAutoUpdate(): AutoUpdateState {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [services]);
+  }, [services, autoUpdateEnabled]);
 
   const notice = version && !dismissed ? buildUpdateNotice(hasTransfersInFlight) : null;
 
@@ -61,5 +70,13 @@ export function useAutoUpdate(): AutoUpdateState {
     notice,
     installAndRelaunch: () => void services.updates.installAndRelaunch(),
     dismiss: () => setDismissed(true),
+    checkNow: async (): Promise<string | null> => {
+      const found = await services.updates.checkForUpdate();
+      if (found) {
+        setVersion(found);
+        setDismissed(false);
+      }
+      return found;
+    },
   };
 }

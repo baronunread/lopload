@@ -15,6 +15,9 @@ import {
 
 import type { Transfer, TransferPart, TransferStore } from "../types";
 import { Md5, compositeEtag } from "../md5";
+import { createLogger } from "../logger";
+
+const log = createLogger("multipart");
 
 /** Files at or above this size use multipart upload; smaller use a single PUT. */
 export const MULTIPART_THRESHOLD = 16 * 1024 * 1024;
@@ -74,11 +77,13 @@ export async function uploadTransfer(
   transfer: Transfer,
   deps: MultipartDeps,
 ): Promise<void> {
+  log.debug("starting upload", transfer.key, { size: transfer.size });
   if (transfer.size < MULTIPART_THRESHOLD && !transfer.uploadId) {
     await uploadSinglePart(transfer, deps);
   } else {
     await uploadMultipart(transfer, deps);
   }
+  log.debug("upload complete", transfer.key);
 }
 
 async function uploadSinglePart(
@@ -228,6 +233,12 @@ async function uploadMultipart(
   const actualEtag = stripQuotes(head.ETag ?? "").toLowerCase();
 
   if (head.ContentLength !== transfer.size || actualEtag !== expectedEtag.toLowerCase()) {
+    log.warn("multipart verification failed", transfer.key, {
+      expectedSize: transfer.size,
+      actualSize: head.ContentLength,
+      expectedEtag,
+      actualEtag,
+    });
     throw new VerificationError(
       "The uploaded file's size or checksum did not match what was sent.",
     );

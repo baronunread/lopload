@@ -34,7 +34,7 @@ export type ErrorClass =
  * transfer direction; everything else is shared between both directions. */
 export type TransferState =
   | { kind: "queued" }
-  | { kind: "sending"; percent: number }
+  | { kind: "sending"; percent: number; speedBytesPerSec?: number }
   | { kind: "checking" }
   | { kind: "uploaded" }
   | { kind: "downloaded" }

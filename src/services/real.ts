@@ -61,6 +61,16 @@ import {
 } from "../tauri/tray";
 import { deriveTrayUploadTargets } from "./trayState";
 import { checkForUpdate, installAndRelaunch } from "../tauri/updater";
+import {
+  isAutoUpdateEnabled as settingsIsAutoUpdateEnabled,
+  setAutoUpdateEnabled as settingsSetAutoUpdateEnabled,
+  getDefaultDownloadDir as settingsGetDefaultDownloadDir,
+  setDefaultDownloadDir as settingsSetDefaultDownloadDir,
+  getConcurrentTransfers as settingsGetConcurrentTransfers,
+  setConcurrentTransfers as settingsSetConcurrentTransfers,
+  getAutoRetry as settingsGetAutoRetry,
+  setAutoRetry as settingsSetAutoRetry,
+} from "../tauri/settings";
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
 import type {
@@ -493,6 +503,18 @@ class RealServices implements AppServices {
   updates = {
     checkForUpdate: (): Promise<string | null> => checkForUpdate(),
     installAndRelaunch: (): Promise<void> => installAndRelaunch(),
+    isAutoUpdateEnabled: (): Promise<boolean> => settingsIsAutoUpdateEnabled(),
+    setAutoUpdateEnabled: (enabled: boolean): Promise<void> => settingsSetAutoUpdateEnabled(enabled),
+  };
+
+  // ---- SettingsService ----
+  settings = {
+    getDefaultDownloadDir: (): Promise<string | null> => settingsGetDefaultDownloadDir(),
+    setDefaultDownloadDir: (path: string | null): Promise<void> => settingsSetDefaultDownloadDir(path),
+    getConcurrentTransfers: (): Promise<number> => settingsGetConcurrentTransfers(),
+    setConcurrentTransfers: (count: number): Promise<void> => settingsSetConcurrentTransfers(count),
+    getAutoRetry: (): Promise<boolean> => settingsGetAutoRetry(),
+    setAutoRetry: (enabled: boolean): Promise<void> => settingsSetAutoRetry(enabled),
   };
 
   // ---- misc AppServices members ----

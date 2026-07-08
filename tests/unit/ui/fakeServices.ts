@@ -183,6 +183,24 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       async installAndRelaunch() {
         installAndRelaunchCalls.push(Date.now());
       },
+      async isAutoUpdateEnabled() {
+        return true;
+      },
+      async setAutoUpdateEnabled() {},
+    },
+    settings: {
+      async getDefaultDownloadDir() {
+        return null;
+      },
+      async setDefaultDownloadDir() {},
+      async getConcurrentTransfers() {
+        return 3;
+      },
+      async setConcurrentTransfers() {},
+      async getAutoRetry() {
+        return true;
+      },
+      async setAutoRetry() {},
     },
     async pickFiles() {
       return options.pickFilesResult ?? [];

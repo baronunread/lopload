@@ -159,6 +159,20 @@ export interface UpdatesService {
   /** Downloads and installs the update found by the last checkForUpdate()
    * call that found one, then relaunches the app. */
   installAndRelaunch(): Promise<void>;
+  /** Whether periodic auto-update checks are enabled (default true). */
+  isAutoUpdateEnabled(): Promise<boolean>;
+  /** Toggle periodic auto-update checks on/off. Manual check always works. */
+  setAutoUpdateEnabled(enabled: boolean): Promise<void>;
+}
+
+/** App preferences persisted via @tauri-apps/plugin-store. */
+export interface SettingsService {
+  getDefaultDownloadDir(): Promise<string | null>;
+  setDefaultDownloadDir(path: string | null): Promise<void>;
+  getConcurrentTransfers(): Promise<number>;
+  setConcurrentTransfers(count: number): Promise<void>;
+  getAutoRetry(): Promise<boolean>;
+  setAutoRetry(enabled: boolean): Promise<void>;
 }
 
 /** Everything the UI needs from the outside world, injected via context. */
@@ -169,6 +183,7 @@ export interface AppServices {
   engine: EngineService;
   keychain: KeychainService;
   updates: UpdatesService;
+  settings: SettingsService;
   /** Opens the native file picker; resolves with the files chosen (recursive for folders). */
   pickFiles(): Promise<PickedFile[]>;
   /** Native "Save as" dialog for downloading a single file; suggests

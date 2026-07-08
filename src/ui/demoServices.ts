@@ -568,6 +568,24 @@ export function createDemoServices(): AppServices {
         return null;
       },
       async installAndRelaunch() {},
+      async isAutoUpdateEnabled() {
+        return true;
+      },
+      async setAutoUpdateEnabled() {},
+    },
+    settings: {
+      async getDefaultDownloadDir() {
+        return null;
+      },
+      async setDefaultDownloadDir() {},
+      async getConcurrentTransfers() {
+        return 3;
+      },
+      async setConcurrentTransfers() {},
+      async getAutoRetry() {
+        return true;
+      },
+      async setAutoRetry() {},
     },
     async pickFiles(): Promise<PickedFile[]> {
       return [

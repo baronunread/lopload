@@ -13,6 +13,9 @@ import {
   type HttpRequest,
 } from "@smithy/core/protocols";
 import type { FetchHttpHandlerOptions, HttpHandlerOptions } from "@smithy/types";
+import { createLogger } from "../logger";
+
+const log = createLogger("http-handler");
 
 /** Matches the global `fetch` signature; @tauri-apps/plugin-http's fetch is compatible. */
 export type FetchFn = (
@@ -109,8 +112,10 @@ export class InjectedFetchHttpHandler
         transformedHeaders[key] = value;
       });
       const hasReadableStream = response.body != undefined;
+      log.debug("response", url, { status: response.status, hasReadableStream });
       if (!hasReadableStream) {
         const blob = await response.blob();
+        log.debug("response body consumed as Blob", { size: blob.size });
         return {
           response: new HttpResponse({
             headers: transformedHeaders,

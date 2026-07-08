@@ -4,7 +4,7 @@ import { CaretDownIcon, FolderIcon, StopCircleIcon, XIcon } from "@phosphor-icon
 import type { EngineEvent, Transfer, TransferState } from "../lib/types";
 import { useServices } from "./services";
 import { StatusChip } from "./StatusChip";
-import { formatBytes } from "./format";
+import { formatBytes, formatSpeed } from "./format";
 
 /** One widget row: either a single file, or every file from the same
  * dropped/picked folder (`folderId`) collapsed into one aggregated row. */
@@ -37,17 +37,22 @@ function groupTransfers(list: Transfer[]): DisplayRow[] {
 
 /** Synthesizes one representative state for a row so it can reuse
  * StatusChip's rendering: in-flight while anything in the row still is,
- * otherwise failed if anything failed, otherwise done. For a folder row
- * the "percent" is the fraction of its files finished so far, per spec. */
+ * otherwise failed if anything failed, otherwise done. Percent is
+ * byte-based: bytesDone / totalBytes across all transfers in the row. */
 function rowState(transfers: Transfer[]): TransferState {
-  const total = transfers.length;
-  const done = transfers.filter(
-    (t) => t.state.kind === "uploaded" || t.state.kind === "downloaded",
-  ).length;
+  const totalBytes = transfers.reduce((sum, t) => sum + t.size, 0);
+  const doneBytes = transfers.reduce((sum, t) => {
+    if (t.state.kind === "uploaded" || t.state.kind === "downloaded") return sum + t.size;
+    if (t.state.kind === "sending") return sum + t.size * (t.state.percent / 100);
+    return sum;
+  }, 0);
   const failed = transfers.filter((t) => t.state.kind === "failed");
-  const inFlight = total - done - failed.length;
-  if (inFlight > 0) {
-    return { kind: "sending", percent: total > 0 ? Math.round((done / total) * 100) : 0 };
+  const inFlight = transfers.filter(
+    (t) => t.state.kind !== "uploaded" && t.state.kind !== "downloaded" && t.state.kind !== "failed",
+  );
+  if (inFlight.length > 0) {
+    const percent = totalBytes > 0 ? Math.min(100, Math.round((doneBytes / totalBytes) * 100)) : 0;
+    return { kind: "sending", percent };
   }
   if (failed.length > 0) {
     const first = failed[0].state;
@@ -263,6 +268,7 @@ export function TransferWidget({
             const inFlightIds = row.transfers
               .filter((t) => IN_FLIGHT_KINDS.has(t.state.kind))
               .map((t) => t.id);
+            const activeTransfer = row.transfers.find((t) => t.state.kind === "sending");
             return (
               <li
                 key={row.rowKey}
@@ -324,6 +330,21 @@ export function TransferWidget({
                     )}
                   </div>
                 </div>
+                {isFolder && activeTransfer?.state.kind === "sending" && (
+                  <div className="flex items-center gap-2 text-xs text-kumo-subtle ml-2">
+                    <span className="truncate max-w-36">
+                      {activeTransfer.key.split("/").pop()}
+                    </span>
+                    <span className="tabular-nums shrink-0">
+                      {activeTransfer.state.percent}%
+                    </span>
+                    {activeTransfer.state.speedBytesPerSec != null && (
+                      <span className="tabular-nums shrink-0">
+                        {formatSpeed(activeTransfer.state.speedBytesPerSec)}
+                      </span>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}

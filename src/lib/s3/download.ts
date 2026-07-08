@@ -11,6 +11,9 @@ import { GetObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import type { Transfer } from "../types";
 import { Md5, bytesToHex } from "../md5";
 import { VerificationError } from "./multipart";
+import { createLogger } from "../logger";
+
+const log = createLogger("download");
 
 /**
  * Injected local-file writer. Production impl (src/tauri/fs.ts) writes
@@ -60,7 +63,8 @@ function hasTransformToWebStream(body: unknown): body is TransformableBody {
 
 /** Normalizes a GetObject response body into a ReadableStream — the real SDK
  * response exposes `.transformToWebStream()`; tests may hand back a plain
- * ReadableStream or Uint8Array directly. */
+ * ReadableStream or Uint8Array directly. The Tauri HTTP plugin may return a
+ * Blob when the response body isn't available as a stream. */
 function bodyToWebStream(body: unknown): ReadableStream<Uint8Array> {
   if (hasTransformToWebStream(body)) return body.transformToWebStream();
   if (body instanceof ReadableStream) return body as ReadableStream<Uint8Array>;
@@ -71,6 +75,9 @@ function bodyToWebStream(body: unknown): ReadableStream<Uint8Array> {
         controller.close();
       },
     });
+  }
+  if (body instanceof Blob) {
+    return body.stream();
   }
   throw new Error("GetObject response body has no readable stream");
 }
@@ -88,6 +95,8 @@ export async function downloadTransfer(
 ): Promise<void> {
   const { client, bucket, writer, onProgress, signal } = deps;
   const tempPath = writer.tempPathFor(transfer.localPath);
+
+  log.debug("starting download", transfer.key);
 
   const res = await client.send(
     new GetObjectCommand({ Bucket: bucket, Key: transfer.key }),
@@ -129,6 +138,7 @@ export async function downloadTransfer(
   }
 
   if (received !== expectedSize) {
+    log.warn("size mismatch", transfer.key, { received, expectedSize });
     await writer.discard(tempPath);
     throw new VerificationError(
       "The downloaded file's size didn't match what was expected.",
@@ -137,6 +147,7 @@ export async function downloadTransfer(
   if (hasher) {
     const localHex = bytesToHex(hasher.digest());
     if (localHex.toLowerCase() !== etag.toLowerCase()) {
+      log.warn("checksum mismatch", transfer.key, { localHex, etag });
       await writer.discard(tempPath);
       throw new VerificationError(
         "The downloaded file's checksum didn't match what was expected.",
@@ -144,5 +155,6 @@ export async function downloadTransfer(
     }
   }
 
+  log.debug("download complete", transfer.key, { received, etag });
   await writer.commit(tempPath, transfer.localPath);
 }

@@ -10,6 +10,9 @@ import {
 } from "@aws-sdk/client-s3";
 
 import type { TransferStore } from "../types";
+import { createLogger } from "../logger";
+
+const log = createLogger("orphans");
 
 export interface OrphanSweepStats {
   scanned: number;
@@ -51,8 +54,9 @@ export async function sweepOrphans(
             UploadIdMarker: uploadIdMarker,
           }),
         );
-      } catch {
+      } catch (err) {
         stats.errors += 1;
+        log.warn("list multipart uploads failed", err instanceof Error ? err.message : "");
         break;
       }
 
