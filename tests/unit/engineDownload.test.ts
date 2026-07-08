@@ -240,11 +240,11 @@ describe("TransferEngine — cancel", () => {
     await waitUntil(() => engine.getTransfer(first.id)?.state.kind === "sending");
     expect(engine.getTransfer(second.id)?.state.kind).toBe("queued");
 
-    engine.cancel(second.id);
+    await engine.cancel(second.id);
 
     expect(engine.getTransfer(second.id)).toBeUndefined();
     const persisted = await store.get(second.id);
-    expect(persisted?.state).toEqual({ kind: "queued" });
+    expect(persisted).toBeNull();
   });
 
   test("cancelling an in-flight upload aborts it, drops it from the engine, and never persists a failed state", async () => {
@@ -277,7 +277,7 @@ describe("TransferEngine — cancel", () => {
     // aborts an in-flight upload.
     await waitUntil(() => s3Mock.commandCalls(PutObjectCommand).length > 0);
 
-    engine.cancel(transfer.id);
+    await engine.cancel(transfer.id);
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
 
     // Simulate the abort actually tearing down the in-flight request.
@@ -292,10 +292,9 @@ describe("TransferEngine — cancel", () => {
       false,
     );
 
-    // The store record is untouched at whatever it was pre-cancel — not
-    // deleted, and not overwritten with a failed state.
+    // The store record is deleted along with the transfer.
     const persisted = await store.get(transfer.id);
-    expect(persisted?.state.kind).toBe("sending");
+    expect(persisted).toBeNull();
   });
 
   test("cancelling an in-flight download discards its temp file and never persists a failed state", async () => {
@@ -323,7 +322,7 @@ describe("TransferEngine — cancel", () => {
     ]);
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "sending");
 
-    engine.cancel(transfer.id);
+    await engine.cancel(transfer.id);
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
 
     const abortErr = new Error("Request aborted");
@@ -340,45 +339,7 @@ describe("TransferEngine — cancel", () => {
     expect(discarded).toEqual([]);
 
     const persisted = await store.get(transfer.id);
-    expect(persisted?.state.kind).toBe("sending");
+    expect(persisted).toBeNull();
   });
 
-  test("retry() can re-run a transfer after a previous cancel left it queued in the store", async () => {
-    s3Mock.on(PutObjectCommand).callsFake(() => new Promise(() => {}));
-
-    const store = new MemoryTransferStore();
-    const reader = makeReader({ "/local/1.txt": new Uint8Array([1]), "/local/2.txt": new Uint8Array([2]) });
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-      concurrency: 1,
-    });
-
-    const [first, second] = await engine.enqueue([
-      { localPath: "/local/1.txt", size: 1, key: "1.txt" },
-      { localPath: "/local/2.txt", size: 1, key: "2.txt" },
-    ]);
-    await waitUntil(() => engine.getTransfer(first.id)?.state.kind === "sending");
-    engine.cancel(second.id);
-    expect(engine.getTransfer(second.id)).toBeUndefined();
-
-    // The cancelled transfer is gone from this engine instance, but its
-    // store record survives — a fresh engine picks it back up via
-    // resumePending(), exactly like an interrupted transfer would.
-    const freshStore = store;
-    const secondEngine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store: freshStore,
-      concurrency: 1,
-    });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(new Uint8Array([2]))) });
-    await secondEngine.resumePending();
-    await waitUntil(() => secondEngine.getTransfer(second.id)?.state.kind === "uploaded");
-  });
 });

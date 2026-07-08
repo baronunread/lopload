@@ -392,7 +392,7 @@ describe("TransferEngine — bounded auto-retry", () => {
     await waitUntil(() => s3Mock.commandCalls(PutObjectCommand).length === 1);
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "queued");
 
-    engine.cancel(transfer.id);
+    await engine.cancel(transfer.id);
     await new Promise((resolve) => setTimeout(resolve, 120));
 
     expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);

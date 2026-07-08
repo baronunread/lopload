@@ -244,14 +244,11 @@ export class TransferEngine {
 
   /**
    * Cancels a queued or in-flight transfer: drops it from the queue/active
-   * set and this session's transfer list, and aborts its in-flight request
-   * (if any) rather than letting it land as a sticky failure. The store
-   * record is left untouched — for an upload with a multipart session
-   * already underway, its uploadId and persisted parts survive, so if the
-   * app restarts before the user acts further, resumePending() picks the
-   * transfer back up and continues it rather than starting over.
+   * set and this session's transfer list, aborts its in-flight request
+   * (if any), and deletes its persisted record so it won't be re-queued on
+   * the next app launch.
    */
-  cancel(transferId: string): void {
+  async cancel(transferId: string): Promise<void> {
     const t = this.transfers.get(transferId);
     log.info("cancel", t?.key ?? transferId, transferId);
     this.cancelledIds.add(transferId);
@@ -269,6 +266,7 @@ export class TransferEngine {
     if (queueIdx !== -1) this.queue.splice(queueIdx, 1);
     this.active.delete(transferId);
     this.transfers.delete(transferId);
+    await this.store.delete(transferId);
   }
 
   /**

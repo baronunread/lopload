@@ -482,7 +482,9 @@ class RealServices implements AppServices {
     },
     cancel: async (transferId: string): Promise<void> => {
       const engine = this.findEngineFor(transferId);
-      engine?.cancel(transferId);
+      await engine?.cancel(transferId);
+      this.transferSnapshots.delete(transferId);
+      this.updateTrayStatus();
     },
   };
 
