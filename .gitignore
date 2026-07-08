@@ -33,3 +33,4 @@ src-tauri/gen/
 # Local secrets (loaded via `bun --env-file=.env`, see package.json's tauri script)
 .env
 .env.local
+notes/
