@@ -11,7 +11,7 @@
 <p align="center">A desktop file manager for S3-compatible storage.</p>
 
 <p align="center">
-  <a href="https://github.com/baronunread/lopload/actions/workflows/build.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/baronunread/lopload/build.yml?style=flat-square&branch=main" /></a>
+  <a href="https://github.com/baronunread/lopload/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/baronunread/lopload/ci.yml?style=flat-square&branch=main" /></a>
   <a href="https://github.com/baronunread/lopload/releases"><img alt="Release" src="https://img.shields.io/github/v/release/baronunread/lopload?style=flat-square" /></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-3DA639?style=flat-square" /></a>
 </p>
