@@ -215,6 +215,7 @@ export function TransferWidget({
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
       transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
+      onContextMenu={(e) => e.preventDefault()}
       className="fixed bottom-8 right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line sm:w-96"
     >
       <div className="flex items-center justify-between gap-2 border-b border-kumo-line bg-kumo-elevated px-4 py-0 text-kumo-strong">
@@ -256,16 +257,20 @@ export function TransferWidget({
             const state = isFolder ? rowState(row.transfers) : row.transfers[0].state;
             const totalSize = row.transfers.reduce((sum, t) => sum + t.size, 0);
             const name = isFolder ? row.folderName : row.transfers[0].key.split("/").pop();
+            const sendingTransfer = row.transfers.find((t) => t.state.kind === "sending");
+            const speed = sendingTransfer?.state.kind === "sending" ? sendingTransfer.state.speedBytesPerSec : undefined;
             const subtitle = isFolder
               ? `${row.transfers.length} file${row.transfers.length === 1 ? "" : "s"} • ${formatBytes(totalSize)}`
-              : formatBytes(totalSize);
+              : speed != null
+                ? `${formatBytes(totalSize)} • ${formatSpeed(speed)}`
+                : formatBytes(totalSize);
             const failedIds = row.transfers
               .filter((t) => t.state.kind === "failed")
               .map((t) => t.id);
             const inFlightIds = row.transfers
               .filter((t) => IN_FLIGHT_KINDS.has(t.state.kind))
               .map((t) => t.id);
-            const activeTransfer = row.transfers.find((t) => t.state.kind === "sending");
+            
             return (
               <li
                 key={row.rowKey}
@@ -320,19 +325,14 @@ export function TransferWidget({
                     )}
                   </div>
                 </div>
-                {isFolder && activeTransfer?.state.kind === "sending" && (
+                {isFolder && sendingTransfer?.state.kind === "sending" && (
                   <div className="flex items-center gap-2 text-xs text-kumo-subtle ml-2">
                     <span className="truncate max-w-36">
-                      {activeTransfer.key.split("/").pop()}
+                      {sendingTransfer.key.split("/").pop()}
                     </span>
                     <span className="tabular-nums shrink-0">
-                      {activeTransfer.state.percent}%
+                      {sendingTransfer.state.percent}%
                     </span>
-                    {activeTransfer.state.speedBytesPerSec != null && (
-                      <span className="tabular-nums shrink-0">
-                        {formatSpeed(activeTransfer.state.speedBytesPerSec)}
-                      </span>
-                    )}
                   </div>
                 )}
               </li>

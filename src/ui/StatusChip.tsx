@@ -1,6 +1,6 @@
 import { Badge, Meter } from "@cloudflare/kumo";
 import type { Transfer, TransferState } from "../lib/types";
-import { chipInfo, formatSpeed } from "./format";
+import { chipInfo } from "./format";
 
 const VARIANT_BY_VISUAL = {
   neutral: "secondary",
@@ -41,11 +41,6 @@ export function StatusChip({ state, direction }: StatusChipProps) {
           showValue={false}
           indicatorClassName="bg-kumo-warning"
         />
-        {state.speedBytesPerSec != null && (
-          <span className="text-xs text-kumo-subtle tabular-nums">
-            {formatSpeed(state.speedBytesPerSec)}
-          </span>
-        )}
       </div>
     );
   }
