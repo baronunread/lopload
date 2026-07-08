@@ -211,34 +211,7 @@ describe("TransferEngine — single-part upload", () => {
     });
   });
 
-  test("retry resumes a failed transfer and can succeed the second time", async () => {
-    const body = new TextEncoder().encode("retry me");
-    const reader = makeReader({ "/local/d.txt": body });
-    s3Mock
-      .on(PutObjectCommand)
-      .rejectsOnce({ name: "AccessDenied" })
-      .resolves({ ChecksumCRC32: await crc32Base64(body) });
-
-    const store = new MemoryTransferStore();
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-    });
-
-    const [transfer] = await engine.enqueue([
-      { localPath: "/local/d.txt", size: body.length, key: "d.txt" },
-    ]);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
-
-    await engine.retry(transfer.id);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "uploaded");
-
-    expect(engine.getTransfer(transfer.id)!.state).toEqual({ kind: "uploaded" });
   });
-});
 
 describe("TransferEngine — concurrency and batching", () => {
   test("processes an enqueued batch and emits one batch-finished with correct counts", async () => {

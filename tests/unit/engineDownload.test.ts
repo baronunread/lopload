@@ -161,16 +161,6 @@ describe("TransferEngine — download state machine", () => {
       errorClass: "verification",
     });
     expect(committed.size).toBe(0);
-
-    // Retry restarts the same download from scratch — no partial-resume for GET.
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q(await md5Hex(body)),
-      ContentLength: body.length,
-    });
-    await engine.retry(transfer.id);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "downloaded");
-    expect(committed.get("/local/b.txt")).toEqual(body);
   });
 
   test("mixed upload+download batch reports both counts on batch-finished", async () => {

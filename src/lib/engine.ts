@@ -189,17 +189,6 @@ export class TransferEngine {
     return created;
   }
 
-  /** Retry a failed transfer. */
-  async retry(transferId: string): Promise<void> {
-    const transfer = this.transfers.get(transferId);
-    if (!transfer || transfer.state.kind !== "failed") return;
-    log.info("retry", transfer.key, transfer.id);
-    this.acknowledged.delete(transferId);
-    await this.setState(transfer, { kind: "queued" });
-    this.queue.push(transferId);
-    void this.pump();
-  }
-
   /** Mark a failed transfer as seen (clears badge/notification urgency, stays visible). */
   acknowledge(transferId: string): void {
     this.acknowledged.add(transferId);
@@ -235,9 +224,8 @@ export class TransferEngine {
 
   /**
    * Reload transfers left in the store from a previous session. Non-terminal
-   * transfers (queued/sending/checking) are marked as failed so the user can
-   * see them and decide to retry, rather than silently re-queuing with zero
-   * progress.
+   * transfers (queued/sending/checking) are marked as failed so the user
+   * sees what was left behind, rather than silently discarding them.
    */
   async resumePending(): Promise<void> {
     const all = await this.store.list(this.connectionId);
