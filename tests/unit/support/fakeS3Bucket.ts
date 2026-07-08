@@ -42,6 +42,29 @@ function shouldFail(...values: (string | undefined)[]): boolean {
 
 const SLOW_DELAY_MS = 60;
 
+async function bodyToBytes(body: unknown): Promise<Uint8Array> {
+  if (body instanceof Uint8Array) return body;
+  if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+  if (body instanceof ReadableStream) {
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c, offset);
+      offset += c.length;
+    }
+    return out;
+  }
+  return new Uint8Array(0);
+}
+
 async function delayIfSlow(key: string | undefined): Promise<void> {
   if (key?.toLowerCase().includes("slow")) {
     await new Promise((resolve) => setTimeout(resolve, SLOW_DELAY_MS));
@@ -60,7 +83,7 @@ export function installFakeS3(client: S3Client) {
       (err as { $metadata?: unknown }).$metadata = { httpStatusCode: 403 };
       throw err;
     }
-    const body = input.Body instanceof Uint8Array ? input.Body : new Uint8Array(0);
+    const body = await bodyToBytes(input.Body);
     const etag = `"${await md5Hex(body)}"`;
     objects.set(partitionKey(input.Bucket!, input.Key!), {
       body,

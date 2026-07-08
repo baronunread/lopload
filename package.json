@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",
+    "@aws-sdk/lib-storage": "^3.1082.0",
     "@aws-sdk/s3-request-presigner": "^3.1079.0",
     "@cloudflare/kumo": "^2.6.0",
     "@fontsource/inter": "^5.2.8",
