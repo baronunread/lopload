@@ -87,9 +87,14 @@ export class InjectedFetchHttpHandler
     }${path}`;
 
     const body = method === "GET" || method === "HEAD" ? undefined : request.body;
+    // SigV4 signs a `host` header, but fetch forbids setting it manually —
+    // the transport derives Host from the URL, which matches the signed
+    // value. Drop it here so tauri-plugin-http doesn't warn on every call.
+    const headers = new Headers(request.headers);
+    headers.delete("host");
     const requestInit: RequestInit = {
       body,
-      headers: new Headers(request.headers),
+      headers,
       method,
     };
     if (abortSignal) {
