@@ -27,9 +27,8 @@ src-tauri/gen/
 *.sln
 *.sw?
 
-# Claude Code worktrees and local planning notes
+# Claude Code worktrees
 .claude/worktrees/
-improvement-plan.md
 
 # Local secrets (loaded via `bun --env-file=.env`, see package.json's tauri script)
 .env
