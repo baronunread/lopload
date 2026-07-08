@@ -15,6 +15,8 @@ export interface StatusChipProps {
   direction?: Transfer["direction"];
   /** Called when a failed chip is clicked — retries the transfer. */
   onRetry?: () => void;
+  /** Visually indicate retry is in progress. */
+  isRetrying?: boolean;
 }
 
 /**
@@ -23,7 +25,7 @@ export interface StatusChipProps {
  * "Sending" additionally shows a live Meter; "failed" is clickable to retry
  * and is never auto-dismissed by this component.
  */
-export function StatusChip({ state, direction, onRetry }: StatusChipProps) {
+export function StatusChip({ state, direction, onRetry, isRetrying }: StatusChipProps) {
   const info = chipInfo(state, direction);
   // Badge doesn't forward arbitrary DOM props, so data-state lives on a
   // wrapper element instead — tests key off the wrapper's data-state.
@@ -40,12 +42,17 @@ export function StatusChip({ state, direction, onRetry }: StatusChipProps) {
     return (
       <button
         type="button"
-        data-state="failed"
-        onClick={onRetry}
-        className="lopload-settle relative cursor-pointer border-none bg-transparent p-0 transition-transform after:absolute after:-inset-x-1 after:-inset-y-2 active:scale-[0.96]"
-        aria-label={`${info.label}, click to retry`}
+        data-state={isRetrying ? "retrying" : "failed"}
+        onClick={isRetrying ? undefined : onRetry}
+        disabled={isRetrying}
+        className={`lopload-settle relative border-none bg-transparent p-0 transition-transform after:absolute after:-inset-x-1 after:-inset-y-2 ${isRetrying ? "cursor-default" : "cursor-pointer active:scale-[0.96]"}`}
+        aria-label={isRetrying ? "Retrying" : `${info.label}, click to retry`}
       >
-        {badge}
+        {isRetrying ? (
+          <Badge variant="secondary">Retrying…</Badge>
+        ) : (
+          badge
+        )}
       </button>
     );
   }

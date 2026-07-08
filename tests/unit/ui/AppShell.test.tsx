@@ -107,9 +107,9 @@ describe("AppShell connection switcher", () => {
     // The transfer widget hydrates through its own listTransfers() promise,
     // separate from the browser listing awaited above — it needs its own
     // waitFor or this assertion races the widget's first render.
-    await waitFor(() => expect(screen.getByText("Sending — 50%")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Sending - 50%")).toBeInTheDocument());
     expect(screen.queryByText("invoice.pdf")).not.toBeInTheDocument();
-    expect(screen.queryByText("Couldn't send — tap to retry")).not.toBeInTheDocument();
+    expect(screen.queryByText("Couldn't send - tap to retry")).not.toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Storage connection"));
@@ -120,10 +120,10 @@ describe("AppShell connection switcher", () => {
       expect(screen.getAllByText("invoice.pdf").length).toBeGreaterThan(0),
     );
     await waitFor(() =>
-      expect(screen.getByText("Couldn't send — tap to retry")).toBeInTheDocument(),
+      expect(screen.getByText("Couldn't send - tap to retry")).toBeInTheDocument(),
     );
     expect(screen.queryByText("vacation.mp4")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sending — 50%")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sending - 50%")).not.toBeInTheDocument();
   });
 });
 

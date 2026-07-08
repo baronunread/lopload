@@ -214,7 +214,7 @@ class RealServices implements AppServices {
         parts.push(`${event.downloaded} file${event.downloaded === 1 ? "" : "s"} downloaded`);
       }
       if (event.failed > 0) {
-        parts.push(`${event.failed} file${event.failed === 1 ? "" : "s"} failed — open Lopload to retry`);
+        parts.push(`${event.failed} file${event.failed === 1 ? "" : "s"} failed - open Lopload to retry`);
       }
       if (parts.length > 0) this.notify("Lopload", parts.join(", "));
     }
@@ -596,7 +596,7 @@ class RealServices implements AppServices {
           console.error("Failed to expand dropped paths:", err);
           this.notify(
             "Lopload",
-            "Couldn't read one or more of the dropped items — nothing was added.",
+            "Couldn't read one or more of the dropped items - nothing was added.",
           );
           onError?.(String(err));
         });

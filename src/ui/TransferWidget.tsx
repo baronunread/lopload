@@ -102,6 +102,7 @@ export function TransferWidget({
   const services = useServices();
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -127,6 +128,14 @@ export function TransferWidget({
           next[idx] = event.transfer;
           return next;
         });
+        // Clear retrying marker once the transfer leaves failed state.
+        if (event.transfer.state.kind !== "failed") {
+          setRetryingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(event.transfer.id);
+            return next;
+          });
+        }
       } else if (event.type === "batch-finished") {
         const parts: string[] = [];
         if (event.uploaded > 0) {
@@ -291,10 +300,16 @@ export function TransferWidget({
                       onRetry={
                         state.kind === "failed"
                           ? () => {
+                              setRetryingIds((prev) => {
+                                const next = new Set(prev);
+                                for (const id of failedIds) next.add(id);
+                                return next;
+                              });
                               for (const id of failedIds) void services.engine.retry(id);
                             }
                           : undefined
                       }
+                      isRetrying={state.kind === "failed" && failedIds.some((id) => retryingIds.has(id))}
                     />
                     {inFlightIds.length > 0 && (
                       <button

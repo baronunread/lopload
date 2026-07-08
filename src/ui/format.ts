@@ -9,7 +9,7 @@ export const STATUS_LABELS = {
   checking: "Checking",
   uploaded: "Uploaded ✓",
   downloaded: "Downloaded ✓",
-  failed: "Couldn't send — tap to retry",
+  failed: "Couldn't send - tap to retry",
 } as const;
 
 export type ChipVisual = "neutral" | "amber" | "amber-pulse" | "mint" | "coral";
@@ -35,7 +35,7 @@ export function chipInfo(
     case "sending":
       return {
         state: "sending",
-        label: `${isDownload ? "Downloading" : STATUS_LABELS.sending} — ${Math.round(state.percent)}%`,
+        label: `${isDownload ? "Downloading" : STATUS_LABELS.sending} - ${Math.round(state.percent)}%`,
         visual: "amber",
       };
     case "checking":
@@ -47,7 +47,7 @@ export function chipInfo(
     case "failed":
       return {
         state: "failed",
-        label: isDownload ? "Couldn't download — tap to retry" : STATUS_LABELS.failed,
+        label: isDownload ? "Couldn't download - tap to retry" : STATUS_LABELS.failed,
         visual: "coral",
       };
   }

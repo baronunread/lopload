@@ -193,7 +193,7 @@ fn format_status_line(uploading: i64, percent: f64, failed: i64) -> String {
     if uploading > 0 {
         let pct = percent.clamp(0.0, 100.0).round() as i64;
         let plural = if uploading == 1 { "" } else { "s" };
-        format!("Transferring {uploading} file{plural} — {pct}%")
+        format!("Transferring {uploading} file{plural} - {pct}%")
     } else if failed > 0 {
         let plural = if failed == 1 { "" } else { "s" };
         format!("{failed} transfer{plural} failed")
@@ -315,8 +315,8 @@ mod status_format_tests {
 
     #[test]
     fn status_line_prioritizes_uploading_over_failed() {
-        assert_eq!(format_status_line(3, 42.4, 2), "Transferring 3 files — 42%");
-        assert_eq!(format_status_line(1, 0.0, 0), "Transferring 1 file — 0%");
+        assert_eq!(format_status_line(3, 42.4, 2), "Transferring 3 files - 42%");
+        assert_eq!(format_status_line(1, 0.0, 0), "Transferring 1 file - 0%");
     }
 
     #[test]
@@ -344,8 +344,8 @@ mod status_format_tests {
 
     #[test]
     fn percent_clamps_to_valid_range() {
-        assert_eq!(format_status_line(1, 142.0, 0), "Transferring 1 file — 100%");
-        assert_eq!(format_status_line(1, -10.0, 0), "Transferring 1 file — 0%");
+        assert_eq!(format_status_line(1, 142.0, 0), "Transferring 1 file - 100%");
+        assert_eq!(format_status_line(1, -10.0, 0), "Transferring 1 file - 0%");
     }
 }
 
@@ -366,7 +366,7 @@ pub fn tray_set_progress<R: Runtime>(
     let tooltip = match fraction {
         Some(f) => {
             let percent = (f.clamp(0.0, 1.0) * 100.0).round() as i64;
-            format!("Uploading — {percent}%")
+            format!("Uploading - {percent}%")
         }
         None => "Lopload".to_string(),
     };
@@ -391,7 +391,7 @@ pub fn set_badge_count<R: Runtime>(app: AppHandle<R>, count: Option<i64>) -> Res
     {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let tooltip = match count {
-                Some(n) if n > 0 => format!("Lopload — {n} failed"),
+                Some(n) if n > 0 => format!("Lopload - {n} failed"),
                 _ => "Lopload".to_string(),
             };
             tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;

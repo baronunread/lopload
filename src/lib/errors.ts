@@ -8,18 +8,18 @@ import type { ErrorClass, PlainError } from "./types";
 
 const MESSAGES: Record<ErrorClass, string> = {
   offline:
-    "You're offline — we'll be ready when the connection is back.",
+    "You're offline - we'll be ready when the connection is back.",
   credentials:
-    "Your credentials were rejected — please check them and try again.",
+    "Your credentials were rejected - please check them and try again.",
   "storage-full":
-    "There's no storage space left — free up some room and try again.",
+    "There's no storage space left - free up some room and try again.",
   "connection-dropped":
-    "The connection dropped partway through — we'll pick up where it left off.",
+    "The connection dropped partway through - we'll pick up where it left off.",
   verification:
     "We couldn't confirm the file arrived intact, so it hasn't been marked as sent.",
   "not-found":
-    "That item couldn't be found — it may have been moved or deleted.",
-  unknown: "Something went wrong — please try again.",
+    "That item couldn't be found - it may have been moved or deleted.",
+  unknown: "Something went wrong - please try again.",
 };
 
 export function plainMessageFor(errorClass: ErrorClass): string {

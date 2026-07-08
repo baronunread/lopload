@@ -26,7 +26,7 @@ describe("errors", () => {
 
   test("offline sentence matches spec wording", () => {
     expect(plainMessageFor("offline")).toBe(
-      "You're offline — we'll be ready when the connection is back.",
+      "You're offline - we'll be ready when the connection is back.",
     );
   });
 

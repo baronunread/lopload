@@ -26,5 +26,5 @@ export async function notifyBatchFinished(uploaded: number, failed: number): Pro
     parts.push(`${failed} file${failed === 1 ? "" : "s"} failed, tap to retry`);
   }
 
-  sendNotification({ title: "Lopload", body: parts.join(" — ") });
+  sendNotification({ title: "Lopload", body: parts.join(" - ") });
 }

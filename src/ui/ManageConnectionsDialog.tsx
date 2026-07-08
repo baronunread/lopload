@@ -81,7 +81,7 @@ export function ManageConnectionsDialog({
           <Dialog className="p-6">
             <Dialog.Title>Remove {pending.name}?</Dialog.Title>
             <Dialog.Description>
-              This only removes the connection from Lopload — nothing in your storage is
+              This only removes the connection from Lopload - nothing in your storage is
               deleted. You can add it again later with the same details.
             </Dialog.Description>
             <div className="mt-4 flex justify-end gap-2">

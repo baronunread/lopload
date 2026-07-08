@@ -12,14 +12,14 @@ describe("StatusChip", () => {
       { state: { kind: "queued" }, label: "Queued", dataState: "queued" },
       {
         state: { kind: "sending", percent: 42 },
-        label: "Sending — 42%",
+        label: "Sending - 42%",
         dataState: "sending",
       },
       { state: { kind: "checking" }, label: "Checking", dataState: "checking" },
       { state: { kind: "uploaded" }, label: "Uploaded ✓", dataState: "uploaded" },
       {
         state: { kind: "failed", errorClass: "offline" },
-        label: "Couldn't send — tap to retry",
+        label: "Couldn't send - tap to retry",
         dataState: "failed",
       },
     ];
@@ -43,7 +43,7 @@ describe("StatusChip", () => {
         }}
       />,
     );
-    await user.click(screen.getByText("Couldn't send — tap to retry"));
+    await user.click(screen.getByText("Couldn't send - tap to retry"));
     expect(retried).toBe(true);
   });
 });
