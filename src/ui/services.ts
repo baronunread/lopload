@@ -93,8 +93,10 @@ export interface BrowserService {
   /** Moves a file or folder into the Trash rather than deleting it outright —
    * see TrashService for restoring it or removing it for good. */
   delete(connectionId: string, key: string): Promise<void>;
-  /** A shareable link to the file, shown via "Copy link" in the context menu. */
-  copyLink(connectionId: string, key: string): Promise<string>;
+  /** A shareable, presigned link to the file, valid for `expiresInSeconds`
+   * (capped at 7 days — SigV4's hard maximum), shown via "Copy link…" in the
+   * context menu. */
+  copyLink(connectionId: string, key: string, expiresInSeconds: number): Promise<string>;
   /** Presigned URL for an image, or a streamable URL for a video; null if not previewable. */
   getThumbnailUrl(connectionId: string, key: string): Promise<string | null>;
   /** Recursively computes file count, total size, and last-modified time under a folder. */

@@ -394,8 +394,8 @@ export function createDemoServices(): AppServices {
       async delete(connectionId, key) {
         moveToTrash(connectionId, key);
       },
-      async copyLink(connectionId, key) {
-        return `https://demo.example.com/${connectionId}/${key}?sig=demo`;
+      async copyLink(connectionId, key, expiresInSeconds) {
+        return `https://demo.example.com/${connectionId}/${key}?sig=demo&expires=${expiresInSeconds}`;
       },
       async getThumbnailUrl() {
         return null;

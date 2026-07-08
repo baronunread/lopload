@@ -54,14 +54,12 @@ import { keychainDelete, keychainGet, keychainSet } from "../tauri/keychain";
 import { tauriFetch } from "../tauri/http";
 import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
 import {
-  onCopyLinkRequested,
   onRetryFailedRequested,
   onUploadFilesRequested,
   setTrayConnections,
-  setTrayLastUpload,
   setTrayStatus,
 } from "../tauri/tray";
-import { deriveTrayUploadTargets, trackLastUploaded, type LastUploadedFile } from "./trayState";
+import { deriveTrayUploadTargets } from "./trayState";
 import { checkForUpdate, installAndRelaunch } from "../tauri/updater";
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
@@ -78,6 +76,9 @@ import { expandDroppedPaths, type DropDirEntry } from "./dragDropExpand";
 
 const ORPHAN_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const TRASH_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** Thumbnails are re-requested each time they're shown, so this only needs
+ * to outlive a single render — no reason to hand out a long-lived link. */
+const THUMBNAIL_URL_EXPIRY_SECONDS = 60 * 60;
 
 /** True when running inside the Tauri webview (vs. a plain browser tab). */
 export function isTauriRuntime(): boolean {
@@ -120,9 +121,6 @@ class RealServices implements AppServices {
   private trashSweepStarted = false;
   private trayRetryListening = false;
   private trayUploadListening = false;
-  private trayCopyLinkListening = false;
-  /** Most recently verified upload, for the tray's "Copy link — <file>" item. */
-  private lastUploaded: LastUploadedFile | null = null;
 
   private async getDb() {
     if (!this.dbPromise) this.dbPromise = loadDatabase();
@@ -190,11 +188,6 @@ class RealServices implements AppServices {
       this.transferSnapshots.set(event.transfer.id, event.transfer);
       this.updateTrayProgress();
       this.updateTrayStatus();
-      const nextLastUploaded = trackLastUploaded(this.lastUploaded, event);
-      if (nextLastUploaded !== this.lastUploaded) {
-        this.lastUploaded = nextLastUploaded;
-        setTrayLastUpload(nextLastUploaded?.name ?? null);
-      }
     } else if (event.type === "batch-finished") {
       const parts: string[] = [];
       if (event.uploaded > 0) {
@@ -301,24 +294,6 @@ class RealServices implements AppServices {
     await this.engine.enqueueFiles(connectionId, conn.lastPrefix, files);
   }
 
-  /** Listens once for the tray's "Copy link" click and copies the link for
-   * whichever upload trackLastUploaded() last recorded as verified. */
-  startTrayCopyLinkListening(): void {
-    if (this.trayCopyLinkListening) return;
-    this.trayCopyLinkListening = true;
-    onCopyLinkRequested(() => {
-      void this.handleTrayCopyLink();
-    });
-  }
-
-  private async handleTrayCopyLink(): Promise<void> {
-    const file = this.lastUploaded;
-    if (!file) return;
-    const link = await this.browser.copyLink(file.connectionId, file.key);
-    await navigator.clipboard?.writeText(link);
-    this.notify("Lopload", `Copied link for ${file.name}`);
-  }
-
   // ---- ConnectionsService ----
   connections = {
     list: async (): Promise<Connection[]> => {
@@ -385,15 +360,15 @@ class RealServices implements AppServices {
         await s3MoveFileToTrash(client, conn.bucket, key, deletedAtMs);
       }
     },
-    copyLink: async (connectionId: string, key: string): Promise<string> => {
+    copyLink: async (connectionId: string, key: string, expiresInSeconds: number): Promise<string> => {
       const { client, conn } = await this.getClient(connectionId);
-      return s3CopyLink(client, conn.bucket, key);
+      return s3CopyLink(client, conn.bucket, key, expiresInSeconds);
     },
     getThumbnailUrl: async (connectionId: string, key: string): Promise<string | null> => {
       const name = key.split("/").pop() ?? key;
       if (!isImageName(name) && !isVideoName(name)) return null;
       const { client, conn } = await this.getClient(connectionId);
-      return s3CopyLink(client, conn.bucket, key);
+      return s3CopyLink(client, conn.bucket, key, THUMBNAIL_URL_EXPIRY_SECONDS);
     },
     folderInfo: async (connectionId: string, key: string): Promise<FolderInfo> => {
       const { client, conn } = await this.getClient(connectionId);
@@ -728,7 +703,6 @@ export function createRealServices(): AppServices {
     singleton.startTrashSweep();
     singleton.startTrayRetryListening();
     singleton.startTrayUploadListening();
-    singleton.startTrayCopyLinkListening();
   }
   return singleton;
 }

@@ -22,7 +22,6 @@ export interface TrayUploadTarget {
 
 const RETRY_FAILED_EVENT = "tray://retry-failed";
 const UPLOAD_FILES_EVENT = "tray://upload-files";
-const COPY_LINK_EVENT = "tray://copy-link";
 
 /** At most a few IPC calls per second — progress events fire far more often
  * than the tray menu needs to redraw. Leading call goes out immediately;
@@ -89,11 +88,6 @@ export function setTrayConnections(connections: TrayUploadTarget[]): void {
   void invoke("tray_set_connections", { connections }).catch(() => {});
 }
 
-/** Updates the tray's "Copy link — <file>" item; pass `null` to clear it. */
-export function setTrayLastUpload(name: string | null): void {
-  void invoke("tray_set_last_upload", { name }).catch(() => {});
-}
-
 /** Subscribes to a per-connection "Upload files…" click; the callback
  * receives the connection id. Returns an unsubscribe. */
 export function onUploadFilesRequested(cb: (connectionId: string) => void): () => void {
@@ -111,18 +105,3 @@ export function onUploadFilesRequested(cb: (connectionId: string) => void): () =
   };
 }
 
-/** Subscribes to the tray's "Copy link" menu click; returns an unsubscribe. */
-export function onCopyLinkRequested(cb: () => void): () => void {
-  let unlisten: (() => void) | null = null;
-  let cancelled = false;
-
-  void listen(COPY_LINK_EVENT, () => cb()).then((fn) => {
-    if (cancelled) fn();
-    else unlisten = fn;
-  });
-
-  return () => {
-    cancelled = true;
-    unlisten?.();
-  };
-}
