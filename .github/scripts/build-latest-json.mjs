@@ -52,12 +52,16 @@ function assetUrl(path) {
 const darwinArch = readMarker("updater-arch-darwin.txt", "x86_64");
 
 // One entry per platform tauri-plugin-updater checks against at runtime.
+// Suffixes follow createUpdaterArtifacts: true (Tauri v2 native): the updater
+// consumes the bundles themselves (.AppImage, NSIS -setup.exe) plus a .sig
+// sidecar — only macOS still wraps in .app.tar.gz. The .AppImage.tar.gz /
+// .nsis.zip names belong to the "v1Compatible" mode we don't use.
 const wanted = [
   { key: `darwin-${darwinArch}`, suffix: ".app.tar.gz" },
-  { key: "linux-x86_64", suffix: ".AppImage.tar.gz" },
-  // Windows produces both an NSIS and an MSI installer; the NSIS zip is the
-  // one tauri-plugin-updater expects on this platform.
-  { key: "windows-x86_64", suffix: ".nsis.zip" },
+  { key: "linux-x86_64", suffix: ".AppImage" },
+  // Windows produces both an NSIS and an MSI installer; NSIS is the one
+  // tauri-plugin-updater expects on this platform.
+  { key: "windows-x86_64", suffix: "-setup.exe" },
 ];
 
 const platforms = {};

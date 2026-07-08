@@ -18,7 +18,9 @@ jobs:
         include:
           - os: ubuntu-22.04
             bundle-dir: deb
-          - os: macos-latest
+          # Pinned (not macos-latest) so the runner image only changes when we
+          # choose to bump it.
+          - os: macos-26
             bundle-dir: macos
           - os: windows-latest
             bundle-dir: msi
@@ -27,10 +29,21 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # Caches ~/.cargo and src-tauri/target across runs. Tag builds restore
+      # caches saved on the default branch, so warm the cache by running this
+      # workflow via workflow_dispatch on main after big dependency changes.
+      # save-if skips saving on tag refs (those caches would be unreachable
+      # by later runs and only churn the 10 GB cache quota).
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -39,7 +52,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
@@ -48,7 +61,7 @@ jobs:
             libssl-dev
 
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Derive version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -80,7 +93,7 @@ jobs:
           echo "$ARCH" > src-tauri/target/release/bundle/updater-arch-darwin.txt
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bundle-${{ matrix.os }}
           path: src-tauri/target/release/bundle/
@@ -92,13 +105,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
       - name: Download all bundle artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: bundle-*
           merge-multiple: true
@@ -109,20 +122,20 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Sig globs follow createUpdaterArtifacts: true (Tauri v2 native)
+          # naming: .sig sits next to the bundle itself (.AppImage.sig,
+          # -setup.exe.sig, .msi.sig), except macOS which keeps .app.tar.gz.
           files: |
             **/*.deb
             **/*.rpm
             **/*.AppImage
-            **/*.AppImage.tar.gz
-            **/*.AppImage.tar.gz.sig
+            **/*.AppImage.sig
             **/*.dmg
             **/*.app.tar.gz
             **/*.app.tar.gz.sig
             **/*.msi
-            **/*.msi.zip
-            **/*.msi.zip.sig
+            **/*.msi.sig
             **/*.exe
-            **/*.nsis.zip
-            **/*.nsis.zip.sig
+            **/*.exe.sig
             latest.json
           generate_release_notes: true
