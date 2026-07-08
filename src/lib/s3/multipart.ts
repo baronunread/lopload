@@ -1,13 +1,21 @@
-import { Upload } from "@aws-sdk/lib-storage";
-import { ChecksumAlgorithm } from "@aws-sdk/client-s3";
-import { createCRC32 } from "hash-wasm";
+import {
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  HeadObjectCommand,
+  ListPartsCommand,
+  PutObjectCommand,
+  UploadPartCommand,
+  type S3Client,
+} from "@aws-sdk/client-s3";
 
-import type { Transfer } from "../types";
+import type { Transfer, TransferPart, TransferStore } from "../types";
+import { Md5, bytesToHex, compositeEtag } from "../md5";
 import { createLogger } from "../logger";
 
-const log = createLogger("upload");
-const READ_CHUNK_SIZE = 8 * 1024 * 1024;
-const PART_SIZE = 5 * 1024 * 1024;
+const log = createLogger("multipart");
+
+export const MULTIPART_THRESHOLD = 16 * 1024 * 1024;
+export const PART_SIZE = 8 * 1024 * 1024;
 
 export interface LocalFileReader {
   size(path: string): Promise<number>;
@@ -22,61 +30,186 @@ export class VerificationError extends Error {
   }
 }
 
-export interface UploadDeps {
-  client: import("@aws-sdk/client-s3").S3Client;
+export interface MultipartDeps {
+  client: S3Client;
   bucket: string;
   reader: LocalFileReader;
+  store: TransferStore;
   onProgress?: (bytesSent: number, totalBytes: number) => void;
   signal?: AbortSignal;
 }
 
+function stripQuotes(etag: string): string {
+  return etag.replace(/^"|"$/g, "");
+}
+
+function concatChunks(chunks: Uint8Array[], totalSize: number): Uint8Array {
+  const out = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 export async function uploadTransfer(
   transfer: Transfer,
-  deps: UploadDeps,
+  deps: MultipartDeps,
+): Promise<void> {
+  log.debug("starting upload", transfer.key, { size: transfer.size });
+  if (transfer.size < MULTIPART_THRESHOLD && !transfer.uploadId) {
+    await uploadSinglePart(transfer, deps);
+  } else {
+    await uploadMultipart(transfer, deps);
+  }
+  log.debug("upload complete", transfer.key);
+}
+
+async function uploadSinglePart(
+  transfer: Transfer,
+  deps: MultipartDeps,
 ): Promise<void> {
   const { client, bucket, reader, onProgress, signal } = deps;
   const size = transfer.size;
-  const hasher = await createCRC32();
-  hasher.init();
+  const hasher = await Md5.create();
   const chunks: Uint8Array[] = [];
+  const readChunkSize = PART_SIZE;
   let offset = 0;
-
   while (offset < size) {
-    const length = Math.min(READ_CHUNK_SIZE, size - offset);
+    const length = Math.min(readChunkSize, size - offset);
     const chunk = await reader.readChunk(transfer.localPath, offset, length);
     hasher.update(chunk);
     chunks.push(chunk);
     offset += length;
     onProgress?.(offset, size);
   }
+  const body = concatChunks(chunks, size);
+  const localMd5Hex = bytesToHex(hasher.digest());
 
-  const crc32Bytes = hasher.digest("binary") as Uint8Array;
-  const localCrc32 = btoa(String.fromCharCode(...crc32Bytes));
-  const body = new Blob(chunks);
-
-  const upload = new Upload({
-    client,
-    params: {
-      Bucket: bucket,
-      Key: transfer.key,
-      Body: body,
-      ChecksumAlgorithm: ChecksumAlgorithm.CRC32,
-    },
-    queueSize: 4,
-    partSize: PART_SIZE,
-    leavePartsOnError: false,
-  });
-
-  if (signal) {
-    signal.addEventListener("abort", () => upload.abort());
-  }
-
-  const result = await upload.done();
-
-  if (result.ChecksumCRC32 && result.ChecksumCRC32 !== localCrc32) {
+  const res = await client.send(
+    new PutObjectCommand({ Bucket: bucket, Key: transfer.key, Body: body }),
+    { abortSignal: signal },
+  );
+  const serverEtag = stripQuotes(res.ETag ?? "").toLowerCase();
+  if (serverEtag !== localMd5Hex.toLowerCase()) {
     throw new VerificationError(
       "The uploaded file's checksum did not match what was sent.",
     );
   }
-  log.debug("upload complete", transfer.key);
+}
+
+async function uploadMultipart(
+  transfer: Transfer,
+  deps: MultipartDeps,
+): Promise<void> {
+  const { client, bucket, reader, store, onProgress, signal } = deps;
+
+  let uploadId = transfer.uploadId;
+  if (!uploadId) {
+    const created = await client.send(
+      new CreateMultipartUploadCommand({ Bucket: bucket, Key: transfer.key }),
+      { abortSignal: signal },
+    );
+    if (!created.UploadId) {
+      throw new Error("CreateMultipartUpload did not return an UploadId");
+    }
+    uploadId = created.UploadId;
+    transfer.uploadId = uploadId;
+    await store.save({ ...transfer, uploadId });
+  }
+
+  const totalParts = Math.ceil(transfer.size / transfer.partSize);
+  const persisted = await store.listParts(transfer.id);
+  const persistedByNumber = new Map(persisted.map((p) => [p.partNumber, p]));
+
+  let serverParts: { PartNumber?: number; ETag?: string; Size?: number }[] = [];
+  try {
+    const listed = await client.send(
+      new ListPartsCommand({ Bucket: bucket, Key: transfer.key, UploadId: uploadId }),
+      { abortSignal: signal },
+    );
+    serverParts = listed.Parts ?? [];
+  } catch {
+    serverParts = [];
+  }
+  const serverByNumber = new Map(
+    serverParts
+      .filter((p): p is { PartNumber: number; ETag?: string; Size?: number } =>
+        p.PartNumber != null,
+      )
+      .map((p) => [p.PartNumber, p]),
+  );
+
+  const finalParts: TransferPart[] = [];
+  let bytesDone = 0;
+
+  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+    const offset = (partNumber - 1) * transfer.partSize;
+    const length = Math.min(transfer.partSize, transfer.size - offset);
+    const serverPart = serverByNumber.get(partNumber);
+
+    if (serverPart?.ETag && serverPart.Size === length) {
+      const etag = serverPart.ETag;
+      const part: TransferPart = { transferId: transfer.id, partNumber, etag, size: length };
+      finalParts.push(part);
+      const existing = persistedByNumber.get(partNumber);
+      if (!existing || existing.etag !== etag || existing.size !== length) {
+        await store.saveParts([part]);
+      }
+      bytesDone += length;
+      onProgress?.(bytesDone, transfer.size);
+      continue;
+    }
+
+    const chunk = await reader.readChunk(transfer.localPath, offset, length);
+    const res = await client.send(
+      new UploadPartCommand({
+        Bucket: bucket,
+        Key: transfer.key,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: chunk,
+      }),
+      { abortSignal: signal },
+    );
+    const etag = res.ETag ?? "";
+    const part: TransferPart = { transferId: transfer.id, partNumber, etag, size: length };
+    finalParts.push(part);
+    await store.saveParts([part]);
+    bytesDone += length;
+    onProgress?.(bytesDone, transfer.size);
+  }
+
+  await client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: bucket,
+      Key: transfer.key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: finalParts.map((p) => ({ ETag: p.etag, PartNumber: p.partNumber })),
+      },
+    }),
+    { abortSignal: signal },
+  );
+
+  const head = await client.send(
+    new HeadObjectCommand({ Bucket: bucket, Key: transfer.key }),
+    { abortSignal: signal },
+  );
+
+  const expectedEtag = await compositeEtag(finalParts.map((p) => stripQuotes(p.etag)));
+  const actualEtag = stripQuotes(head.ETag ?? "").toLowerCase();
+
+  if (head.ContentLength !== transfer.size || actualEtag !== expectedEtag.toLowerCase()) {
+    log.warn("multipart verification failed", transfer.key, {
+      expectedSize: transfer.size,
+      actualSize: head.ContentLength,
+      expectedEtag,
+      actualEtag,
+    });
+    throw new VerificationError(
+      "The uploaded file's size or checksum did not match what was sent.",
+    );
+  }
 }

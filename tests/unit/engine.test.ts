@@ -5,14 +5,13 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 
-import { createCRC32 } from "hash-wasm";
-
 import {
   STATE_TRANSITIONS,
   TransferEngine,
   canTransition,
 } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
+import { md5Hex } from "../../src/lib/md5";
 import type { EngineEvent, Transfer, TransferState } from "../../src/lib/types";
 import type { LocalFileReader } from "../../src/lib/s3/multipart";
 
@@ -21,6 +20,10 @@ const client = new S3Client({
   credentials: { accessKeyId: "ak", secretAccessKey: "sk" },
 });
 const s3Mock = mockClient(client);
+
+function q(hex: string): string {
+  return `"${hex}"`;
+}
 
 beforeEach(() => {
   s3Mock.reset();
@@ -36,14 +39,6 @@ function makeReader(files: Record<string, Uint8Array>): LocalFileReader {
       return bytes.slice(offset, offset + length);
     },
   };
-}
-
-async function crc32Base64(bytes: Uint8Array): Promise<string> {
-  const h = await createCRC32();
-  h.init();
-  h.update(bytes);
-  const raw = h.digest("binary") as Uint8Array;
-  return btoa(String.fromCharCode(...raw));
 }
 
 const ALL_STATES: TransferState["kind"][] = [
@@ -119,7 +114,7 @@ describe("TransferEngine — single-part upload", () => {
   test("queued -> sending -> checking -> uploaded, persisted at every step", async () => {
     const body = new TextEncoder().encode("small file");
     const reader = makeReader({ "/local/a.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: await crc32Base64(body) });
+    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
 
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
@@ -156,10 +151,10 @@ describe("TransferEngine — single-part upload", () => {
     expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 1, downloaded: 0, failed: 0 });
   });
 
-  test("ChecksumCRC32 mismatch -> failed with errorClass verification, sticky", async () => {
+  test("ETag mismatch -> failed with errorClass verification, sticky", async () => {
     const body = new TextEncoder().encode("mismatched");
     const reader = makeReader({ "/local/b.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ChecksumCRC32: "AAAAAA==" });
+    s3Mock.on(PutObjectCommand).resolves({ ETag: q("f".repeat(32)) });
 
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
@@ -179,7 +174,6 @@ describe("TransferEngine — single-part upload", () => {
     const finalTransfer = engine.getTransfer(transfer.id)!;
     expect(finalTransfer.state).toEqual({ kind: "failed", errorClass: "verification" });
 
-    // Never uploaded.
     expect(finalTransfer.state.kind).not.toBe("uploaded");
   });
 
@@ -210,8 +204,7 @@ describe("TransferEngine — single-part upload", () => {
       errorClass: "credentials",
     });
   });
-
-  });
+});
 
 describe("TransferEngine — concurrency and batching", () => {
   test("processes an enqueued batch and emits one batch-finished with correct counts", async () => {
@@ -224,14 +217,9 @@ describe("TransferEngine — concurrency and batching", () => {
     });
     const reader = makeReader(files);
 
-    async function bodyToBytes(body: unknown): Promise<Uint8Array> {
-      if (body instanceof Uint8Array) return body;
-      if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
-      return new Uint8Array(0);
-    }
     s3Mock.on(PutObjectCommand).callsFake(async (input) => {
-      const body = await bodyToBytes(input.Body);
-      return { ChecksumCRC32: await crc32Base64(body) };
+      const bodyBytes = input.Body instanceof Uint8Array ? input.Body : new Uint8Array(0);
+      return { ETag: q(await md5Hex(bodyBytes)) };
     });
 
     const store = new MemoryTransferStore();
@@ -266,6 +254,7 @@ describe("TransferEngine — resumePending", () => {
       key: "big.bin",
       localPath: "/local/big.bin",
       size: 100,
+      partSize: 8 * 1024 * 1024,
       direction: "upload",
       state: { kind: "sending", percent: 33 },
       createdAt: now,
@@ -277,6 +266,7 @@ describe("TransferEngine — resumePending", () => {
       key: "other.bin",
       localPath: "/local/other.bin",
       size: 50,
+      partSize: 8 * 1024 * 1024,
       direction: "upload",
       state: { kind: "queued" },
       createdAt: now,
@@ -288,6 +278,7 @@ describe("TransferEngine — resumePending", () => {
       key: "done.bin",
       localPath: "/local/done.bin",
       size: 10,
+      partSize: 8 * 1024 * 1024,
       direction: "upload",
       state: { kind: "uploaded" },
       createdAt: now,
@@ -307,21 +298,17 @@ describe("TransferEngine — resumePending", () => {
 
     await engine.resumePending();
 
-    // Non-terminal transfers are now failed.
     const s1 = engine.getTransfer("stuck-1");
     expect(s1?.state.kind).toBe("failed");
     const s2 = engine.getTransfer("stuck-2");
     expect(s2?.state.kind).toBe("failed");
 
-    // Terminal transfers keep their state.
     const d = engine.getTransfer("done-1");
     expect(d?.state.kind).toBe("uploaded");
 
-    // Also persisted to store.
     expect((await store.get("stuck-1"))?.state.kind).toBe("failed");
     expect((await store.get("stuck-2"))?.state.kind).toBe("failed");
 
-    // Nothing was re-queued — engine.queue is empty.
     expect(engine["queue"]).toEqual([]);
   });
 });

@@ -1,13 +1,3 @@
-// TransferEngine: drives the state machine
-// queued → sending(percent) → checking → uploaded | downloaded | failed
-// with concurrency 3, persisting every state change and emitting
-// EngineEvents to subscribers. Framework-free — no React, no Tauri.
-//
-// One engine instance handles both directions for a connection: `direction`
-// on each Transfer picks which of uploadTransfer/downloadTransfer actually
-// moves the bytes, but queueing, concurrency, persistence, and the failure/
-// cancel machinery are all shared rather than duplicated.
-
 import type { S3Client } from "@aws-sdk/client-s3";
 
 import type {
@@ -22,13 +12,13 @@ import { classifyError } from "./errors";
 
 const log = createLogger("engine");
 import {
+  PART_SIZE,
   VerificationError,
   uploadTransfer,
   type LocalFileReader,
 } from "./s3/multipart";
 import { downloadTransfer, type LocalFileWriter } from "./s3/download";
 
-/** Valid next states for each current state — invalid transitions are rejected. */
 export const STATE_TRANSITIONS: Record<
   TransferState["kind"],
   TransferState["kind"][]
@@ -55,13 +45,9 @@ export class InvalidTransitionError extends Error {
 const CONCURRENCY = 3;
 
 export interface EnqueueFile {
-  /** Source path (upload) or destination path (download) on the local disk. */
   localPath: string;
   size: number;
-  /** Remote key this file uploads to or downloads from. */
   key: string;
-  /** Shared by every file from the same dropped/picked folder — copied onto
-   *  the created Transfer so the UI can group them into one row. */
   folderId?: string;
   folderName?: string;
 }
@@ -72,11 +58,9 @@ export interface TransferEngineDeps {
   connectionId: string;
   reader: LocalFileReader;
   store: TransferStore;
-  /** Required only if this engine will ever be asked to enqueueDownloads. */
   writer?: LocalFileWriter;
   concurrency?: number;
   now?: () => number;
-  /** Injectable id generator for deterministic tests. */
   idGenerator?: () => string;
 }
 
@@ -97,14 +81,7 @@ export class TransferEngine {
   private readonly subscribers = new Set<(event: EngineEvent) => void>();
   private readonly acknowledged = new Set<string>();
   private readonly abortControllers = new Map<string, AbortController>();
-  /** Transfer ids cancel() was called on. Entries are never removed: within
-   * one engine instance a cancelled transfer is done for good (it's already
-   * out of `transfers`/`queue`/`active`, so nothing can restart it here) —
-   * this set exists purely to stop a stray in-flight rejection or a late
-   * fire-and-forget progress update from being mistaken for a real failure
-   * or silently resurrecting the transfer after the fact. */
   private readonly cancelledIds = new Set<string>();
-  /** Per-transfer speed tracking: last byte count + wall-clock timestamp. */
   private readonly speedTrackers = new Map<string, { lastBytes: number; lastTime: number }>();
 
   private batchUploaded = 0;
@@ -148,12 +125,10 @@ export class TransferEngine {
     return false;
   }
 
-  /** Queue new files for upload under this connection's bucket. */
   async enqueue(files: EnqueueFile[]): Promise<Transfer[]> {
     return this.enqueueInternal(files, "upload");
   }
 
-  /** Queue new remote files for download to a local destination path each. */
   async enqueueDownloads(files: EnqueueFile[]): Promise<Transfer[]> {
     return this.enqueueInternal(files, "download");
   }
@@ -171,6 +146,7 @@ export class TransferEngine {
         key: file.key,
         localPath: file.localPath,
         size: file.size,
+        partSize: PART_SIZE,
         folderId: file.folderId,
         folderName: file.folderName,
         direction,
@@ -189,24 +165,16 @@ export class TransferEngine {
     return created;
   }
 
-  /** Mark a failed transfer as seen (clears badge/notification urgency, stays visible). */
   acknowledge(transferId: string): void {
     this.acknowledged.add(transferId);
   }
 
-  /** Remove a failed (acknowledged) transfer from the list entirely. */
   async dismiss(transferId: string): Promise<void> {
     this.transfers.delete(transferId);
     this.acknowledged.delete(transferId);
     await this.store.delete(transferId);
   }
 
-  /**
-   * Cancels a queued or in-flight transfer: drops it from the queue/active
-   * set and this session's transfer list, aborts its in-flight request
-   * (if any), and deletes its persisted record so it won't be re-queued on
-   * the next app launch.
-   */
   async cancel(transferId: string): Promise<void> {
     const t = this.transfers.get(transferId);
     log.info("cancel", t?.key ?? transferId, transferId);
@@ -222,11 +190,6 @@ export class TransferEngine {
     await this.store.delete(transferId);
   }
 
-  /**
-   * Reload transfers left in the store from a previous session. Non-terminal
-   * transfers (queued/sending/checking) are marked as failed so the user
-   * sees what was left behind, rather than silently discarding them.
-   */
   async resumePending(): Promise<void> {
     const all = await this.store.list(this.connectionId);
     for (const transfer of all) {
@@ -251,14 +214,8 @@ export class TransferEngine {
     transfer.state = next;
     transfer.updatedAt = this.now();
     await this.store.save(transfer);
-    // A fire-and-forget onProgress call (from uploadTransfer/downloadTransfer)
-    // can still be resolving its store.save() after cancel() has already
-    // dropped this transfer — without this check, that stale continuation
-    // would silently re-insert it into the live transfer list.
     if (this.cancelledIds.has(transfer.id)) return;
     this.transfers.set(transfer.id, transfer);
-    // Snapshot for the event — `transfer` keeps mutating in place, so
-    // subscribers must not receive a reference that changes under them.
     this.emit({ type: "transfer-updated", transfer: { ...transfer } });
   }
 
@@ -349,6 +306,7 @@ export class TransferEngine {
           client: this.client,
           bucket: this.bucket,
           reader: this.reader,
+          store: this.store,
           onProgress,
           signal: controller.signal,
         });
