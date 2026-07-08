@@ -105,15 +105,6 @@ class MemorySqliteTransferStore implements TransferStore {
   delete(id: string) {
     return this.inner.delete(id);
   }
-  saveParts(parts: Parameters<TransferStore["saveParts"]>[0]) {
-    return this.inner.saveParts(parts);
-  }
-  listParts(transferId: string) {
-    return this.inner.listParts(transferId);
-  }
-  knownUploadIds(connectionId: string) {
-    return this.inner.knownUploadIds(connectionId);
-  }
 }
 
 let installed = false;
@@ -207,7 +198,6 @@ const MOCKS: Array<{ specifier: string; fake: () => unknown; real: unknown; rest
     fake: () => ({
       setTrayStatus: () => {},
       setTrayConnections: () => {},
-      onRetryFailedRequested: () => () => {},
       onUploadFilesRequested: () => () => {},
     }),
     real: REAL_TRAY,

@@ -13,7 +13,7 @@ import type { Connection, RemoteEntry, Transfer, TransferState } from "../../../
 
 afterEach(cleanup);
 
-const BANNED = [/bucket/i, /object key/i, /\bprefix\b/i, /multipart/i, /etag/i];
+const BANNED = [/bucket/i, /object key/i, /\bprefix\b/i, /etag/i];
 
 function assertNoJargon(container: HTMLElement) {
   const text = container.textContent ?? "";
@@ -43,7 +43,6 @@ const transfers: Transfer[] = [
     key: "clip.mp4",
     localPath: "/tmp/clip.mp4",
     size: 100,
-    partSize: 8 * 1024 * 1024,
     direction: "upload",
     state: { kind: "failed", errorClass: "storage-full" },
     createdAt: 0,
@@ -52,7 +51,7 @@ const transfers: Transfer[] = [
 ];
 
 describe("jargon sweep", () => {
-  test("no rendered screen ever says bucket/object key/prefix/multipart/ETag", () => {
+  test("no rendered screen ever says bucket/object key/prefix/ETag", () => {
     const services = createFakeServices({
       connections: [conn],
       entriesByPrefix: { "conn-1::": entries },

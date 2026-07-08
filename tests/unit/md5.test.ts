@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Md5, bytesToHex, compositeEtag, md5Hex } from "../../src/lib/md5";
+import { Md5, bytesToHex, md5Hex } from "../../src/lib/md5";
 
 function utf8(s: string): Uint8Array {
   return new TextEncoder().encode(s);
@@ -15,7 +15,6 @@ describe("md5", () => {
   });
 
   test("longer input spanning many 64-byte blocks", async () => {
-    // 'a' repeated one million times is a canonical MD5 stress vector.
     const big = new Uint8Array(1_000_000).fill(0x61);
     expect(await md5Hex(big)).toBe("7707d6ae4e027c70eea2a935c2296f21");
   });
@@ -53,18 +52,5 @@ describe("md5", () => {
     b.update(utf8("second"));
     expect(bytesToHex(a.digest())).toBe(await md5Hex(utf8("first")));
     expect(bytesToHex(b.digest())).toBe(await md5Hex(utf8("second")));
-  });
-
-  test("compositeEtag combines part md5s and appends part count", async () => {
-    const part1 = await md5Hex(utf8("part-one"));
-    const part2 = await md5Hex(utf8("part-two"));
-    const combinedBytes = new Uint8Array(32);
-    [part1, part2].forEach((hex, i) => {
-      for (let j = 0; j < 16; j++) {
-        combinedBytes[i * 16 + j] = parseInt(hex.slice(j * 2, j * 2 + 2), 16);
-      }
-    });
-    const expected = `${await md5Hex(combinedBytes)}-2`;
-    expect(await compositeEtag([part1, part2])).toBe(expected);
   });
 });

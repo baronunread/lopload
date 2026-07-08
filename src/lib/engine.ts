@@ -6,7 +6,7 @@
 // One engine instance handles both directions for a connection: `direction`
 // on each Transfer picks which of uploadTransfer/downloadTransfer actually
 // moves the bytes, but queueing, concurrency, persistence, and the failure/
-// retry/cancel machinery are all shared rather than duplicated.
+// cancel machinery are all shared rather than duplicated.
 
 import type { S3Client } from "@aws-sdk/client-s3";
 
@@ -22,7 +22,6 @@ import { classifyError } from "./errors";
 
 const log = createLogger("engine");
 import {
-  PART_SIZE,
   VerificationError,
   uploadTransfer,
   type LocalFileReader,
@@ -35,12 +34,8 @@ export const STATE_TRANSITIONS: Record<
   TransferState["kind"][]
 > = {
   queued: ["sending", "failed"],
-  // "sending"/"checking" -> "queued" is the bounded auto-retry path: a
-  // transient network failure re-queues the transfer instead of failing it.
-  sending: ["sending", "checking", "failed", "queued"],
-  // "checking" -> "sending" covers resuming a transfer that was interrupted
-  // mid-verification on a previous run; everything else about "checking" is terminal-ish.
-  checking: ["uploaded", "downloaded", "failed", "sending", "queued"],
+  sending: ["sending", "checking", "failed"],
+  checking: ["uploaded", "downloaded", "failed"],
   uploaded: [],
   downloaded: [],
   failed: ["queued"],
@@ -58,16 +53,6 @@ export class InvalidTransitionError extends Error {
 }
 
 const CONCURRENCY = 3;
-
-/** Error classes worth retrying automatically — transient network trouble.
- * Everything else (credentials, verification, not-found…) fails immediately
- * because retrying can't fix it. */
-const AUTO_RETRY_CLASSES: ReadonlySet<ErrorClass> = new Set([
-  "offline",
-  "connection-dropped",
-]);
-/** Backoff before each automatic retry; length = max retries before sticky-failed. */
-const AUTO_RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
 
 export interface EnqueueFile {
   /** Source path (upload) or destination path (download) on the local disk. */
@@ -93,9 +78,6 @@ export interface TransferEngineDeps {
   now?: () => number;
   /** Injectable id generator for deterministic tests. */
   idGenerator?: () => string;
-  /** Backoff before each automatic retry of a transient network failure;
-   * length caps the retries. Injectable so tests don't sleep. */
-  autoRetryDelaysMs?: number[];
 }
 
 export class TransferEngine {
@@ -122,11 +104,6 @@ export class TransferEngine {
    * fire-and-forget progress update from being mistaken for a real failure
    * or silently resurrecting the transfer after the fact. */
   private readonly cancelledIds = new Set<string>();
-  private readonly autoRetryDelaysMs: number[];
-  /** Automatic retries consumed per transfer. In-memory only: a restart resets the budget. */
-  private readonly autoRetryAttempts = new Map<string, number>();
-  /** Pending backoff timers, so cancel() can stop a scheduled retry. */
-  private readonly autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Per-transfer speed tracking: last byte count + wall-clock timestamp. */
   private readonly speedTrackers = new Map<string, { lastBytes: number; lastTime: number }>();
 
@@ -145,7 +122,6 @@ export class TransferEngine {
     this.concurrency = deps.concurrency ?? CONCURRENCY;
     this.now = deps.now ?? (() => Date.now());
     this.idGenerator = deps.idGenerator ?? (() => crypto.randomUUID());
-    this.autoRetryDelaysMs = deps.autoRetryDelaysMs ?? AUTO_RETRY_DELAYS_MS;
   }
 
   subscribe(fn: (event: EngineEvent) => void): () => void {
@@ -195,7 +171,6 @@ export class TransferEngine {
         key: file.key,
         localPath: file.localPath,
         size: file.size,
-        partSize: PART_SIZE,
         folderId: file.folderId,
         folderName: file.folderName,
         direction,
@@ -214,15 +189,12 @@ export class TransferEngine {
     return created;
   }
 
-  /** Retry a failed transfer; multipart uploads resume from persisted parts,
-   * downloads restart from byte zero. */
+  /** Retry a failed transfer. */
   async retry(transferId: string): Promise<void> {
     const transfer = this.transfers.get(transferId);
     if (!transfer || transfer.state.kind !== "failed") return;
     log.info("retry", transfer.key, transfer.id);
     this.acknowledged.delete(transferId);
-    // A user-initiated retry restores the full automatic-retry budget.
-    this.autoRetryAttempts.delete(transferId);
     await this.setState(transfer, { kind: "queued" });
     this.queue.push(transferId);
     void this.pump();
@@ -253,12 +225,6 @@ export class TransferEngine {
     const controller = this.abortControllers.get(transferId);
     controller?.abort();
     this.abortControllers.delete(transferId);
-    const timer = this.autoRetryTimers.get(transferId);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      this.autoRetryTimers.delete(transferId);
-    }
-    this.autoRetryAttempts.delete(transferId);
     this.speedTrackers.delete(transferId);
     const queueIdx = this.queue.indexOf(transferId);
     if (queueIdx !== -1) this.queue.splice(queueIdx, 1);
@@ -330,7 +296,6 @@ export class TransferEngine {
 
   private maybeEmitBatchFinished(): void {
     if (this.active.size === 0 && this.queue.length === 0 &&
-        this.autoRetryTimers.size === 0 &&
         (this.batchUploaded > 0 || this.batchDownloaded > 0 || this.batchFailed > 0)) {
       this.emit({
         type: "batch-finished",
@@ -356,12 +321,8 @@ export class TransferEngine {
       if (transfer.state.kind === "queued") {
         await this.setState(transfer, { kind: "sending", percent: 0 });
       } else if (transfer.state.kind !== "sending" && transfer.state.kind !== "checking") {
-        // Nothing to do for uploaded/downloaded/failed transfers pulled onto the queue.
         return;
       } else if (transfer.state.kind === "checking") {
-        // Left mid-verification by a crash; re-run from sending(0) — the
-        // transfer step itself will fast-path already-uploaded parts (uploads)
-        // or simply restart the stream (downloads).
         await this.setState(transfer, { kind: "sending", percent: 0 });
       }
 
@@ -400,7 +361,6 @@ export class TransferEngine {
           client: this.client,
           bucket: this.bucket,
           reader: this.reader,
-          store: this.store,
           onProgress,
           signal: controller.signal,
         });
@@ -408,43 +368,20 @@ export class TransferEngine {
 
       await this.setState(transfer, { kind: "checking" });
       await this.setState(transfer, { kind: transfer.direction === "download" ? "downloaded" : "uploaded" });
-      this.autoRetryAttempts.delete(id);
       if (transfer.direction === "download") this.batchDownloaded += 1;
       else this.batchUploaded += 1;
     } catch (err) {
       if (this.cancelledIds.has(id)) {
-        // Deliberately cancelled — not a failure, and already dropped from
-        // the live transfer list by cancel(); nothing further to persist.
-        // cancelledIds is never cleared for this id: within one engine
-        // instance a cancelled transfer is dead for good — retry()/pump()
-        // can't resurrect it since it's no longer in `this.transfers` either.
         return;
       }
       const errorClass: ErrorClass =
         err instanceof VerificationError ? err.errorClass : classifyError(err);
-      // A transfer may be in "sending" or already "checking" when it fails.
       const current = this.transfers.get(id) ?? transfer;
       if (current.state.kind === "uploaded" || current.state.kind === "downloaded") return;
-      const attempts = this.autoRetryAttempts.get(id) ?? 0;
-      if (AUTO_RETRY_CLASSES.has(errorClass) && attempts < this.autoRetryDelaysMs.length) {
-        log.warn("auto-retry", current.key, errorClass, `attempt ${attempts + 1}`);
-        this.autoRetryAttempts.set(id, attempts + 1);
-        await this.setState(current, { kind: "queued" });
-        const timer = setTimeout(() => {
-          this.autoRetryTimers.delete(id);
-          if (this.cancelledIds.has(id)) return;
-          this.queue.push(id);
-          void this.pump();
-        }, this.autoRetryDelaysMs[attempts]);
-        this.autoRetryTimers.set(id, timer);
-        return;
-      }
       log.error("transfer failed", current.key, errorClass, err instanceof Error ? err.message : "");
-      this.autoRetryAttempts.delete(id);
       try {
         await this.setState(current, { kind: "failed", errorClass });
       } catch {
-        // If already failed/terminal for some reason, force-persist the class.
         current.state = { kind: "failed", errorClass };
         current.updatedAt = this.now();
         await this.store.save(current);

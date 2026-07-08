@@ -1,7 +1,7 @@
 // Classifies arbitrary thrown errors (AWS SDK errors, fetch failures, HTTP
 // status codes) into the ErrorClass taxonomy and produces a PlainError with
 // exactly one plain-language sentence. Nothing here may leak SDK text, XML,
-// or storage jargon (bucket/object/key/ETag/multipart) to callers — the UI
+// or storage jargon (bucket/object/key/ETag) to callers — the UI
 // renders `PlainError.message` verbatim.
 
 import type { ErrorClass, PlainError } from "./types";

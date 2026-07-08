@@ -48,9 +48,6 @@ export interface Transfer {
   /** Local file path: source for an upload, destination for a download. */
   localPath: string;
   size: number;
-  partSize: number;
-  /** Set once a multipart upload session exists; drives resume + orphan matching. */
-  uploadId?: string;
   /** Shared by every transfer that came from the same dropped/picked folder,
    *  so the UI can render them as one aggregated row instead of one per file. */
   folderId?: string;
@@ -60,13 +57,6 @@ export interface Transfer {
   state: TransferState;
   createdAt: number;
   updatedAt: number;
-}
-
-export interface TransferPart {
-  transferId: string;
-  partNumber: number;
-  etag: string;
-  size: number;
 }
 
 /** A remote listing entry; "folder" is a synthesized common prefix. */
@@ -93,10 +83,6 @@ export interface TransferStore {
   get(id: string): Promise<Transfer | null>;
   save(t: Transfer): Promise<void>;
   delete(id: string): Promise<void>;
-  saveParts(parts: TransferPart[]): Promise<void>;
-  listParts(transferId: string): Promise<TransferPart[]>;
-  /** upload_ids of every locally-tracked multipart session (orphan sweep). */
-  knownUploadIds(connectionId: string): Promise<Set<string>>;
 }
 
 // ---- engine events the UI subscribes to ----

@@ -1,7 +1,6 @@
 // Silent trash purge sweep — permanently deletes anything under the trash
-// location older than the retention window. Modeled exactly on the orphan
-// multipart-upload sweep (orphans.ts): no UI events, no logs surfaced, and
-// it must never throw to the caller.
+// location older than the retention window. No UI events, no logs surfaced,
+// and it must never throw to the caller.
 
 import { DeleteObjectsCommand, ListObjectsV2Command, type S3Client } from "@aws-sdk/client-s3";
 

@@ -13,13 +13,11 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [checking, setChecking] = useState(false);
   const [downloadDir, setDownloadDir] = useState<string | null>(null);
   const [concurrentCount, setConcurrentCount] = useState<number>(3);
-  const [autoRetry, setAutoRetryState] = useState<boolean>(true);
 
   useEffect(() => {
     void services.updates.isAutoUpdateEnabled().then(setAutoUpdateEnabledState);
     void services.settings.getDefaultDownloadDir().then(setDownloadDir);
     void services.settings.getConcurrentTransfers().then(setConcurrentCount);
-    void services.settings.getAutoRetry().then(setAutoRetryState);
   }, [services]);
 
   async function handleToggleAutoUpdate(enabled: boolean) {
@@ -63,11 +61,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     await services.settings.setConcurrentTransfers(count);
   }
 
-  async function handleAutoRetryToggle(enabled: boolean) {
-    setAutoRetryState(enabled);
-    await services.settings.setAutoRetry(enabled);
-  }
-
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog className="w-full max-w-md p-6">
@@ -108,12 +101,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                   <Select.Option value={5}>5</Select.Option>
                 </Select>
               </div>
-              <Switch
-                label="Auto-retry on transient errors"
-                checked={autoRetry}
-                onCheckedChange={handleAutoRetryToggle}
-                controlFirst={false}
-              />
             </div>
           </section>
 

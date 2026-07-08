@@ -1,8 +1,7 @@
 // Thin wrapper around the tray IPC surface (src-tauri/src/tray.rs): pushes
-// engine-derived status to the tray menu/icon and surfaces the tray's
-// "Retry failed" click back as an event the engine layer can act on. All
-// tray business logic (formatting, icon choice) lives in Rust — this file
-// only carries data across the IPC boundary.
+// engine-derived status to the tray menu/icon. All tray business logic
+// (formatting, icon choice) lives in Rust — this file only carries data
+// across the IPC boundary.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -20,7 +19,6 @@ export interface TrayUploadTarget {
   name: string;
 }
 
-const RETRY_FAILED_EVENT = "tray://retry-failed";
 const UPLOAD_FILES_EVENT = "tray://upload-files";
 
 /** At most a few IPC calls per second — progress events fire far more often
@@ -41,8 +39,8 @@ function sendStatus(status: TrayStatus): void {
   }).catch(() => {});
 }
 
-/** Pushes the tray's status line, "Retry failed" count, and Quit label to
- * Rust, throttled so a fast stream of progress updates doesn't spam IPC. */
+/** Pushes the tray's status line and Quit label to Rust, throttled so a
+ * fast stream of progress updates doesn't spam IPC. */
 export function setTrayStatus(status: TrayStatus): void {
   const now = Date.now();
   const elapsed = now - lastSentAt;
@@ -67,22 +65,6 @@ export function setTrayStatus(status: TrayStatus): void {
   }
 }
 
-/** Subscribes to the tray's "Retry failed" menu click; returns an unsubscribe. */
-export function onRetryFailedRequested(cb: () => void): () => void {
-  let unlisten: (() => void) | null = null;
-  let cancelled = false;
-
-  void listen(RETRY_FAILED_EVENT, () => cb()).then((fn) => {
-    if (cancelled) fn();
-    else unlisten = fn;
-  });
-
-  return () => {
-    cancelled = true;
-    unlisten?.();
-  };
-}
-
 /** Pushes the current saved connections to the tray's "Upload files…" submenu. */
 export function setTrayConnections(connections: TrayUploadTarget[]): void {
   void invoke("tray_set_connections", { connections }).catch(() => {});
@@ -104,4 +86,3 @@ export function onUploadFilesRequested(cb: (connectionId: string) => void): () =
     unlisten?.();
   };
 }
-

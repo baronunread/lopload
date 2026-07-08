@@ -25,7 +25,7 @@ export function buildUpdateNotice(hasTransfersInFlight: boolean): UpdateNotice {
   if (hasTransfersInFlight) {
     return {
       title: "A new version is ready",
-      body: "Your transfers will be interrupted. They'll show as failed after restart - tap to retry.",
+      body: "Your transfers will be interrupted. They'll show as failed after restart.",
       actionLabel: "Restart and update",
     };
   }

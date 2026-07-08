@@ -1,6 +1,3 @@
-// Shared fake AppServices for UI tests — implements the seam from
-// src/ui/services.ts entirely in memory, with no dependency on src/lib or
-// src/tauri (which may not exist yet while this workstream is in progress).
 import type { Connection, EngineEvent, RemoteEntry, Transfer } from "../../../src/lib/types";
 import { CredentialsUnreadableError } from "../../../src/ui/services";
 import type {
@@ -14,29 +11,21 @@ import type {
 
 export interface FakeServicesOptions {
   connections?: Connection[];
-  /** Keyed by `${connectionId}::${prefix}` — the exact listing for that folder. */
   entriesByPrefix?: Record<string, RemoteEntry[]>;
   transfersByConnection?: Record<string, Transfer[]>;
   testConnectionResult?: { ok: boolean; message: string };
   pickFilesResult?: PickedFile[];
   folderInfoResult?: FolderInfo;
-  /** Keyed by `${connectionId}::${prefix}` — files listFilesRecursive returns. */
   filesRecursiveByPrefix?: Record<string, { key: string; size: number }[]>;
   saveDestinationResult?: string | null;
   downloadDirectoryResult?: string | null;
   trashItems?: TrashItem[];
-  /** Connection ids for which browser.list should behave like the keychain
-   * couldn't produce credentials — simulates a denied prompt or ACL
-   * mismatch. Cleared for an id once connections.save() is called for it,
-   * simulating a successful re-entry. */
   credentialsUnreadableFor?: Set<string>;
-  /** Version string checkForUpdate() should resolve with, or undefined/null for none. */
   updateVersion?: string | null;
 }
 
 export interface FakeServices extends AppServices {
   emit(event: EngineEvent): void;
-  retryCalls: string[];
   dismissCalls: string[];
   cancelCalls: string[];
   enqueueDownloadsCalls: Array<{ connectionId: string; targets: DownloadTarget[] }>;
@@ -52,8 +41,6 @@ export interface FakeServices extends AppServices {
   restoreCalls: TrashItem[];
   deleteNowCalls: TrashItem[];
   emptyTrashCalls: string[];
-  /** Simulates the real onFileDrop's onError firing (e.g. an unreadable
-   * dropped folder), for tests of the resulting error toast. */
   triggerFileDropError(message: string): void;
   checkForUpdateCalls: number[];
   installAndRelaunchCalls: number[];
@@ -64,7 +51,6 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     (options.connections ?? []).map((c) => [c.id, c]),
   );
   const listeners = new Set<(event: EngineEvent) => void>();
-  const retryCalls: string[] = [];
   const dismissCalls: string[] = [];
   const cancelCalls: string[] = [];
   const enqueueDownloadsCalls: Array<{ connectionId: string; targets: DownloadTarget[] }> = [];
@@ -159,9 +145,6 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       async enqueueDownloads(connectionId, targets) {
         enqueueDownloadsCalls.push({ connectionId, targets });
       },
-      async retry(transferId) {
-        retryCalls.push(transferId);
-      },
       async dismiss(transferId) {
         dismissCalls.push(transferId);
       },
@@ -197,10 +180,6 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
         return 3;
       },
       async setConcurrentTransfers() {},
-      async getAutoRetry() {
-        return true;
-      },
-      async setAutoRetry() {},
     },
     async pickFiles() {
       return options.pickFilesResult ?? [];
@@ -232,7 +211,6 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     triggerFileDropError(message) {
       fileDropErrorHandler?.(message);
     },
-    retryCalls,
     dismissCalls,
     cancelCalls,
     enqueueDownloadsCalls,

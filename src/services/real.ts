@@ -43,7 +43,6 @@ import {
   restoreFolderFromTrash as s3RestoreFolderFromTrash,
   testConnection as s3TestConnection,
 } from "../lib/s3/client";
-import { sweepOrphans } from "../lib/s3/orphans";
 import { sweepTrash } from "../lib/s3/trashSweep";
 import {
   loadDatabase,
@@ -55,7 +54,6 @@ import { tauriFetch } from "../tauri/http";
 import { initFileLogSink } from "../tauri/logSink";
 import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
 import {
-  onRetryFailedRequested,
   onUploadFilesRequested,
   setTrayConnections,
   setTrayStatus,
@@ -69,8 +67,6 @@ import {
   setDefaultDownloadDir as settingsSetDefaultDownloadDir,
   getConcurrentTransfers as settingsGetConcurrentTransfers,
   setConcurrentTransfers as settingsSetConcurrentTransfers,
-  getAutoRetry as settingsGetAutoRetry,
-  setAutoRetry as settingsSetAutoRetry,
 } from "../tauri/settings";
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
@@ -85,7 +81,6 @@ import type {
 } from "../ui/services";
 import { expandDroppedPaths, type DropDirEntry } from "./dragDropExpand";
 
-const ORPHAN_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const TRASH_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Thumbnails are re-requested each time they're shown, so this only needs
  * to outlive a single render — no reason to hand out a long-lived link. */
@@ -128,9 +123,7 @@ class RealServices implements AppServices {
   /** Latest known state of every transfer across all engines, for tray progress. */
   private transferSnapshots = new Map<string, Transfer>();
 
-  private orphanSweepStarted = false;
   private trashSweepStarted = false;
-  private trayRetryListening = false;
   private trayUploadListening = false;
 
   private async getDb() {
@@ -180,10 +173,7 @@ class RealServices implements AppServices {
     if (engine) return engine;
     const { client, conn } = await this.getClient(connectionId);
     const store = await this.getTransferStore();
-    const [concurrency, autoRetry] = await Promise.all([
-      settingsGetConcurrentTransfers(),
-      settingsGetAutoRetry(),
-    ]);
+    const concurrency = await settingsGetConcurrentTransfers();
     engine = new TransferEngine({
       client,
       bucket: conn.bucket,
@@ -192,7 +182,6 @@ class RealServices implements AppServices {
       writer: tauriFileWriter,
       store,
       concurrency,
-      autoRetryDelaysMs: autoRetry ? [1_000, 3_000, 9_000] : [],
     });
     engine.subscribe((event) => this.onEngineEvent(connectionId, event));
     this.engines.set(connectionId, engine);
@@ -214,7 +203,7 @@ class RealServices implements AppServices {
         parts.push(`${event.downloaded} file${event.downloaded === 1 ? "" : "s"} downloaded`);
       }
       if (event.failed > 0) {
-        parts.push(`${event.failed} file${event.failed === 1 ? "" : "s"} failed - open Lopload to retry`);
+        parts.push(`${event.failed} file${event.failed === 1 ? "" : "s"} failed`);
       }
       if (parts.length > 0) this.notify("Lopload", parts.join(", "));
     }
@@ -259,20 +248,6 @@ class RealServices implements AppServices {
     const { uploading, totalBytes, doneBytes, failed } = this.computeTrayAggregate();
     const percent = uploading > 0 && totalBytes > 0 ? (doneBytes / totalBytes) * 100 : 0;
     setTrayStatus({ uploading, percent, failed });
-  }
-
-  /** Listens once for the tray's "Retry failed" click and replays it as a
-   * retry() on every currently-failed transfer across all engines. */
-  startTrayRetryListening(): void {
-    if (this.trayRetryListening) return;
-    this.trayRetryListening = true;
-    onRetryFailedRequested(() => {
-      for (const [id, transfer] of this.transferSnapshots) {
-        if (transfer.state.kind !== "failed") continue;
-        const engine = this.findEngineFor(id);
-        void engine?.retry(id);
-      }
-    });
   }
 
   private findEngineFor(transferId: string): TransferEngine | undefined {
@@ -469,10 +444,6 @@ class RealServices implements AppServices {
       }));
       await engine.enqueueDownloads(toEnqueue);
     },
-    retry: async (transferId: string): Promise<void> => {
-      const engine = this.findEngineFor(transferId);
-      await engine?.retry(transferId);
-    },
     dismiss: async (transferId: string): Promise<void> => {
       const engine = this.findEngineFor(transferId);
       engine?.acknowledge(transferId);
@@ -522,8 +493,6 @@ class RealServices implements AppServices {
     setDefaultDownloadDir: (path: string | null): Promise<void> => settingsSetDefaultDownloadDir(path),
     getConcurrentTransfers: (): Promise<number> => settingsGetConcurrentTransfers(),
     setConcurrentTransfers: (count: number): Promise<void> => settingsSetConcurrentTransfers(count),
-    getAutoRetry: (): Promise<boolean> => settingsGetAutoRetry(),
-    setAutoRetry: (enabled: boolean): Promise<void> => settingsSetAutoRetry(enabled),
   };
 
   // ---- misc AppServices members ----
@@ -673,36 +642,7 @@ class RealServices implements AppServices {
     sendNotification({ title, body });
   }
 
-  /** Runs the silent orphan sweep now, and every 24h thereafter. Call once at startup. */
-  startOrphanSweep(): void {
-    if (this.orphanSweepStarted) return;
-    this.orphanSweepStarted = true;
-    const run = () => void this.sweepAllConnections();
-    run();
-    setInterval(run, ORPHAN_SWEEP_INTERVAL_MS);
-  }
-
-  private async sweepAllConnections(): Promise<void> {
-    try {
-      const store = await this.getConnectionStore();
-      const transferStore = await this.getTransferStore();
-      const connections = await store.list();
-      for (const conn of connections) {
-        try {
-          const { client } = await this.getClient(conn.id);
-          await sweepOrphans(client, transferStore, conn.id, conn.bucket, Date.now());
-        } catch {
-          // Silent per PLAN.md #7 — a single connection's failure (e.g. no
-          // stored credentials yet) must not affect the others.
-        }
-      }
-    } catch {
-      // Silent.
-    }
-  }
-
-  /** Runs the silent trash purge sweep now, and every 24h thereafter. Modeled
-   * exactly on startOrphanSweep(). Call once at startup. */
+  /** Runs the silent trash purge sweep now, and every 24h thereafter. Call once at startup. */
   startTrashSweep(): void {
     if (this.trashSweepStarted) return;
     this.trashSweepStarted = true;
@@ -720,7 +660,7 @@ class RealServices implements AppServices {
           const { client } = await this.getClient(conn.id);
           await sweepTrash(client, conn.bucket, Date.now());
         } catch {
-          // Silent, same as the orphan sweep — one connection's failure
+          // Silent — one connection's failure
           // must not affect the others.
         }
       }
@@ -732,14 +672,12 @@ class RealServices implements AppServices {
 
 let singleton: RealServices | null = null;
 
-/** Builds (once) the real AppServices implementation and starts the silent
- * orphan sweep. Only valid inside the Tauri webview — see isTauriRuntime(). */
+/** Builds (once) the real AppServices implementation. Only valid inside the
+ * Tauri webview — see isTauriRuntime(). */
 export function createRealServices(): AppServices {
   if (!singleton) {
     singleton = new RealServices();
-    singleton.startOrphanSweep();
     singleton.startTrashSweep();
-    singleton.startTrayRetryListening();
     singleton.startTrayUploadListening();
     void initFileLogSink();
   }

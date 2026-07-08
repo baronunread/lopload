@@ -187,7 +187,6 @@ describe("RemoteBrowser", () => {
       key: "readme.txt",
       localPath: "/tmp/readme.txt",
       size: 100,
-      partSize: 8 * 1024 * 1024,
       direction: "upload",
       state: { kind: "uploaded" },
       createdAt: 0,

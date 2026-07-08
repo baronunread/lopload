@@ -15,7 +15,6 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
     key: "clips/vacation.mp4",
     localPath: "/tmp/vacation.mp4",
     size: 100,
-    partSize: 8 * 1024 * 1024,
     direction: "upload",
     state: { kind: "sending", percent: 40 },
     createdAt: 0,
@@ -153,7 +152,7 @@ describe("TransferWidget", () => {
     expect(screen.getByText("vacation.mp4")).toBeInTheDocument();
   });
 
-  test("failed transfers are sticky, retryable, and dismissible", async () => {
+  test("failed transfers are sticky and dismissible", async () => {
     const failed = makeTransfer({ state: { kind: "failed", errorClass: "connection-dropped" } });
     const services = createFakeServices({
       transfersByConnection: { "conn-1": [failed] },
@@ -168,9 +167,6 @@ describe("TransferWidget", () => {
     await screen.findByText("0 of 1 uploads complete");
     // Failed count feeds the dock badge.
     await waitFor(() => expect(services.badgeCounts).toContain(1));
-
-    await user.click(screen.getByLabelText(/click to retry/));
-    expect(services.retryCalls).toEqual(["t1"]);
 
     await user.click(screen.getByLabelText(`Dismiss ${failed.key}`));
     expect(services.dismissCalls).toEqual(["t1"]);

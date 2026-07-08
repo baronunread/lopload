@@ -456,7 +456,6 @@ export function createDemoServices(): AppServices {
           key: `${prefix}${f.name}`,
           localPath: f.path,
           size: f.size,
-          partSize: 8 * 1024 * 1024,
           direction: "upload",
           state: { kind: "queued" },
           createdAt: Date.now(),
@@ -489,7 +488,6 @@ export function createDemoServices(): AppServices {
           key: t.key,
           localPath: t.localPath,
           size: t.size,
-          partSize: 8 * 1024 * 1024,
           direction: "download",
           state: { kind: "queued" },
           createdAt: Date.now(),
@@ -512,19 +510,6 @@ export function createDemoServices(): AppServices {
         for (const t of created) {
           const shouldFail = t.key.toLowerCase().includes("fail");
           runTransfer(connectionId, t, shouldFail, (outcome) => noteBatchSettlement(connectionId, outcome));
-        }
-      },
-      async retry(transferId) {
-        for (const [connectionId, transfers] of transfersByConnection.entries()) {
-          const existing = transfers.get(transferId);
-          if (!existing) continue;
-          const restarted: Transfer = { ...existing, state: { kind: "queued" }, updatedAt: Date.now() };
-          transfers.set(transferId, restarted);
-          emit({ type: "transfer-updated", transfer: restarted });
-          pendingBatches.set(connectionId, { total: 1, settled: 0, uploaded: 0, downloaded: 0, failed: 0 });
-          const shouldFail = restarted.key.toLowerCase().includes("fail");
-          runTransfer(connectionId, restarted, shouldFail, (outcome) => noteBatchSettlement(connectionId, outcome));
-          return;
         }
       },
       async dismiss(transferId) {
@@ -582,10 +567,6 @@ export function createDemoServices(): AppServices {
         return 3;
       },
       async setConcurrentTransfers() {},
-      async getAutoRetry() {
-        return true;
-      },
-      async setAutoRetry() {},
     },
     async pickFiles(): Promise<PickedFile[]> {
       return [

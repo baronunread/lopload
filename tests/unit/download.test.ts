@@ -27,7 +27,6 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
     key: "path/to/file.bin",
     localPath: "/local/dest/file.bin",
     size: 10,
-    partSize: 8 * 1024 * 1024,
     direction: "download",
     state: { kind: "sending", percent: 0 },
     createdAt: now,
@@ -125,11 +124,11 @@ describe("downloadTransfer — single-GET path", () => {
     expect(discarded).toEqual([`${transfer.localPath}.tmp`]);
   });
 
-  test("size mismatch (truncated stream) → VerificationError even with no ETag check", async () => {
+  test("size mismatch (truncated stream) → VerificationError", async () => {
     const body = new TextEncoder().encode("hello world");
     s3Mock.on(GetObjectCommand).resolves({
       Body: bodyStreamOf(body) as never,
-      ETag: q("composite-looking-etag-not-32-hex-1"),
+      ETag: q("deadbeefdeadbeefdeadbeefdeadbeef"),
       ContentLength: body.length + 5,
     });
 
@@ -140,23 +139,6 @@ describe("downloadTransfer — single-GET path", () => {
       downloadTransfer(transfer, { client, bucket: "b", writer }),
     ).rejects.toThrow(/size/);
     expect(committed.size).toBe(0);
-  });
-
-  test("composite (multipart) ETag skips the MD5 check and verifies size only", async () => {
-    const body = new TextEncoder().encode("some multipart-uploaded content");
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q("deadbeefdeadbeefdeadbeefdeadbeef-3"),
-      ContentLength: body.length,
-    });
-
-    const transfer = makeTransfer({ size: body.length });
-    const { writer, committed } = makeWriter();
-
-    await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer }),
-    ).resolves.toBeUndefined();
-    expect(committed.get(transfer.localPath)).toEqual(body);
   });
 
   test("reports progress as bytes are received", async () => {

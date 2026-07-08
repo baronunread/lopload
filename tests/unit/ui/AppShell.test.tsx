@@ -38,7 +38,6 @@ const videosTransfer: Transfer = {
   key: "clips/vacation.mp4",
   localPath: "/tmp/vacation.mp4",
   size: 100,
-  partSize: 8 * 1024 * 1024,
   direction: "upload",
   state: { kind: "sending", percent: 50 },
   createdAt: 0,
@@ -50,7 +49,6 @@ const documentsTransfer: Transfer = {
   key: "invoice.pdf",
   localPath: "/tmp/invoice.pdf",
   size: 50,
-  partSize: 8 * 1024 * 1024,
   direction: "upload",
   // Sticky failures stay visible across a connection switch; a plain
   // "uploaded" transfer would not — see the regression test in
@@ -109,7 +107,7 @@ describe("AppShell connection switcher", () => {
     // waitFor or this assertion races the widget's first render.
     await waitFor(() => expect(screen.getByText("Sending - 50%")).toBeInTheDocument());
     expect(screen.queryByText("invoice.pdf")).not.toBeInTheDocument();
-    expect(screen.queryByText("Couldn't send - tap to retry")).not.toBeInTheDocument();
+    expect(screen.queryByText("Couldn't send")).not.toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Storage connection"));
@@ -120,7 +118,7 @@ describe("AppShell connection switcher", () => {
       expect(screen.getAllByText("invoice.pdf").length).toBeGreaterThan(0),
     );
     await waitFor(() =>
-      expect(screen.getByText("Couldn't send - tap to retry")).toBeInTheDocument(),
+      expect(screen.getByText("Couldn't send")).toBeInTheDocument(),
     );
     expect(screen.queryByText("vacation.mp4")).not.toBeInTheDocument();
     expect(screen.queryByText("Sending - 50%")).not.toBeInTheDocument();

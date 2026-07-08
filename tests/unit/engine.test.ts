@@ -1,13 +1,8 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mockClient } from "aws-sdk-client-mock";
 import {
-  CompleteMultipartUploadCommand,
-  CreateMultipartUploadCommand,
-  HeadObjectCommand,
-  ListPartsCommand,
   PutObjectCommand,
   S3Client,
-  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 
 import {
@@ -58,13 +53,11 @@ const ALL_STATES: TransferState["kind"][] = [
 describe("state machine transition table", () => {
   test("valid transitions per PLAN.md", () => {
     expect(STATE_TRANSITIONS.queued).toEqual(["sending", "failed"]);
-    expect(STATE_TRANSITIONS.sending).toEqual(["sending", "checking", "failed", "queued"]);
+    expect(STATE_TRANSITIONS.sending).toEqual(["sending", "checking", "failed"]);
     expect(STATE_TRANSITIONS.checking).toEqual([
       "uploaded",
       "downloaded",
       "failed",
-      "sending",
-      "queued",
     ]);
     expect(STATE_TRANSITIONS.uploaded).toEqual([]);
     expect(STATE_TRANSITIONS.downloaded).toEqual([]);
@@ -88,9 +81,9 @@ describe("state machine transition table", () => {
     expect(canTransition({ kind: "queued" }, { kind: "checking" })).toBe(false);
   });
 
-  test("sending and checking can re-queue (bounded auto-retry path)", () => {
-    expect(canTransition({ kind: "sending", percent: 40 }, { kind: "queued" })).toBe(true);
-    expect(canTransition({ kind: "checking" }, { kind: "queued" })).toBe(true);
+  test("sending and checking can no longer re-queue (no auto-retry)", () => {
+    expect(canTransition({ kind: "sending", percent: 40 }, { kind: "queued" })).toBe(false);
+    expect(canTransition({ kind: "checking" }, { kind: "queued" })).toBe(false);
   });
 
   test("failed only ever transitions back to queued (retry)", () => {
@@ -117,7 +110,7 @@ describe("state machine transition table", () => {
   }
 });
 
-describe("TransferEngine — single-part happy path", () => {
+describe("TransferEngine — single-part upload", () => {
   test("queued -> sending -> checking -> uploaded, persisted at every step", async () => {
     const body = new TextEncoder().encode("small file");
     const reader = makeReader({ "/local/a.txt": body });
@@ -239,164 +232,6 @@ describe("TransferEngine — single-part happy path", () => {
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "uploaded");
 
     expect(engine.getTransfer(transfer.id)!.state).toEqual({ kind: "uploaded" });
-  });
-});
-
-describe("TransferEngine — bounded auto-retry", () => {
-  const NETWORK_ERROR = { name: "ECONNRESET", message: "socket hang up" };
-
-  test("transient network failure retries automatically and succeeds", async () => {
-    const body = new TextEncoder().encode("flaky network");
-    const reader = makeReader({ "/local/e.txt": body });
-    s3Mock
-      .on(PutObjectCommand)
-      .rejectsOnce(NETWORK_ERROR)
-      .rejectsOnce(NETWORK_ERROR)
-      .resolves({ ETag: q(await md5Hex(body)) });
-
-    const store = new MemoryTransferStore();
-    const events: EngineEvent[] = [];
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-      autoRetryDelaysMs: [1, 1, 1],
-    });
-    engine.subscribe((e) => events.push(e));
-
-    const [transfer] = await engine.enqueue([
-      { localPath: "/local/e.txt", size: body.length, key: "e.txt" },
-    ]);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "uploaded");
-
-    // Never surfaced as failed to subscribers — retried silently.
-    const seenKinds = events
-      .filter((e) => e.type === "transfer-updated")
-      .map((e) => (e as { transfer: Transfer }).transfer.state.kind);
-    expect(seenKinds).not.toContain("failed");
-
-    const batchEvent = events.find((e) => e.type === "batch-finished");
-    expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 1, downloaded: 0, failed: 0 });
-  });
-
-  test("goes sticky-failed after exhausting the retry budget", async () => {
-    const body = new TextEncoder().encode("always down");
-    const reader = makeReader({ "/local/f.txt": body });
-    s3Mock.on(PutObjectCommand).rejects(NETWORK_ERROR);
-
-    const store = new MemoryTransferStore();
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-      autoRetryDelaysMs: [1, 1, 1],
-    });
-
-    const [transfer] = await engine.enqueue([
-      { localPath: "/local/f.txt", size: body.length, key: "f.txt" },
-    ]);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
-
-    expect(engine.getTransfer(transfer.id)!.state).toEqual({
-      kind: "failed",
-      errorClass: "connection-dropped",
-    });
-    // 1 initial attempt + 3 retries.
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(4);
-  });
-
-  test("non-retryable classes fail immediately, no auto-retry", async () => {
-    const body = new TextEncoder().encode("wrong creds");
-    const reader = makeReader({ "/local/g.txt": body });
-    s3Mock.on(PutObjectCommand).rejects({
-      name: "AccessDenied",
-      $metadata: { httpStatusCode: 403 },
-    });
-
-    const store = new MemoryTransferStore();
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-      autoRetryDelaysMs: [1, 1, 1],
-    });
-
-    const [transfer] = await engine.enqueue([
-      { localPath: "/local/g.txt", size: body.length, key: "g.txt" },
-    ]);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
-
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);
-  });
-
-  test("manual retry after sticky failure restores the auto-retry budget", async () => {
-    const body = new TextEncoder().encode("second wind");
-    const reader = makeReader({ "/local/h.txt": body });
-    s3Mock
-      .on(PutObjectCommand)
-      .rejectsOnce(NETWORK_ERROR)
-      .rejectsOnce(NETWORK_ERROR)
-      .rejectsOnce(NETWORK_ERROR)
-      .rejectsOnce(NETWORK_ERROR)
-      .rejectsOnce(NETWORK_ERROR)
-      .resolves({ ETag: q(await md5Hex(body)) });
-
-    const store = new MemoryTransferStore();
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-      autoRetryDelaysMs: [1, 1, 1],
-    });
-
-    const [transfer] = await engine.enqueue([
-      { localPath: "/local/h.txt", size: body.length, key: "h.txt" },
-    ]);
-    // Budget of 3 exhausted after 4 total attempts -> sticky failed.
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
-
-    // Manual retry: attempt 5 fails, attempt 6 succeeds via fresh auto-retry budget.
-    await engine.retry(transfer.id);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "uploaded");
-
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(6);
-  });
-
-  test("cancel during backoff stops the scheduled retry", async () => {
-    const body = new TextEncoder().encode("cancel me");
-    const reader = makeReader({ "/local/i.txt": body });
-    s3Mock.on(PutObjectCommand).rejects(NETWORK_ERROR);
-
-    const store = new MemoryTransferStore();
-    const engine = new TransferEngine({
-      client,
-      bucket: "b",
-      connectionId: "conn-1",
-      reader,
-      store,
-      autoRetryDelaysMs: [50, 50, 50],
-    });
-
-    const [transfer] = await engine.enqueue([
-      { localPath: "/local/i.txt", size: body.length, key: "i.txt" },
-    ]);
-    // Wait for the first failure to schedule its backoff (state back to queued).
-    await waitUntil(() => s3Mock.commandCalls(PutObjectCommand).length === 1);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "queued");
-
-    await engine.cancel(transfer.id);
-    await new Promise((resolve) => setTimeout(resolve, 120));
-
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);
-    expect(engine.getTransfer(transfer.id)).toBeUndefined();
   });
 });
 

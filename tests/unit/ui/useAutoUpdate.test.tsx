@@ -27,7 +27,6 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
     key: "clip.mp4",
     localPath: "/tmp/clip.mp4",
     size: 100,
-    partSize: 8 * 1024 * 1024,
     direction: "upload",
     state: { kind: "sending", percent: 10 },
     createdAt: 0,

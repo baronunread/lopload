@@ -139,7 +139,6 @@ export interface EngineService {
   enqueueFiles(connectionId: string, prefix: string, files: PickedFile[]): Promise<void>;
   /** Enqueues one or more remote files for download, each to its own local destination. */
   enqueueDownloads(connectionId: string, targets: DownloadTarget[]): Promise<void>;
-  retry(transferId: string): Promise<void>;
   /** User has acknowledged a failed transfer; safe to stop showing it. */
   dismiss(transferId: string): Promise<void>;
   /** Cancels a queued or in-flight transfer; aborts any in-flight request. */
@@ -171,8 +170,6 @@ export interface SettingsService {
   setDefaultDownloadDir(path: string | null): Promise<void>;
   getConcurrentTransfers(): Promise<number>;
   setConcurrentTransfers(count: number): Promise<void>;
-  getAutoRetry(): Promise<boolean>;
-  setAutoRetry(enabled: boolean): Promise<void>;
 }
 
 /** Everything the UI needs from the outside world, injected via context. */

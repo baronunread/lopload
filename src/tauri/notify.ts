@@ -1,6 +1,6 @@
 // Thin wrapper around @tauri-apps/plugin-notification for the "N files
-// uploaded" / "1 file failed, tap to retry" native notifications (spec:
-// "Runs unattended, reports back when done").
+// uploaded" / "1 file failed" native notifications (spec: "Runs unattended,
+// reports back when done").
 
 import {
   isPermissionGranted,
@@ -23,7 +23,7 @@ export async function notifyBatchFinished(uploaded: number, failed: number): Pro
     parts.push(`${uploaded} file${uploaded === 1 ? "" : "s"} uploaded`);
   }
   if (failed > 0) {
-    parts.push(`${failed} file${failed === 1 ? "" : "s"} failed, tap to retry`);
+    parts.push(`${failed} file${failed === 1 ? "" : "s"} failed`);
   }
 
   sendNotification({ title: "Lopload", body: parts.join(" - ") });

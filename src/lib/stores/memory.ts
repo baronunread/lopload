@@ -6,7 +6,6 @@ import type {
   Connection,
   ConnectionStore,
   Transfer,
-  TransferPart,
   TransferStore,
 } from "../types";
 
@@ -37,8 +36,6 @@ export class MemoryConnectionStore implements ConnectionStore {
 
 export class MemoryTransferStore implements TransferStore {
   private transfers = new Map<string, Transfer>();
-  // key: `${transferId}:${partNumber}`
-  private parts = new Map<string, TransferPart>();
 
   async list(connectionId: string): Promise<Transfer[]> {
     return Array.from(this.transfers.values()).filter(
@@ -56,28 +53,5 @@ export class MemoryTransferStore implements TransferStore {
 
   async delete(id: string): Promise<void> {
     this.transfers.delete(id);
-    for (const key of this.parts.keys()) {
-      if (key.startsWith(`${id}:`)) this.parts.delete(key);
-    }
-  }
-
-  async saveParts(parts: TransferPart[]): Promise<void> {
-    for (const p of parts) {
-      this.parts.set(`${p.transferId}:${p.partNumber}`, { ...p });
-    }
-  }
-
-  async listParts(transferId: string): Promise<TransferPart[]> {
-    return Array.from(this.parts.values())
-      .filter((p) => p.transferId === transferId)
-      .sort((a, b) => a.partNumber - b.partNumber);
-  }
-
-  async knownUploadIds(connectionId: string): Promise<Set<string>> {
-    const ids = new Set<string>();
-    for (const t of this.transfers.values()) {
-      if (t.connectionId === connectionId && t.uploadId) ids.add(t.uploadId);
-    }
-    return ids;
   }
 }

@@ -1,7 +1,7 @@
 // MD5 via hash-wasm (WASM, incremental). WebCrypto's SubtleCrypto does not
 // implement MD5 (it's not in the WebCrypto spec — only SHA-1/256/384/512),
-// and S3 ETags for single-part uploads and the composite multipart ETag are
-// both MD5-based, so we need MD5 specifically, not just "a hash."
+// and S3 ETags for single-part uploads are MD5-based, so we need MD5
+// specifically, not just "a hash."
 //
 // Incremental hashing (create/update/digest) lets the transfer engines feed
 // file chunks as they're read, without ever holding a whole file in memory.
@@ -41,19 +41,4 @@ export async function md5Hex(data: Uint8Array): Promise<string> {
   const h = await Md5.create();
   h.update(data);
   return bytesToHex(h.digest());
-}
-
-/**
- * S3's multipart ETag is `hex(md5(concat(raw md5 digest bytes of each
- * part)))-{partCount}`. Given the per-part md5 hex strings (in part-number
- * order), compute that composite value.
- */
-export async function compositeEtag(partMd5Hexes: string[]): Promise<string> {
-  const bytes = new Uint8Array(partMd5Hexes.length * 16);
-  partMd5Hexes.forEach((hex, i) => {
-    for (let j = 0; j < 16; j++) {
-      bytes[i * 16 + j] = parseInt(hex.slice(j * 2, j * 2 + 2), 16);
-    }
-  });
-  return `${await md5Hex(bytes)}-${partMd5Hexes.length}`;
 }

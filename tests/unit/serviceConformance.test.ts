@@ -245,7 +245,7 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
     }
   }, 10_000);
 
-  test("a failed transfer can be retried and can be dismissed", async () => {
+  test("a failed transfer can be dismissed", async () => {
     const services = await impl.services();
     const conn = await makeConnection(services);
     const localPath = `/local/${uniqueId("upload-fail")}.txt`;
@@ -253,8 +253,6 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
     impl.seedLocalFile(localPath, bytes);
 
     await services.engine.enqueueFiles(conn.id, "", [
-      // "fail" in the key is the shared test hook both implementations honor
-      // (see demoServices.ts's runTransfer and tests/unit/support/fakeS3Bucket.ts).
       { path: localPath, name: "please-fail.txt", size: bytes.length },
     ]);
 
@@ -264,23 +262,6 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
       (await services.engine.listTransfers(conn.id))[0].id,
     );
     expect(failed.state.kind).toBe("failed");
-
-    // retry() must accept a failed transfer and run it through the state
-    // machine again (queued -> ... -> a terminal state), per PLAN.md's
-    // documented "failed" -> "queued" transition.
-    const seenAfterRetry: Transfer["state"]["kind"][] = [];
-    const unsubscribe = services.engine.subscribe((e) => {
-      if (e.type === "transfer-updated" && e.transfer.id === failed.id) {
-        seenAfterRetry.push(e.transfer.state.kind);
-      }
-    });
-    await services.engine.retry(failed.id);
-    await waitUntil(() => {
-      const last = seenAfterRetry[seenAfterRetry.length - 1];
-      return last === "uploaded" || last === "failed";
-    });
-    unsubscribe();
-    expect(seenAfterRetry[0]).toBe("queued");
 
     await services.engine.dismiss(failed.id);
     const afterDismiss = await services.engine.listTransfers(conn.id);

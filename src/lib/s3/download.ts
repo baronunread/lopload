@@ -1,10 +1,9 @@
-// Download engine, mirroring multipart.ts's guarantees: streamed to a temp
-// file (never held whole in memory), verified before the file is considered
-// real, and renamed into place only after verification passes.
+// Download engine: streamed to a temp file (never held whole in memory),
+// verified before the file is considered real, and renamed into place only
+// after verification passes.
 //
-// Unlike uploads, a failed/cancelled download simply restarts from byte zero
-// on retry rather than resuming mid-file — GetObject has no equivalent to
-// multipart's persisted per-part ETags to reconcile against.
+// A failed/cancelled download restarts from byte zero — GetObject has no
+// resume capability.
 
 import { GetObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 
@@ -45,8 +44,7 @@ function stripQuotes(etag: string): string {
   return etag.replace(/^"|"$/g, "");
 }
 
-/** A composite (multipart) ETag looks like "<hex>-<partCount>" — only a
- * plain single-part ETag is a bare 32-hex-char MD5 we can verify against. */
+/** A plain single-part ETag is a bare 32-hex-char MD5 we can verify against. */
 const PLAIN_MD5_ETAG = /^[0-9a-f]{32}$/i;
 
 interface TransformableBody {

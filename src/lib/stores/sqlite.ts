@@ -1,8 +1,7 @@
 // SQLite-backed ConnectionStore/TransferStore, wrapping @tauri-apps/plugin-sql.
 // This is one of the few files under src/lib allowed to import a tauri
 // plugin directly, since PLAN.md designates SQLite (not the OS keychain) as
-// the store for connections/transfers/parts, and plugin-sql's `Database` is
-// itself already a thin cross-platform wrapper (not raw Rust FFI).
+// the store for connections and transfers.
 
 import Database from "@tauri-apps/plugin-sql";
 
@@ -11,7 +10,6 @@ import type {
   ConnectionStore,
   ErrorClass,
   Transfer,
-  TransferPart,
   TransferState,
   TransferStore,
 } from "../types";
@@ -33,30 +31,13 @@ const MIGRATIONS = [
     key TEXT NOT NULL,
     local_path TEXT NOT NULL,
     size INTEGER NOT NULL,
-    part_size INTEGER NOT NULL,
-    upload_id TEXT,
     state TEXT NOT NULL,
     error_class TEXT,
-    expected_md5 TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
-  // Added after the initial release — run via ALTER rather than the CREATE
-  // TABLE above so existing installs' databases pick it up too. SQLite has
-  // no "ADD COLUMN IF NOT EXISTS", so loadDatabase() below swallows the
-  // "duplicate column" error this throws on every startup after the first.
   `ALTER TABLE transfers ADD COLUMN folder_id TEXT`,
   `ALTER TABLE transfers ADD COLUMN folder_name TEXT`,
-  `CREATE TABLE IF NOT EXISTS transfer_parts (
-    transfer_id TEXT NOT NULL,
-    part_number INTEGER NOT NULL,
-    etag TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    PRIMARY KEY (transfer_id, part_number)
-  )`,
-  // Older databases predate the download direction; every existing row was
-  // an upload, hence the default. Plain ADD COLUMN (no IF NOT EXISTS in
-  // SQLite) — loadDatabase() swallows the duplicate-column error on reruns.
   `ALTER TABLE transfers ADD COLUMN direction TEXT NOT NULL DEFAULT 'upload'`,
 ];
 
@@ -159,11 +140,8 @@ interface TransferRow {
   key: string;
   local_path: string;
   size: number;
-  part_size: number;
-  upload_id: string | null;
   state: string;
   error_class: string | null;
-  expected_md5: string | null;
   folder_id: string | null;
   folder_name: string | null;
   direction: string;
@@ -178,8 +156,6 @@ function rowToTransfer(row: TransferRow): Transfer {
       state = { kind: "queued" };
       break;
     case "sending":
-      // Percent is in-memory-only progress, not persisted per PLAN.md's
-      // schema; a reloaded "sending" transfer will be marked as failed.
       state = { kind: "sending", percent: 0 };
       break;
     case "checking":
@@ -206,8 +182,6 @@ function rowToTransfer(row: TransferRow): Transfer {
     key: row.key,
     localPath: row.local_path,
     size: row.size,
-    partSize: row.part_size,
-    uploadId: row.upload_id ?? undefined,
     folderId: row.folder_id ?? undefined,
     folderName: row.folder_name ?? undefined,
     direction: row.direction === "download" ? "download" : "upload",
@@ -240,11 +214,10 @@ export class SqliteTransferStore implements TransferStore {
     const errorClass = t.state.kind === "failed" ? t.state.errorClass : null;
     await this.db.execute(
       `INSERT INTO transfers (
-         id, connection_id, key, local_path, size, part_size, upload_id,
+         id, connection_id, key, local_path, size,
          state, error_class, folder_id, folder_name, direction, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT(id) DO UPDATE SET
-         upload_id = excluded.upload_id,
          state = excluded.state,
          error_class = excluded.error_class,
          updated_at = excluded.updated_at`,
@@ -254,8 +227,6 @@ export class SqliteTransferStore implements TransferStore {
         t.key,
         t.localPath,
         t.size,
-        t.partSize,
-        t.uploadId ?? null,
         t.state.kind,
         errorClass,
         t.folderId ?? null,
@@ -268,44 +239,6 @@ export class SqliteTransferStore implements TransferStore {
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.execute("DELETE FROM transfer_parts WHERE transfer_id = $1", [id]);
     await this.db.execute("DELETE FROM transfers WHERE id = $1", [id]);
-  }
-
-  async saveParts(parts: TransferPart[]): Promise<void> {
-    for (const p of parts) {
-      await this.db.execute(
-        `INSERT INTO transfer_parts (transfer_id, part_number, etag, size)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT(transfer_id, part_number) DO UPDATE SET
-           etag = excluded.etag,
-           size = excluded.size`,
-        [p.transferId, p.partNumber, p.etag, p.size],
-      );
-    }
-  }
-
-  async listParts(transferId: string): Promise<TransferPart[]> {
-    const rows = await this.db.select<
-      { transfer_id: string; part_number: number; etag: string; size: number }[]
-    >(
-      "SELECT * FROM transfer_parts WHERE transfer_id = $1 ORDER BY part_number ASC",
-      [transferId],
-    );
-    return rows.map((r) => ({
-      transferId: r.transfer_id,
-      partNumber: r.part_number,
-      etag: r.etag,
-      size: r.size,
-    }));
-  }
-
-  async knownUploadIds(connectionId: string): Promise<Set<string>> {
-    const rows = await this.db.select<{ upload_id: string }[]>(
-      `SELECT upload_id FROM transfers
-       WHERE connection_id = $1 AND upload_id IS NOT NULL`,
-      [connectionId],
-    );
-    return new Set(rows.map((r) => r.upload_id));
   }
 }

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { StatusChip } from "../../../src/ui/StatusChip";
 import type { TransferState } from "../../../src/lib/types";
 
@@ -19,7 +18,7 @@ describe("StatusChip", () => {
       { state: { kind: "uploaded" }, label: "Uploaded ✓", dataState: "uploaded" },
       {
         state: { kind: "failed", errorClass: "offline" },
-        label: "Couldn't send - tap to retry",
+        label: "Couldn't send",
         dataState: "failed",
       },
     ];
@@ -30,20 +29,5 @@ describe("StatusChip", () => {
       expect(container.querySelector(`[data-state="${dataState}"]`)).not.toBeNull();
       unmount();
     }
-  });
-
-  test("failed chip is clickable and calls onRetry", async () => {
-    const user = userEvent.setup();
-    let retried = false;
-    render(
-      <StatusChip
-        state={{ kind: "failed", errorClass: "credentials" }}
-        onRetry={() => {
-          retried = true;
-        }}
-      />,
-    );
-    await user.click(screen.getByText("Couldn't send - tap to retry"));
-    expect(retried).toBe(true);
   });
 });

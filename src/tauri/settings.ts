@@ -7,7 +7,6 @@ const store = new LazyStore(SETTINGS_PATH, {
     autoUpdateEnabled: true,
     defaultDownloadDir: null,
     concurrentTransfers: 3,
-    autoRetry: true,
   },
   autoSave: 100,
 });
@@ -15,7 +14,6 @@ const store = new LazyStore(SETTINGS_PATH, {
 const AUTO_UPDATE_KEY = "autoUpdateEnabled";
 const DOWNLOAD_DIR_KEY = "defaultDownloadDir";
 const CONCURRENT_KEY = "concurrentTransfers";
-const AUTO_RETRY_KEY = "autoRetry";
 
 export async function isAutoUpdateEnabled(): Promise<boolean> {
   const val = await store.get<boolean>(AUTO_UPDATE_KEY);
@@ -44,11 +42,4 @@ export async function setConcurrentTransfers(count: number): Promise<void> {
   await store.set(CONCURRENT_KEY, count);
 }
 
-export async function getAutoRetry(): Promise<boolean> {
-  const val = await store.get<boolean>(AUTO_RETRY_KEY);
-  return val ?? true;
-}
 
-export async function setAutoRetry(enabled: boolean): Promise<void> {
-  await store.set(AUTO_RETRY_KEY, enabled);
-}

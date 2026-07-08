@@ -260,9 +260,7 @@ export async function deleteFolder(
 }
 
 /** Moves a single file to the trash location: CopyObject there, then delete
- * the original. Uses plain (non-multipart) CopyObject — if the file is too
- * large for that, the error is left to flow through the normal plain-language
- * error path rather than growing a multipart copy path just for this. */
+ * the original. */
 export async function moveFileToTrash(
   client: S3Client,
   bucket: string,
