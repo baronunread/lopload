@@ -34,6 +34,18 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   const [confirming, setConfirming] = useState(false);
   const toasts = useKumoToastManager();
 
+  /** Applies an optimistic update to `items` immediately and returns a
+   * rollback that applies the inverse — inverse-ops rather than a whole-list
+   * snapshot, so rolling back one action can't clobber another concurrent
+   * optimistic update. */
+  function mutateItems(
+    apply: (prev: TrashItem[]) => TrashItem[],
+    invert: (prev: TrashItem[]) => TrashItem[],
+  ): () => void {
+    setItems(apply);
+    return () => setItems(invert);
+  }
+
   async function refresh() {
     setLoading(true);
     try {
@@ -51,11 +63,15 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
 
   async function handleRestore(item: TrashItem) {
     setBusyId(item.id);
+    const rollback = mutateItems(
+      (prev) => prev.filter((i) => i.id !== item.id),
+      (prev) => (prev.some((i) => i.id === item.id) ? prev : [...prev, item]),
+    );
     try {
       await services.trash.restore(connectionId, item);
-      await refresh();
       onRestored();
     } catch (err) {
+      rollback();
       toasts.add({
         variant: "error",
         title: "Couldn't restore",
@@ -68,15 +84,45 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
 
   async function confirmPending() {
     if (!pending) return;
+    const current = pending;
     setConfirming(true);
-    try {
-      if (pending.kind === "delete-now") {
-        await services.trash.deleteNow(connectionId, pending.item);
-      } else {
-        await services.trash.emptyTrash(connectionId);
+    setPending(null);
+
+    if (current.kind === "delete-now") {
+      const { item } = current;
+      const rollback = mutateItems(
+        (prev) => prev.filter((i) => i.id !== item.id),
+        (prev) => (prev.some((i) => i.id === item.id) ? prev : [...prev, item]),
+      );
+      try {
+        await services.trash.deleteNow(connectionId, item);
+      } catch (err) {
+        rollback();
+        toasts.add({
+          variant: "error",
+          title: "Couldn't delete",
+          description: err instanceof Error ? err.message : "Something went wrong.",
+        });
+      } finally {
+        setConfirming(false);
       }
-      setPending(null);
-      await refresh();
+      return;
+    }
+
+    const previousItems = items;
+    const rollback = mutateItems(
+      () => [],
+      () => previousItems,
+    );
+    try {
+      await services.trash.emptyTrash(connectionId);
+    } catch (err) {
+      rollback();
+      toasts.add({
+        variant: "error",
+        title: "Couldn't empty Trash",
+        description: err instanceof Error ? err.message : "Something went wrong.",
+      });
     } finally {
       setConfirming(false);
     }
