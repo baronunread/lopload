@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { CaretDownIcon, FolderIcon, StopCircleIcon, XIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, FolderIcon, FolderOpenIcon, StopCircleIcon, XIcon } from "@phosphor-icons/react";
 import type { EngineEvent, Transfer, TransferState } from "../lib/types";
 import { useServices } from "./services";
 import { StatusChip } from "./StatusChip";
@@ -304,6 +304,16 @@ export function TransferWidget({
                         }}
                       >
                         <StopCircleIcon size={16} />
+                      </button>
+                    )}
+                    {!isFolder && state.kind === "downloaded" && (
+                      <button
+                        type="button"
+                        aria-label="Show in folder"
+                        className="relative flex h-8 w-8 cursor-pointer items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
+                        onClick={() => void services.revealInFinder(row.transfers[0].localPath)}
+                      >
+                        <FolderOpenIcon size={16} />
                       </button>
                     )}
                     {state.kind === "failed" && (

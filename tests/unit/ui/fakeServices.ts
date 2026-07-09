@@ -81,6 +81,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const installAndRelaunchCalls: number[] = [];
   const setTransferTuningCalls: TransferTuning[] = [];
   let transferTuning: TransferTuning = options.transferTuning ?? DEFAULT_TUNING;
+  let lastConnectionId: string | null = null;
 
   const services: FakeServices = {
     connections: {
@@ -193,6 +194,12 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       async setTransferTuning(tuning) {
         transferTuning = tuning;
         setTransferTuningCalls.push(tuning);
+      },
+      async getLastConnectionId() {
+        return lastConnectionId;
+      },
+      async setLastConnectionId(id) {
+        lastConnectionId = id;
       },
     },
     async pickFiles() {

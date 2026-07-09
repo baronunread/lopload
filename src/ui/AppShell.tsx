@@ -47,13 +47,20 @@ function AppShellInner() {
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
-    void services.connections.list().then((list) => {
+    let cancelled = false;
+    void Promise.all([
+      services.connections.list(),
+      services.settings.getLastConnectionId(),
+    ]).then(([list, lastId]) => {
+      if (cancelled) return;
       setConnections(list);
       if (list.length > 0) {
-        setCurrentId(list[0].id);
-        setPrefix(list[0].lastPrefix);
+        const target = lastId ? list.find((c) => c.id === lastId) ?? list[0] : list[0];
+        setCurrentId(target.id);
+        setPrefix(target.lastPrefix);
       }
     });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -63,6 +70,7 @@ function AppShellInner() {
     const conn = connections.find((c) => c.id === id);
     setCurrentId(id);
     setPrefix(conn?.lastPrefix ?? "");
+    void services.settings.setLastConnectionId(id);
   }
 
   function handleSaved(conn: Connection) {

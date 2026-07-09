@@ -16,6 +16,7 @@ const store = new LazyStore(SETTINGS_PATH, {
 const AUTO_UPDATE_KEY = "autoUpdateEnabled";
 const DOWNLOAD_DIR_KEY = "defaultDownloadDir";
 const TUNING_KEY = "transferTuning";
+const LAST_CONNECTION_KEY = "lastConnectionId";
 /** Pre-tuning-model setting (a single 1-5 concurrency knob). Read once, for
  * migration into transferTuning on first read after upgrade — never written
  * again. */
@@ -68,4 +69,13 @@ export async function getTransferTuning(): Promise<TransferTuning> {
 
 export async function setTransferTuning(tuning: TransferTuning): Promise<void> {
   await store.set(TUNING_KEY, tuning);
+}
+
+export async function getLastConnectionId(): Promise<string | null> {
+  const val = await store.get<string>(LAST_CONNECTION_KEY);
+  return val ?? null;
+}
+
+export async function setLastConnectionId(id: string): Promise<void> {
+  await store.set(LAST_CONNECTION_KEY, id);
 }

@@ -84,7 +84,10 @@ export class TransferEngine {
   private readonly acknowledged = new Set<string>();
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly cancelledIds = new Set<string>();
-  private readonly speedTrackers = new Map<string, { lastBytes: number; lastTime: number }>();
+  private readonly speedTrackers = new Map<string, {
+    samples: { bytes: number; time: number }[];
+    lastDisplayedSpeed?: number;
+  }>();
 
   private batchUploaded = 0;
   private batchDownloaded = 0;
@@ -200,9 +203,8 @@ export class TransferEngine {
         transfer.state.kind === "sending" ||
         transfer.state.kind === "checking"
       ) {
-        transfer.state = { kind: "failed", errorClass: "unknown" };
-        transfer.updatedAt = this.now();
-        await this.store.save(transfer);
+        await this.store.delete(transfer.id);
+        continue;
       }
       this.transfers.set(transfer.id, transfer);
     }
@@ -279,15 +281,34 @@ export class TransferEngine {
         const tracker = this.speedTrackers.get(id);
         const now = Date.now();
         if (tracker) {
-          const elapsedMs = now - tracker.lastTime;
-          const bytesDelta = sent - tracker.lastBytes;
-          if (elapsedMs > 0 && bytesDelta > 0) {
-            speedBytesPerSec = Math.round((bytesDelta / elapsedMs) * 1000);
+          const gapMs = tracker.samples.length > 0
+            ? now - tracker.samples[tracker.samples.length - 1].time
+            : 0;
+          tracker.samples.push({ bytes: sent, time: now });
+          if (tracker.samples.length > 15) tracker.samples.shift();
+          if (gapMs > 2000 && tracker.lastDisplayedSpeed !== undefined) {
+            speedBytesPerSec = tracker.lastDisplayedSpeed;
+          } else if (tracker.samples.length >= 2) {
+            const first = tracker.samples[0];
+            const last = tracker.samples[tracker.samples.length - 1];
+            const elapsedMs = last.time - first.time;
+            const bytesDelta = last.bytes - first.bytes;
+            if (elapsedMs > 0 && bytesDelta > 0) {
+              const computed = Math.round((bytesDelta / elapsedMs) * 1000);
+              if (tracker.lastDisplayedSpeed === undefined) {
+                speedBytesPerSec = computed;
+                tracker.lastDisplayedSpeed = computed;
+              } else {
+                const change = Math.abs(computed - tracker.lastDisplayedSpeed) / tracker.lastDisplayedSpeed;
+                speedBytesPerSec = change > 0.05 ? computed : tracker.lastDisplayedSpeed;
+              }
+            }
           }
-          tracker.lastBytes = sent;
-          tracker.lastTime = now;
         } else {
-          this.speedTrackers.set(id, { lastBytes: sent, lastTime: now });
+          this.speedTrackers.set(id, {
+            samples: [{ bytes: sent, time: now }],
+            lastDisplayedSpeed: undefined,
+          });
         }
         void this.setState(transfer, { kind: "sending", percent, speedBytesPerSec });
       };

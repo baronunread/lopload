@@ -12,7 +12,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readDir, size as fileSize, stat } from "@tauri-apps/plugin-fs";
 import { join as joinPath, tempDir } from "@tauri-apps/api/path";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { S3Client } from "@aws-sdk/client-s3";
 
 import type {
@@ -70,6 +70,8 @@ import {
   setDefaultDownloadDir as settingsSetDefaultDownloadDir,
   getTransferTuning as settingsGetTransferTuning,
   setTransferTuning as settingsSetTransferTuning,
+  getLastConnectionId as settingsGetLastConnectionId,
+  setLastConnectionId as settingsSetLastConnectionId,
 } from "../tauri/settings";
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
@@ -522,6 +524,8 @@ class RealServices implements AppServices {
       this.tuning = tuning;
       this.tuningLoaded = true;
     },
+    getLastConnectionId: (): Promise<string | null> => settingsGetLastConnectionId(),
+    setLastConnectionId: (id: string): Promise<void> => settingsSetLastConnectionId(id),
   };
 
   // ---- misc AppServices members ----
@@ -574,6 +578,10 @@ class RealServices implements AppServices {
         }
       });
     });
+  }
+
+  async revealInFinder(path: string): Promise<void> {
+    await revealItemInDir(path);
   }
 
   onFileDrop(

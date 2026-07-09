@@ -304,7 +304,7 @@ describe("TransferEngine — live tuning", () => {
 });
 
 describe("TransferEngine — resumePending", () => {
-  test("non-terminal transfers are marked as failed, not auto-resumed", async () => {
+  test("non-terminal transfers are silently cleaned up, not surfaced as failed", async () => {
     const store = new MemoryTransferStore();
     const now = Date.now();
     const sendingTransfer: Transfer = {
@@ -357,16 +357,13 @@ describe("TransferEngine — resumePending", () => {
 
     await engine.resumePending();
 
-    const s1 = engine.getTransfer("stuck-1");
-    expect(s1?.state.kind).toBe("failed");
-    const s2 = engine.getTransfer("stuck-2");
-    expect(s2?.state.kind).toBe("failed");
+    expect(engine.getTransfer("stuck-1")).toBeUndefined();
+    expect(engine.getTransfer("stuck-2")).toBeUndefined();
+    expect(await store.get("stuck-1")).toBeNull();
+    expect(await store.get("stuck-2")).toBeNull();
 
     const d = engine.getTransfer("done-1");
     expect(d?.state.kind).toBe("uploaded");
-
-    expect((await store.get("stuck-1"))?.state.kind).toBe("failed");
-    expect((await store.get("stuck-2"))?.state.kind).toBe("failed");
 
     expect(engine["queue"]).toEqual([]);
   });

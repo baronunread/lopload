@@ -171,6 +171,8 @@ export interface SettingsService {
   setDefaultDownloadDir(path: string | null): Promise<void>;
   getTransferTuning(): Promise<TransferTuning>;
   setTransferTuning(tuning: TransferTuning): Promise<void>;
+  getLastConnectionId(): Promise<string | null>;
+  setLastConnectionId(id: string): Promise<void>;
 }
 
 /** Everything the UI needs from the outside world, injected via context. */
@@ -193,6 +195,8 @@ export interface AppServices {
   /** Downloads a file to a temporary location and opens it with the
    * system's default app for its type once the download is verified. */
   openFile(connectionId: string, key: string, name: string): Promise<void>;
+  /** Reveals the given file in the native file manager (Finder / Explorer). */
+  revealInFinder(path: string): Promise<void>;
   /** Subscribes to OS-level drag-and-drop of files onto the window. Folders
    * are expanded recursively; each resulting file carries its size and a
    * name that preserves the relative path under any dropped folder.

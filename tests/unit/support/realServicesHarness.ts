@@ -140,7 +140,7 @@ const MOCKS: Array<{ specifier: string; fake: () => unknown; real: unknown; rest
   },
   {
     specifier: "@tauri-apps/plugin-opener",
-    fake: () => ({ openPath: async () => {} }),
+    fake: () => ({ openPath: async () => {}, revealItemInDir: async () => {} }),
     real: REAL_TAURI_OPENER,
   },
   {
