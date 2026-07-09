@@ -87,14 +87,36 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const selection = useSelection(rows);
   const segments = segmentsForPrefix(prefix);
 
-  async function refresh() {
-    setLoading(true);
+  // Every list request (spinner or silent) carries an incrementing id, so a
+  // slow/stale response can never clobber a newer one that already landed —
+  // otherwise an optimistic mutation followed by a fast re-list could be
+  // overwritten by an in-flight refresh() that was kicked off before it.
+  const requestIdRef = useRef(0);
+
+  /** Applies an optimistic update to `entries` immediately and returns a
+   * rollback that applies the given inverse — inverse-ops rather than a
+   * whole-array snapshot, so rolling back one mutation can't clobber another
+   * optimistic mutation that landed concurrently. */
+  function mutateEntries(
+    apply: (prev: RemoteEntry[]) => RemoteEntry[],
+    invert: (prev: RemoteEntry[]) => RemoteEntry[],
+  ): () => void {
+    setEntries(apply);
+    return () => setEntries(invert);
+  }
+
+  async function runList(spinner: boolean) {
+    const requestId = ++requestIdRef.current;
+    if (spinner) setLoading(true);
     try {
       const result = await services.browser.list(connectionId, prefix);
+      if (requestId !== requestIdRef.current) return;
       setEntries(result);
       setLoadFailed(false);
       setCredentialsConnection(null);
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+      if (!spinner) return; // silent refreshes keep whatever's on screen on failure
       setEntries([]);
       if (err instanceof CredentialsUnreadableError) {
         // The OS keychain couldn't produce credentials for this connection
@@ -111,8 +133,21 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         setLoadFailed(true);
       }
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current && spinner) setLoading(false);
     }
+  }
+
+  /** Full re-list with the loading spinner — for navigation, initial load,
+   * and the debounced upload-completion refresh. */
+  async function refresh() {
+    await runList(true);
+  }
+
+  /** Same fetch as refresh(), but without flipping on the loading spinner and
+   * without clearing the listing on failure — used to reconcile after an
+   * optimistic mutation already updated `entries` locally. */
+  async function refreshSilently() {
+    await runList(false);
   }
 
   useEffect(() => {
@@ -316,34 +351,53 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     void services.connections.setLastPrefix(connectionId, next);
   }
 
-  /** Moves `fromKey` (a row's full path) to live under `toPrefix` instead,
-   * keeping its own name. */
-  async function moveOne(fromKey: string, toPrefix: string): Promise<void> {
-    if (!fromKey || fromKey === toPrefix) return;
+  /** Resolves `fromKey` (a row's full path) to its destination key under
+   * `toPrefix`, keeping its own name — or null for a no-op move (missing
+   * entry, or destination equal to its current location). */
+  function resolveMoveTarget(fromKey: string, toPrefix: string): string | null {
+    if (!fromKey || fromKey === toPrefix) return null;
     const entry = entries.find((e) => e.key === fromKey);
-    if (!entry) return;
+    if (!entry) return null;
     // Folder destinations must keep the trailing slash — both backends
     // splice child keys as `toKey + rest`, so "docs/photos" (no slash)
     // would silently corrupt every moved key.
     const toKey =
       entry.kind === "folder" ? `${toPrefix}${entry.name}/` : `${toPrefix}${entry.name}`;
-    if (toKey === fromKey) return;
-    await services.browser.move(connectionId, fromKey, toKey);
+    if (toKey === fromKey) return null;
+    return toKey;
   }
 
   /** Moves every dragged key to live under `toPrefix` — a single row, or the
-   * whole selection when dragging one of several selected rows. */
+   * whole selection when dragging one of several selected rows. Rows that
+   * resolve to a no-op (missing entry, or already at `toPrefix`) are left
+   * alone. */
   async function handleMove(fromKeys: string[], toPrefix: string) {
+    const moves = fromKeys
+      .map((fromKey) => {
+        const toKey = resolveMoveTarget(fromKey, toPrefix);
+        return toKey ? { fromKey, toKey } : null;
+      })
+      .filter((m): m is { fromKey: string; toKey: string } => m !== null);
+    if (moves.length === 0) return;
+
+    const movedKeys = new Set(moves.map((m) => m.fromKey));
+    const removed = entries.filter((e) => movedKeys.has(e.key));
+    const rollback = mutateEntries(
+      (prev) => prev.filter((e) => !movedKeys.has(e.key)),
+      (prev) => [...prev, ...removed.filter((r) => !prev.some((e) => e.key === r.key))],
+    );
+
     try {
-      await Promise.all(fromKeys.map((key) => moveOne(key, toPrefix)));
+      await Promise.all(moves.map((m) => services.browser.move(connectionId, m.fromKey, m.toKey)));
+      await refreshSilently();
     } catch (err) {
+      rollback();
       toasts.add({
         variant: "error",
         title: "Couldn't move",
         description: err instanceof Error ? err.message : "Something went wrong.",
       });
     }
-    await refresh();
   }
 
   const dragMove = useDragMove({ onMove: handleMove });
@@ -352,11 +406,16 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
    * the Trash view) that it doesn't need a confirmation dialog, unlike
    * Delete now/Empty trash there. */
   async function handleDeleteToTrash(entry: RemoteEntry) {
+    const rollback = mutateEntries(
+      (prev) => prev.filter((e) => e.key !== entry.key),
+      (prev) => (prev.some((e) => e.key === entry.key) ? prev : [...prev, entry]),
+    );
+    selection.clear();
     try {
       await services.browser.delete(connectionId, entry.key);
-      selection.clear();
-      await refresh();
+      await refreshSilently();
     } catch (err) {
+      rollback();
       toasts.add({
         variant: "error",
         title: "Couldn't move to Trash",
@@ -365,12 +424,18 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     }
   }
 
-  async function handleBulkDeleteToTrash(entries: RemoteEntry[]) {
+  async function handleBulkDeleteToTrash(deleted: RemoteEntry[]) {
+    const deletedKeys = new Set(deleted.map((e) => e.key));
+    const rollback = mutateEntries(
+      (prev) => prev.filter((e) => !deletedKeys.has(e.key)),
+      (prev) => [...prev, ...deleted.filter((d) => !prev.some((e) => e.key === d.key))],
+    );
+    selection.clear();
     try {
-      await Promise.all(entries.map((entry) => services.browser.delete(connectionId, entry.key)));
-      selection.clear();
-      await refresh();
+      await Promise.all(deleted.map((entry) => services.browser.delete(connectionId, entry.key)));
+      await refreshSilently();
     } catch (err) {
+      rollback();
       toasts.add({
         variant: "error",
         title: "Couldn't move to Trash",
@@ -486,13 +551,50 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   async function confirmPending() {
     if (!pending) return;
-    if (pending.kind === "new-folder") {
-      await services.browser.createFolder(connectionId, prefix, pendingName);
-    } else if (pending.kind === "rename") {
-      await services.browser.rename(connectionId, pending.entry.key, pendingName);
-    }
+    const current = pending;
+    const name = pendingName;
     setPending(null);
-    await refresh();
+
+    if (current.kind === "new-folder") {
+      const newEntry: RemoteEntry = { kind: "folder", name, key: `${prefix}${name}/` };
+      const rollback = mutateEntries(
+        (prev) => [...prev, newEntry],
+        (prev) => prev.filter((e) => e.key !== newEntry.key),
+      );
+      try {
+        await services.browser.createFolder(connectionId, prefix, name);
+        await refreshSilently();
+      } catch (err) {
+        rollback();
+        toasts.add({
+          variant: "error",
+          title: "Couldn't create folder",
+          description: err instanceof Error ? err.message : "Something went wrong.",
+        });
+      }
+      return;
+    }
+
+    // Rename: both entries live in the same current-folder listing, so the
+    // renamed key is just the current prefix plus the new name (folders keep
+    // their trailing slash).
+    const { entry } = current;
+    const newKey = entry.kind === "folder" ? `${prefix}${name}/` : `${prefix}${name}`;
+    const rollback = mutateEntries(
+      (prev) => prev.map((e) => (e.key === entry.key ? { ...e, name, key: newKey } : e)),
+      (prev) => prev.map((e) => (e.key === newKey ? { ...e, name: entry.name, key: entry.key } : e)),
+    );
+    try {
+      await services.browser.rename(connectionId, entry.key, name);
+      await refreshSilently();
+    } catch (err) {
+      rollback();
+      toasts.add({
+        variant: "error",
+        title: "Couldn't rename",
+        description: err instanceof Error ? err.message : "Something went wrong.",
+      });
+    }
   }
 
   function handleSortChange(key: SortKey) {

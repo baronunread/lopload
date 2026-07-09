@@ -570,4 +570,209 @@ describe("RemoteBrowser", () => {
       toKey: "photos/b.txt",
     });
   });
+
+  test("moving a file to Trash removes its row optimistically, before the delete call resolves — and rolls back with a toast on rejection", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    let rejectDelete: ((err: Error) => void) | null = null;
+    services.browser.delete = () =>
+      new Promise((_resolve, reject) => {
+        rejectDelete = reject;
+      });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.click(screen.getByRole("button", { name: "Actions for readme.txt" }));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Move to Trash" }));
+
+    // The row disappears immediately — the delete call is still pending.
+    await waitFor(() => expect(screen.queryByText("readme.txt")).not.toBeInTheDocument());
+
+    // Rejecting the delete rolls the row back and surfaces a toast.
+    act(() => {
+      rejectDelete?.(new Error("network down"));
+    });
+    await screen.findByText("readme.txt");
+    await screen.findByText("Couldn't move to Trash");
+  });
+
+  test("renaming appears immediately, and rolls back with a toast on failure", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    let rejectRename: ((err: Error) => void) | null = null;
+    services.browser.rename = () =>
+      new Promise((_resolve, reject) => {
+        rejectRename = reject;
+      });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.click(screen.getByRole("button", { name: "Actions for readme.txt" }));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Rename" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const nameInput = within(dialog).getByLabelText("Name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "renamed.txt");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    // The dialog closes and the new name shows up immediately.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await screen.findByText("renamed.txt");
+
+    // A rejected rename rolls back to the original name and toasts.
+    act(() => {
+      rejectRename?.(new Error("conflict"));
+    });
+    await screen.findByText("readme.txt");
+    expect(screen.queryByText("renamed.txt")).not.toBeInTheDocument();
+    await screen.findByText("Couldn't rename");
+  });
+
+  test("creating a new folder appears immediately, and rolls back with a toast on failure", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": ROOT_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    let rejectCreate: ((err: Error) => void) | null = null;
+    services.browser.createFolder = () =>
+      new Promise((_resolve, reject) => {
+        rejectCreate = reject;
+      });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.click(screen.getByRole("button", { name: "New folder" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Name"), "new-stuff");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    // The dialog closes and the new folder shows up immediately.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await screen.findByText("new-stuff");
+
+    // A rejected creation removes it again and toasts.
+    act(() => {
+      rejectCreate?.(new Error("exists"));
+    });
+    await waitFor(() => expect(screen.queryByText("new-stuff")).not.toBeInTheDocument());
+    await screen.findByText("Couldn't create folder");
+  });
+
+  test("a mutation's silent reconcile never flips on the loading spinner state", async () => {
+    // Only entry in the folder, so an optimistic delete drops entries to
+    // zero — if the mutation's refresh used the spinner path (setLoading),
+    // "This folder is empty" would stay hidden until that refresh settles.
+    // With the silent path, it should show immediately while the delete
+    // call is still pending.
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": [ROOT_ENTRIES[1]] },
+    });
+    const user = userEvent.setup();
+
+    let resolveDelete: (() => void) | null = null;
+    services.browser.delete = () =>
+      new Promise((resolve) => {
+        resolveDelete = resolve;
+      });
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("readme.txt");
+
+    await user.click(screen.getByRole("button", { name: "Actions for readme.txt" }));
+    const menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Move to Trash" }));
+
+    await screen.findByText("This folder is empty");
+
+    act(() => {
+      resolveDelete?.();
+    });
+    await waitFor(() => expect(screen.queryByText("This folder is empty")).toBeInTheDocument());
+  });
+
+  test("a stale list response never overwrites a newer one", async () => {
+    const services = createFakeServices({
+      entriesByPrefix: { "conn-1::": MANY_ENTRIES },
+    });
+    const user = userEvent.setup();
+
+    let callIndex = 0;
+    const deferredResolvers: Array<(entries: RemoteEntry[]) => void> = [];
+    services.browser.list = () => {
+      const idx = callIndex++;
+      if (idx === 0) return Promise.resolve(MANY_ENTRIES); // initial mount load
+      return new Promise((resolve) => {
+        deferredResolvers[idx] = resolve;
+      });
+    };
+
+    render(
+      <ServicesProvider value={services}>
+        <Harness />
+      </ServicesProvider>,
+    );
+    await screen.findByText("a.txt");
+
+    const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+    // First mutation kicks off refreshSilently call #1 (kept pending).
+    fireEvent.click(rowFor("a.txt"));
+    fireEvent.contextMenu(rowFor("a.txt"));
+    let menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Move to Trash" }));
+
+    // Second mutation kicks off refreshSilently call #2, which will resolve
+    // first (and more recently) with a list that reflects both deletions.
+    await screen.findByText("b.txt");
+    fireEvent.click(rowFor("b.txt"));
+    fireEvent.contextMenu(rowFor("b.txt"));
+    menu = await screen.findByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Move to Trash" }));
+
+    await waitFor(() => expect(deferredResolvers[2]).toBeDefined());
+
+    const NEWER = MANY_ENTRIES.filter((e) => e.name !== "a.txt" && e.name !== "b.txt");
+    const STALE = MANY_ENTRIES.filter((e) => e.name !== "a.txt"); // as if b.txt's delete hadn't landed yet
+
+    // The newer (2nd) response lands first...
+    act(() => deferredResolvers[2](NEWER));
+    await waitFor(() => expect(screen.queryByText("b.txt")).not.toBeInTheDocument());
+
+    // ...then the stale (1st) response arrives later and must be ignored.
+    act(() => deferredResolvers[1](STALE));
+    await waitFor(() => {
+      expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+      expect(screen.queryByText("b.txt")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("c.txt")).toBeInTheDocument();
+  });
 });
