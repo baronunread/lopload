@@ -1,4 +1,5 @@
 import { Button, Dialog } from "@cloudflare/kumo";
+import { XIcon } from "@phosphor-icons/react";
 import type { Connection } from "../lib/types";
 import { SetupForm } from "./SetupForm";
 
@@ -9,20 +10,24 @@ export interface AddStorageDialogProps {
   onClose: () => void;
 }
 
-/**
- * Popup for adding (or editing) a storage connection, opened from the
- * header switcher. Cancel lives at the top-left of the header, next to the
- * title, rather than at the bottom of the form.
- */
 export function AddStorageDialog({ existing, onSaved, onClose }: AddStorageDialogProps) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog className="w-full max-w-md p-6 short:max-w-2xl">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
           <Dialog.Title className="m-0">Add a storage connection</Dialog.Title>
+          <Dialog.Close
+            render={(p) => (
+              <Button
+                variant="ghost"
+                shape="square"
+                aria-label="Close"
+                icon={XIcon}
+                className="ml-auto"
+                {...p}
+              />
+            )}
+          />
         </div>
         <div className="mt-4">
           <SetupForm existing={existing} onSaved={onSaved} />

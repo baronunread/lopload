@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Dialog, Input, Select, useKumoToastManager } from "@cloudflare/kumo";
-import { CheckIcon, CopyIcon } from "@phosphor-icons/react";
+import { CheckIcon, CopyIcon, XIcon } from "@phosphor-icons/react";
 import { useServices } from "../services";
 
 export interface ShareLinkDialogProps {
@@ -89,7 +89,21 @@ export function ShareLinkDialog({ connectionId, fileKey, fileName, onClose }: Sh
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog className="w-full max-w-md p-6">
-        <Dialog.Title>Copy link — {fileName}</Dialog.Title>
+        <div className="flex items-center gap-3">
+          <Dialog.Title className="m-0">Copy link — {fileName}</Dialog.Title>
+          <Dialog.Close
+            render={(p) => (
+              <Button
+                variant="ghost"
+                shape="square"
+                aria-label="Close"
+                icon={XIcon}
+                className="ml-auto"
+                {...p}
+              />
+            )}
+          />
+        </div>
 
         <div className="mt-3">
           <Select
@@ -128,11 +142,6 @@ export function ShareLinkDialog({ connectionId, fileKey, fileName, onClose }: Sh
           </div>
         )}
 
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-            {link ? "Done" : "Cancel"}
-          </Dialog.Close>
-        </div>
       </Dialog>
     </Dialog.Root>
   );

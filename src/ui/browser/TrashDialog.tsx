@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
-import { TrashSimpleIcon } from "@phosphor-icons/react";
+import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { useServices, type TrashItem } from "../services";
 import { formatBytes, formatDate } from "../format";
 import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
@@ -86,7 +86,21 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
     <>
       <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
         <Dialog className="w-full max-w-lg p-6">
-          <Dialog.Title>Trash</Dialog.Title>
+        <div className="flex items-center gap-3">
+            <Dialog.Title className="m-0">Trash</Dialog.Title>
+            <Dialog.Close
+              render={(p) => (
+                <Button
+                  variant="ghost"
+                  shape="square"
+                  aria-label="Close"
+                  icon={XIcon}
+                  className="ml-auto"
+                  {...p}
+                />
+              )}
+            />
+          </div>
           <Dialog.Description>
             Items in the Trash are removed permanently after 30 days.
           </Dialog.Description>
@@ -155,9 +169,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                 Empty trash
               </Button>
             )}
-            <Dialog.Close render={(p) => <Button variant="secondary" className="ml-auto" {...p} />}>
-              Done
-            </Dialog.Close>
           </div>
         </Dialog>
       </Dialog.Root>
@@ -169,16 +180,27 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
       >
         {pending && (
           <Dialog className="p-6">
-            <Dialog.Title>
-              {pending.kind === "empty"
-                ? "Empty trash?"
-                : `Delete ${displayName(pending.item.originalKey)} now?`}
-            </Dialog.Title>
+            <div className="flex items-center gap-3">
+              <Dialog.Title className="m-0">
+                {pending.kind === "empty"
+                  ? "Empty trash?"
+                  : `Delete ${displayName(pending.item.originalKey)} now?`}
+              </Dialog.Title>
+              <Dialog.Close
+                render={(p) => (
+                  <Button
+                    variant="ghost"
+                    shape="square"
+                    aria-label="Close"
+                    icon={XIcon}
+                    className="ml-auto"
+                    {...p}
+                  />
+                )}
+              />
+            </div>
             <Dialog.Description>This can't be undone.</Dialog.Description>
             <div className="mt-4 flex justify-end gap-2">
-              <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                Cancel
-              </Dialog.Close>
               <Button
                 variant="destructive"
                 style={SOLID_DANGER_BUTTON_STYLE}

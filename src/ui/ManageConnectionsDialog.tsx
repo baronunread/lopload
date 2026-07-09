@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Dialog } from "@cloudflare/kumo";
-import { TrashIcon } from "@phosphor-icons/react";
+import { TrashIcon, XIcon } from "@phosphor-icons/react";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
 import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "./dangerButton";
@@ -41,7 +41,21 @@ export function ManageConnectionsDialog({
     <>
       <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
         <Dialog className="w-full max-w-md p-6">
-          <Dialog.Title>Storage connections</Dialog.Title>
+          <div className="flex items-center gap-3">
+            <Dialog.Title className="m-0">Storage connections</Dialog.Title>
+            <Dialog.Close
+              render={(p) => (
+                <Button
+                  variant="ghost"
+                  shape="square"
+                  aria-label="Close"
+                  icon={XIcon}
+                  className="ml-auto"
+                  {...p}
+                />
+              )}
+            />
+          </div>
           {connections.length === 0 ? (
             <p className="mt-2 text-sm text-kumo-subtle">No storage connections yet.</p>
           ) : (
@@ -66,9 +80,7 @@ export function ManageConnectionsDialog({
               ))}
             </ul>
           )}
-          <div className="mt-4 flex justify-end">
-            <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>Done</Dialog.Close>
-          </div>
+
         </Dialog>
       </Dialog.Root>
 
@@ -79,15 +91,26 @@ export function ManageConnectionsDialog({
       >
         {pending && (
           <Dialog className="p-6">
-            <Dialog.Title>Remove {pending.name}?</Dialog.Title>
+            <div className="flex items-center gap-3">
+              <Dialog.Title className="m-0">Remove {pending.name}?</Dialog.Title>
+              <Dialog.Close
+                render={(p) => (
+                  <Button
+                    variant="ghost"
+                    shape="square"
+                    aria-label="Close"
+                    icon={XIcon}
+                    className="ml-auto"
+                    {...p}
+                  />
+                )}
+              />
+            </div>
             <Dialog.Description>
               This only removes the connection from Lopload - nothing in your storage is
               deleted. You can add it again later with the same details.
             </Dialog.Description>
             <div className="mt-4 flex justify-end gap-2">
-              <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                Cancel
-              </Dialog.Close>
               <Button
                 variant="destructive"
                 style={SOLID_DANGER_BUTTON_STYLE}

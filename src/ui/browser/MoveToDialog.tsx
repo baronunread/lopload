@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Breadcrumbs, Button, Dialog } from "@cloudflare/kumo";
-import { FolderIcon, HouseIcon } from "@phosphor-icons/react";
+import { FolderIcon, HouseIcon, XIcon } from "@phosphor-icons/react";
 import type { RemoteEntry } from "../../lib/types";
 import { useServices } from "../services";
 import { segmentsForPrefix } from "../format";
@@ -61,9 +61,23 @@ export function MoveToDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog className="w-full max-w-md p-6">
-        <Dialog.Title>
-          Move {sourceKeys.length === 1 ? "1 item" : `${sourceKeys.length} items`} to…
-        </Dialog.Title>
+        <div className="flex items-center gap-3">
+          <Dialog.Title className="m-0">
+            Move {sourceKeys.length === 1 ? "1 item" : `${sourceKeys.length} items`} to…
+          </Dialog.Title>
+          <Dialog.Close
+            render={(p) => (
+              <Button
+                variant="ghost"
+                shape="square"
+                aria-label="Close"
+                icon={XIcon}
+                className="ml-auto"
+                {...p}
+              />
+            )}
+          />
+        </div>
         <div className="mt-3">
           <Breadcrumbs>
             <span
@@ -127,7 +141,6 @@ export function MoveToDialog({
           )}
         </div>
         <div className="mt-4 flex items-center justify-end gap-2">
-          <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>Cancel</Dialog.Close>
           <Button
             variant="primary"
             loading={moving}

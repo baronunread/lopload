@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Dialog, Select, Switch } from "@cloudflare/kumo";
+import { XIcon } from "@phosphor-icons/react";
 import { useServices } from "./services";
 
 export interface SettingsDialogProps {
@@ -64,7 +65,21 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog className="w-full max-w-md p-6">
-        <Dialog.Title>Settings</Dialog.Title>
+        <div className="flex items-center gap-3">
+          <Dialog.Title className="m-0">Settings</Dialog.Title>
+          <Dialog.Close
+            render={(p) => (
+              <Button
+                variant="ghost"
+                shape="square"
+                aria-label="Close"
+                icon={XIcon}
+                className="ml-auto"
+                {...p}
+              />
+            )}
+          />
+        </div>
         <div className="flex flex-col gap-6">
           <section>
             <h2 className="mb-3 text-sm font-semibold text-kumo-strong">General</h2>
@@ -127,9 +142,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             </div>
           </section>
         </div>
-        <div className="mt-6 flex justify-end">
-          <Dialog.Close render={(p) => <Button variant="secondary" {...p}>Close</Button>} />
-        </div>
+
       </Dialog>
     </Dialog.Root>
   );

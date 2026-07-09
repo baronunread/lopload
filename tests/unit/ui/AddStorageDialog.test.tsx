@@ -9,7 +9,7 @@ import { createFakeServices } from "./fakeServices";
 afterEach(cleanup);
 
 describe("AddStorageDialog", () => {
-  test("shows the form in a dialog with Cancel in the header, before the title", async () => {
+  test("shows the form in a dialog with a Close button in the header, after the title", async () => {
     const services = createFakeServices({});
     render(
       <Toasty>
@@ -20,14 +20,13 @@ describe("AddStorageDialog", () => {
     );
 
     const dialog = await screen.findByRole("dialog");
-    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const close = screen.getByRole("button", { name: "Close" });
     const title = screen.getByText("Add a storage connection");
-    // Top-left placement: Cancel precedes the title in the header row.
-    expect(cancel.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(close.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     expect(dialog).toContainElement(screen.getByLabelText("Endpoint URL"));
   });
 
-  test("Cancel closes the dialog", async () => {
+  test("Close button closes the dialog", async () => {
     const services = createFakeServices({});
     const user = userEvent.setup();
     let closed = false;
@@ -39,7 +38,7 @@ describe("AddStorageDialog", () => {
       </Toasty>,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Close" }));
     expect(closed).toBe(true);
   });
 });

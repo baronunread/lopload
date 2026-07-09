@@ -13,6 +13,7 @@ import {
   MagnifyingGlassIcon,
   TrashIcon,
   UploadSimpleIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import type { Connection, RemoteEntry } from "../lib/types";
 import { CredentialsUnreadableError, useServices, type FolderInfo } from "./services";
@@ -671,7 +672,23 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       >
         {pending && (
           <Dialog className="p-6">
-            <Dialog.Title>{pending.kind === "new-folder" ? "New folder" : "Rename"}</Dialog.Title>
+            <div className="flex items-center gap-3">
+              <Dialog.Title className="m-0">
+                {pending.kind === "new-folder" ? "New folder" : "Rename"}
+              </Dialog.Title>
+              <Dialog.Close
+                render={(p) => (
+                  <Button
+                    variant="ghost"
+                    shape="square"
+                    aria-label="Close"
+                    icon={XIcon}
+                    className="ml-auto"
+                    {...p}
+                  />
+                )}
+              />
+            </div>
             <Input
               label="Name"
               value={pendingName}
@@ -679,9 +696,6 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
               autoFocus
             />
             <div className="mt-4 flex justify-end gap-2">
-              <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                Cancel
-              </Dialog.Close>
               <Button
                 variant="primary"
                 disabled={!pendingName.trim()}
@@ -702,9 +716,23 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       >
         {infoEntry && (
           <Dialog className="p-6">
-            <Dialog.Title>
-              {infoEntry.kind === "folder" ? "Folder info" : "File info"}
-            </Dialog.Title>
+            <div className="flex items-center gap-3">
+              <Dialog.Title className="m-0">
+                {infoEntry.kind === "folder" ? "Folder info" : "File info"}
+              </Dialog.Title>
+              <Dialog.Close
+                render={(p) => (
+                  <Button
+                    variant="ghost"
+                    shape="square"
+                    aria-label="Close"
+                    icon={XIcon}
+                    className="ml-auto"
+                    {...p}
+                  />
+                )}
+              />
+            </div>
             <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm selectable">
               <dt className="text-kumo-subtle">Name</dt>
               <dd className="break-all">{infoEntry.name}</dd>
@@ -732,11 +760,6 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
                 </>
               )}
             </dl>
-            <div className="mt-4 flex justify-end">
-              <Dialog.Close render={(p) => <Button variant="secondary" {...p} />}>
-                Close
-              </Dialog.Close>
-            </div>
           </Dialog>
         )}
       </Dialog.Root>
