@@ -6,13 +6,14 @@ import type {
   Transfer,
   TransferState,
   TransferStore,
+  TransferTuning,
 } from "./types";
 import { createLogger } from "./logger";
 import { classifyError, describeThrown } from "./errors";
+import { DEFAULT_TUNING } from "./tuning";
 
 const log = createLogger("engine");
 import {
-  PART_SIZE,
   VerificationError,
   uploadTransfer,
   type LocalFileReader,
@@ -42,8 +43,6 @@ export class InvalidTransitionError extends Error {
   }
 }
 
-const CONCURRENCY = 3;
-
 export interface EnqueueFile {
   localPath: string;
   size: number;
@@ -59,7 +58,10 @@ export interface TransferEngineDeps {
   reader: LocalFileReader;
   store: TransferStore;
   writer?: LocalFileWriter;
-  concurrency?: number;
+  /** Read live on every pump() loop and enqueue — no need to recreate the
+   * engine when the user changes transfer speed settings. Defaults to
+   * DEFAULT_TUNING (Normal). */
+  tuning?: () => TransferTuning;
   now?: () => number;
   idGenerator?: () => string;
 }
@@ -71,7 +73,7 @@ export class TransferEngine {
   private readonly reader: LocalFileReader;
   private readonly writer?: LocalFileWriter;
   private readonly store: TransferStore;
-  private readonly concurrency: number;
+  private readonly tuning: () => TransferTuning;
   private readonly now: () => number;
   private readonly idGenerator: () => string;
 
@@ -96,7 +98,7 @@ export class TransferEngine {
     this.reader = deps.reader;
     this.writer = deps.writer;
     this.store = deps.store;
-    this.concurrency = deps.concurrency ?? CONCURRENCY;
+    this.tuning = deps.tuning ?? (() => DEFAULT_TUNING);
     this.now = deps.now ?? (() => Date.now());
     this.idGenerator = deps.idGenerator ?? (() => crypto.randomUUID());
   }
@@ -146,7 +148,7 @@ export class TransferEngine {
         key: file.key,
         localPath: file.localPath,
         size: file.size,
-        partSize: PART_SIZE,
+        partSize: this.tuning().partSizeMiB * 1024 * 1024,
         folderId: file.folderId,
         folderName: file.folderName,
         direction,
@@ -223,7 +225,7 @@ export class TransferEngine {
     if (this.pumping) return;
     this.pumping = true;
     try {
-      while (this.queue.length > 0 && this.active.size < this.concurrency) {
+      while (this.queue.length > 0 && this.active.size < this.tuning().concurrentFiles) {
         const id = this.queue.shift();
         if (id === undefined) break;
         if (this.active.has(id)) continue;

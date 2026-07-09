@@ -2,6 +2,24 @@ import { useEffect, useState } from "react";
 import { Button, Dialog, Select, Switch } from "@cloudflare/kumo";
 import { XIcon } from "@phosphor-icons/react";
 import { useServices } from "./services";
+import type { TransferPreset, TransferTuning } from "../lib/types";
+import { DEFAULT_TUNING, PRESETS, presetMatching } from "./settings/presets";
+
+const CONCURRENT_FILES_OPTIONS = range(1, 8);
+const PARTS_IN_FLIGHT_OPTIONS = range(1, 16);
+const DOWNLOAD_CONNECTIONS_OPTIONS = range(1, 16);
+const PART_SIZE_OPTIONS = [8, 16, 32, 64];
+
+function range(start: number, end: number): number[] {
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}
+
+const PRESET_LABELS: Record<TransferPreset, string> = {
+  slow: "Slow",
+  normal: "Normal",
+  fast: "Fast",
+  custom: "Custom",
+};
 
 export interface SettingsDialogProps {
   onClose: () => void;
@@ -13,12 +31,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [downloadDir, setDownloadDir] = useState<string | null>(null);
-  const [concurrentCount, setConcurrentCount] = useState<number>(3);
+  const [tuning, setTuningState] = useState<TransferTuning>(DEFAULT_TUNING);
 
   useEffect(() => {
     void services.updates.isAutoUpdateEnabled().then(setAutoUpdateEnabledState);
     void services.settings.getDefaultDownloadDir().then(setDownloadDir);
-    void services.settings.getConcurrentTransfers().then(setConcurrentCount);
+    void services.settings.getTransferTuning().then(setTuningState);
   }, [services]);
 
   async function handleToggleAutoUpdate(enabled: boolean) {
@@ -56,11 +74,26 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     await services.settings.setDefaultDownloadDir(null);
   }
 
-  async function handleConcurrentChange(value: unknown) {
-    const count = typeof value === "number" ? value : 3;
-    setConcurrentCount(count);
-    await services.settings.setConcurrentTransfers(count);
+  async function saveTuning(next: TransferTuning): Promise<void> {
+    setTuningState(next);
+    await services.settings.setTransferTuning(next);
   }
+
+  async function handlePresetChange(value: unknown) {
+    if (value !== "slow" && value !== "normal" && value !== "fast") return;
+    await saveTuning(PRESETS[value]);
+  }
+
+  async function handleKnobChange(
+    knob: "concurrentFiles" | "uploadPartsInFlight" | "downloadConnections" | "partSizeMiB",
+    value: unknown,
+  ) {
+    if (typeof value !== "number") return;
+    const knobs = { ...tuning, [knob]: value };
+    await saveTuning({ ...knobs, preset: presetMatching(knobs) });
+  }
+
+  const currentPreset = presetMatching(tuning);
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
@@ -103,19 +136,94 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                 </div>
               </div>
               <div>
-                <p className="mb-1 text-sm text-kumo-default">Concurrent transfers</p>
+                <p className="mb-1 text-sm text-kumo-default">Transfer speed</p>
                 <Select
-                  aria-label="Concurrent transfers"
-                  value={concurrentCount}
-                  onValueChange={handleConcurrentChange}
+                  aria-label="Transfer speed"
+                  value={currentPreset}
+                  onValueChange={handlePresetChange}
                 >
-                  <Select.Option value={1}>1</Select.Option>
-                  <Select.Option value={2}>2</Select.Option>
-                  <Select.Option value={3}>3</Select.Option>
-                  <Select.Option value={4}>4</Select.Option>
-                  <Select.Option value={5}>5</Select.Option>
+                  <Select.Option value="slow">{PRESET_LABELS.slow}</Select.Option>
+                  <Select.Option value="normal">{PRESET_LABELS.normal}</Select.Option>
+                  <Select.Option value="fast">{PRESET_LABELS.fast}</Select.Option>
+                  {currentPreset === "custom" && (
+                    <Select.Option value="custom" disabled>
+                      {PRESET_LABELS.custom}
+                    </Select.Option>
+                  )}
                 </Select>
+                <p className="mt-1 text-xs text-kumo-subtle">
+                  Controls how many files transfer at once. Use Advanced settings below to
+                  fine-tune further.
+                </p>
               </div>
+
+              <details className="rounded-md border border-kumo-line p-3">
+                <summary className="cursor-pointer text-sm font-medium text-kumo-strong">
+                  Advanced settings
+                </summary>
+                <div className="mt-3 flex flex-col gap-4">
+                  <div>
+                    <p className="mb-1 text-sm text-kumo-default">Concurrent files</p>
+                    <Select
+                      aria-label="Concurrent files"
+                      value={tuning.concurrentFiles}
+                      onValueChange={(v) => void handleKnobChange("concurrentFiles", v)}
+                    >
+                      {CONCURRENT_FILES_OPTIONS.map((n) => (
+                        <Select.Option key={n} value={n}>
+                          {n}
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-sm text-kumo-default">Upload parts per file</p>
+                    <Select
+                      aria-label="Upload parts per file"
+                      value={tuning.uploadPartsInFlight}
+                      onValueChange={(v) => void handleKnobChange("uploadPartsInFlight", v)}
+                    >
+                      {PARTS_IN_FLIGHT_OPTIONS.map((n) => (
+                        <Select.Option key={n} value={n}>
+                          {n}
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-sm text-kumo-default">Download connections</p>
+                    <Select
+                      aria-label="Download connections"
+                      value={tuning.downloadConnections}
+                      onValueChange={(v) => void handleKnobChange("downloadConnections", v)}
+                    >
+                      {DOWNLOAD_CONNECTIONS_OPTIONS.map((n) => (
+                        <Select.Option key={n} value={n}>
+                          {n}
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-sm text-kumo-default">Part size</p>
+                    <Select
+                      aria-label="Part size"
+                      value={tuning.partSizeMiB}
+                      onValueChange={(v) => void handleKnobChange("partSizeMiB", v)}
+                    >
+                      {PART_SIZE_OPTIONS.map((n) => (
+                        <Select.Option key={n} value={n}>
+                          {n} MiB
+                        </Select.Option>
+                      ))}
+                    </Select>
+                    <p className="mt-1 text-xs text-kumo-subtle">
+                      Applies to transfers queued from now on — transfers already in progress
+                      keep their original part size.
+                    </p>
+                  </div>
+                </div>
+              </details>
             </div>
           </section>
 
@@ -134,7 +242,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             </p>
             <div className="mt-4 flex items-center gap-3">
               <Button variant="secondary" onClick={handleCheckNow} disabled={checking}>
-                {checking ? "Checking\u2026" : "Check for updates now"}
+                {checking ? "Checking…" : "Check for updates now"}
               </Button>
               {checkResult && (
                 <span className="text-sm text-kumo-subtle tabular-nums">{checkResult}</span>

@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import type { AppServices } from "../../src/ui/services";
 import type { Connection, EngineEvent, Transfer } from "../../src/lib/types";
+import { PRESETS } from "../../src/lib/tuning";
 import {
   fakeLocalFiles,
   fakeS3,
@@ -395,6 +396,23 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
     const trashedAfter = await services.trash.list(conn.id);
     expect(trashedAfter.some((t) => t.originalKey === "note.txt")).toBe(true);
   }, 10_000);
+
+  test("settings.getTransferTuning/setTransferTuning round-trips and defaults to Normal", async () => {
+    const services = await impl.services();
+
+    const initial = await services.settings.getTransferTuning();
+    expect(initial).toEqual(PRESETS.normal);
+
+    await services.settings.setTransferTuning(PRESETS.fast);
+    expect(await services.settings.getTransferTuning()).toEqual(PRESETS.fast);
+
+    const custom = { ...PRESETS.fast, preset: "custom" as const, concurrentFiles: 6 };
+    await services.settings.setTransferTuning(custom);
+    expect(await services.settings.getTransferTuning()).toEqual(custom);
+
+    // Leave global settings state as found for the tests that follow.
+    await services.settings.setTransferTuning(PRESETS.normal);
+  });
 
   test("keychain.testConnection: succeeds for a reachable target, fails for an unreachable one", async () => {
     const services = await impl.services();

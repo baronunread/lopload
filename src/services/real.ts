@@ -23,8 +23,10 @@ import type {
   RemoteEntry,
   Transfer,
   TransferStore,
+  TransferTuning,
 } from "../lib/types";
 import { createLogger } from "../lib/logger";
+import { DEFAULT_TUNING } from "../lib/tuning";
 import { TransferEngine, type EnqueueFile } from "../lib/engine";
 import {
   copyLink as s3CopyLink,
@@ -66,8 +68,8 @@ import {
   setAutoUpdateEnabled as settingsSetAutoUpdateEnabled,
   getDefaultDownloadDir as settingsGetDefaultDownloadDir,
   setDefaultDownloadDir as settingsSetDefaultDownloadDir,
-  getConcurrentTransfers as settingsGetConcurrentTransfers,
-  setConcurrentTransfers as settingsSetConcurrentTransfers,
+  getTransferTuning as settingsGetTransferTuning,
+  setTransferTuning as settingsSetTransferTuning,
 } from "../tauri/settings";
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
@@ -129,6 +131,25 @@ class RealServices implements AppServices {
   private trashSweepStarted = false;
   private trayUploadListening = false;
 
+  /** In-memory copy of the persisted transfer tuning, lazily loaded on
+   * first engine use and shared by every connection's engine via a live
+   * `() => this.tuning` closure — so changing it in Settings takes effect
+   * immediately, without recreating any cached engine. */
+  private tuning: TransferTuning = DEFAULT_TUNING;
+  private tuningLoaded = false;
+  private tuningLoadPromise: Promise<void> | null = null;
+
+  private async ensureTuningLoaded(): Promise<void> {
+    if (this.tuningLoaded) return;
+    if (!this.tuningLoadPromise) {
+      this.tuningLoadPromise = settingsGetTransferTuning().then((t) => {
+        this.tuning = t;
+        this.tuningLoaded = true;
+      });
+    }
+    await this.tuningLoadPromise;
+  }
+
   private async getDb() {
     if (!this.dbPromise) this.dbPromise = loadDatabase();
     return this.dbPromise;
@@ -174,9 +195,9 @@ class RealServices implements AppServices {
   private async getEngine(connectionId: string): Promise<TransferEngine> {
     let engine = this.engines.get(connectionId);
     if (engine) return engine;
+    await this.ensureTuningLoaded();
     const { client, conn } = await this.getClient(connectionId);
     const store = await this.getTransferStore();
-    const concurrency = await settingsGetConcurrentTransfers();
     engine = new TransferEngine({
       client,
       bucket: conn.bucket,
@@ -184,7 +205,7 @@ class RealServices implements AppServices {
       reader: tauriFileReader,
       writer: tauriFileWriter,
       store,
-      concurrency,
+      tuning: () => this.tuning,
     });
     engine.subscribe((event) => this.onEngineEvent(connectionId, event));
     this.engines.set(connectionId, engine);
@@ -495,8 +516,12 @@ class RealServices implements AppServices {
   settings = {
     getDefaultDownloadDir: (): Promise<string | null> => settingsGetDefaultDownloadDir(),
     setDefaultDownloadDir: (path: string | null): Promise<void> => settingsSetDefaultDownloadDir(path),
-    getConcurrentTransfers: (): Promise<number> => settingsGetConcurrentTransfers(),
-    setConcurrentTransfers: (count: number): Promise<void> => settingsSetConcurrentTransfers(count),
+    getTransferTuning: (): Promise<TransferTuning> => settingsGetTransferTuning(),
+    setTransferTuning: async (tuning: TransferTuning): Promise<void> => {
+      await settingsSetTransferTuning(tuning);
+      this.tuning = tuning;
+      this.tuningLoaded = true;
+    },
   };
 
   // ---- misc AppServices members ----

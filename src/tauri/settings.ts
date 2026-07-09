@@ -1,19 +1,25 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 
+import type { TransferTuning } from "../lib/types";
+import { DEFAULT_TUNING, presetMatching } from "../lib/tuning";
+
 const SETTINGS_PATH = "settings.json";
 
 const store = new LazyStore(SETTINGS_PATH, {
   defaults: {
     autoUpdateEnabled: true,
     defaultDownloadDir: null,
-    concurrentTransfers: 3,
   },
   autoSave: 100,
 });
 
 const AUTO_UPDATE_KEY = "autoUpdateEnabled";
 const DOWNLOAD_DIR_KEY = "defaultDownloadDir";
-const CONCURRENT_KEY = "concurrentTransfers";
+const TUNING_KEY = "transferTuning";
+/** Pre-tuning-model setting (a single 1-5 concurrency knob). Read once, for
+ * migration into transferTuning on first read after upgrade — never written
+ * again. */
+const LEGACY_CONCURRENT_KEY = "concurrentTransfers";
 
 export async function isAutoUpdateEnabled(): Promise<boolean> {
   const val = await store.get<boolean>(AUTO_UPDATE_KEY);
@@ -33,13 +39,33 @@ export async function setDefaultDownloadDir(path: string | null): Promise<void> 
   await store.set(DOWNLOAD_DIR_KEY, path);
 }
 
-export async function getConcurrentTransfers(): Promise<number> {
-  const val = await store.get<number>(CONCURRENT_KEY);
-  return val ?? 3;
+/** Pure: derives a full TransferTuning from the legacy single-knob
+ * concurrency setting, defaulting every other knob to Normal. Exported so
+ * the migration mapping can be unit tested without a live store. */
+export function tuningFromLegacyConcurrency(concurrentFiles: number): TransferTuning {
+  const knobs = {
+    concurrentFiles,
+    uploadPartsInFlight: DEFAULT_TUNING.uploadPartsInFlight,
+    downloadConnections: DEFAULT_TUNING.downloadConnections,
+    partSizeMiB: DEFAULT_TUNING.partSizeMiB,
+  };
+  return { preset: presetMatching(knobs), ...knobs };
 }
 
-export async function setConcurrentTransfers(count: number): Promise<void> {
-  await store.set(CONCURRENT_KEY, count);
+export async function getTransferTuning(): Promise<TransferTuning> {
+  const stored = await store.get<TransferTuning>(TUNING_KEY);
+  if (stored) return stored;
+
+  const legacy = await store.get<number>(LEGACY_CONCURRENT_KEY);
+  if (typeof legacy === "number") {
+    const migrated = tuningFromLegacyConcurrency(legacy);
+    await store.set(TUNING_KEY, migrated);
+    return migrated;
+  }
+
+  return DEFAULT_TUNING;
 }
 
-
+export async function setTransferTuning(tuning: TransferTuning): Promise<void> {
+  await store.set(TUNING_KEY, tuning);
+}

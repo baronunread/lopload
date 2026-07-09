@@ -87,3 +87,22 @@ export interface PlainError {
   errorClass: ErrorClass;
   message: string;
 }
+
+export type TransferPreset = "slow" | "normal" | "fast" | "custom";
+
+/** Knobs governing transfer throughput. `partSizeMiB` applies to uploads
+ * (multipart part size) and downloads (ranged-GET chunk size) alike. Each
+ * transfer's own `partSize` (src/lib/types.ts Transfer) is captured at
+ * enqueue time from these knobs and persisted, so changing this setting
+ * never affects a transfer already in flight or resumed later. */
+export interface TransferTuning {
+  preset: TransferPreset;
+  /** Simultaneous transfers — gates TransferEngine's pump(). */
+  concurrentFiles: number;
+  /** Parallel UploadPart requests per file. */
+  uploadPartsInFlight: number;
+  /** Parallel ranged GETs per file. */
+  downloadConnections: number;
+  /** Upload part size and download range size, in MiB. */
+  partSizeMiB: number;
+}
