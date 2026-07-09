@@ -7,7 +7,7 @@ Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
 ```sh
 bun install
 bun run tauri dev       # desktop app with hot-reload
-bun run dev              # frontend only, browser tab (in-memory demo backend)
+bun run dev              # Vite only, browser tab — shows a "requires the desktop app" notice
 bun run check            # typecheck + unit tests
 bun run test:integration # MinIO via docker (skipped if docker absent)
 ```

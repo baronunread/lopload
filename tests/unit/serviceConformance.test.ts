@@ -1,16 +1,12 @@
 // One shared suite exercising the AppServices contract (src/ui/services.ts)
-// against every implementation we have, so demoServices (src/ui/demoServices.ts)
-// and the real engine-backed services (src/services/real.ts, here wired
-// entirely in-memory) can't silently drift apart. Adding a third
-// implementation later means adding one more entry to IMPLEMENTATIONS below.
+// against every implementation we have. Adding another implementation later
+// means adding one more entry to IMPLEMENTATIONS below.
 //
-// Each test creates its own connection with a random id/bucket so the two
-// implementations' module-level, session-lifetime state (demoServices'
-// module maps; RealServices' cached stores/engines) never leaks between
-// tests or between implementations.
+// Each test creates its own connection with a random id/bucket so an
+// implementation's module-level, session-lifetime state (RealServices'
+// cached stores/engines) never leaks between tests.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { createDemoServices } from "../../src/ui/demoServices";
 import type { AppServices } from "../../src/ui/services";
 import type { Connection, EngineEvent, Transfer } from "../../src/lib/types";
 import {
@@ -36,25 +32,13 @@ afterAll(() => {
 interface Implementation {
   name: string;
   services(): Promise<AppServices>;
-  /** Populates `localPath` with `bytes` so an upload can read it (demo never
-   * reads real bytes; real reads from the fake fs backing it). */
+  /** Populates `localPath` with `bytes` so an upload can read it. */
   seedLocalFile(localPath: string, bytes: Uint8Array): void;
   /** Reads back a path written by a completed download. */
   readLocalFile(localPath: string): Uint8Array | undefined;
 }
 
 const IMPLEMENTATIONS: Implementation[] = [
-  {
-    name: "demoServices",
-    services: async () => createDemoServices(),
-    seedLocalFile() {
-      // demoServices' transfers are simulated timers — they never touch the
-      // filesystem, so there's nothing to seed.
-    },
-    readLocalFile() {
-      return undefined;
-    },
-  },
   {
     name: "real services (memory-backed)",
     services: async () => getRealServices(),
@@ -276,9 +260,7 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
     impl.seedLocalFile(localPath, bytes);
 
     await services.engine.enqueueFiles(conn.id, "", [
-      // "slow" in the key is the shared test hook (fakeS3Bucket.ts delays
-      // it); demoServices is already slow enough via its own simulated
-      // timers for this window to be reliable without any special-casing.
+      // "slow" in the key is the shared test hook (fakeS3Bucket.ts delays it).
       { path: localPath, name: "please-go-slow.txt", size: bytes.length },
     ]);
     const [transfer] = await services.engine.listTransfers(conn.id);
@@ -427,10 +409,9 @@ describe.each(IMPLEMENTATIONS)("service conformance — $name", (impl) => {
     expect(ok.ok).toBe(true);
     expect(ok.message.length).toBeGreaterThan(0);
 
-    // Each implementation has its own trigger for "unreachable" (demoServices
-    // keys off the endpoint; the real backend's fake S3 keys off the bucket
-    // name — see fakeS3Bucket.ts) — both must resolve `ok: false` rather than
-    // throwing, with a plain-language message.
+    // The real backend's fake S3 keys "unreachable" off the bucket name (see
+    // fakeS3Bucket.ts) — it must resolve `ok: false` rather than throwing,
+    // with a plain-language message.
     const fail = await services.keychain.testConnection({
       name: "fail",
       endpoint: "https://fail.example.test",
@@ -447,10 +428,9 @@ describe("service conformance — scope notes", () => {
   test("pickFiles/pickSaveDestination/pickDownloadDirectory/openFile/onFileDrop/setBadgeCount/notify are intentionally out of scope", () => {
     // These AppServices members are thin OS-integration entry points (native
     // file dialogs, OS drag-drop, dock badge, OS notifications) rather than
-    // backend state the two implementations could drift on independently —
-    // demoServices returns fixed canned values and real.ts opens real native
-    // dialogs, so there's no shared "contract behavior" to assert equal.
-    // They're already covered at the UI layer by tests/unit/ui/fakeServices.ts
+    // backend state an implementation could drift on independently — real.ts
+    // opens real native dialogs, so there's no shared "contract behavior" to
+    // assert equal. They're already covered at the UI layer by tests/unit/ui/fakeServices.ts
     // consumers (e.g. RemoteBrowser.test.tsx).
     expect(true).toBe(true);
   });

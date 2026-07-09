@@ -5,9 +5,8 @@
 // responses.
 //
 // Shared "fail" convention: a PutObjectCommand whose Key or Bucket contains
-// the substring "fail" (case-insensitive) rejects, mirroring demoServices'
-// `key.toLowerCase().includes("fail")` trigger — this lets the conformance
-// suite force a failure the same way against either backend.
+// the substring "fail" (case-insensitive) rejects — this lets the
+// conformance suite force a failure via a plain, memorable key/bucket name.
 //
 // Shared "slow" convention: a PutObjectCommand/GetObjectCommand whose Key
 // contains "slow" is delayed a little, giving cancel() tests a real window

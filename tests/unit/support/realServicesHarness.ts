@@ -252,10 +252,9 @@ export function uninstallRealServicesMocks(): void {
 }
 
 /** The real AppServices implementation, wired entirely in-memory. A single
- * process-wide instance (matching demoServices' own "one long-lived
- * session" model) — tests must use unique connection ids/buckets rather
- * than relying on a fresh instance per test. Must only be called after
- * `installRealServicesMocks()`. */
+ * process-wide instance ("one long-lived session" model) — tests must use
+ * unique connection ids/buckets rather than relying on a fresh instance per
+ * test. Must only be called after `installRealServicesMocks()`. */
 export async function getRealServices() {
   if (!installed) {
     throw new Error("getRealServices() called before installRealServicesMocks()");

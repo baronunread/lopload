@@ -38,7 +38,9 @@ bun run tauri dev
 ```
 
 > [!TIP]
-> **Dev mode** — run `bun run dev` to open the frontend in a browser tab with a seeded demo backend. No Tauri, no S3 bucket needed.
+> `bun run dev` starts Vite in a plain browser tab, but the app only renders a
+> "requires the desktop app" notice there — the real S3/keychain/transfer
+> stack needs the Tauri webview. Use `bun run tauri dev` to run the app.
 
 | Platform | Download |
 |---|---|

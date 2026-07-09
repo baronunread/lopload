@@ -1,18 +1,26 @@
 import "./App.css";
 import { AppShell } from "./ui/AppShell";
 import { ServicesProvider } from "./ui/services";
-import { createDemoServices } from "./ui/demoServices";
 import { createRealServices, isTauriRuntime } from "./services/real";
 
-// Inside the Tauri webview, use the real services (SQLite + keychain + S3 +
-// TransferEngine). In a plain browser tab (e.g. `bun run dev` opened
-// directly, or CI previews) fall back to the in-memory demo services so the
-// app still renders something instead of throwing on missing Tauri APIs.
-const services = isTauriRuntime() ? createRealServices() : createDemoServices();
-
 function App() {
+  // Real services (SQLite + keychain + S3 + TransferEngine) only work inside
+  // the Tauri webview — constructing them in a plain browser tab would throw
+  // on missing Tauri APIs, so check first and never call createRealServices()
+  // outside of it.
+  if (!isTauriRuntime()) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-2 bg-kumo-canvas p-8 text-center">
+        <h1 className="lopload-heading text-2xl font-semibold">Lopload requires the desktop app</h1>
+        <p className="lopload-body text-kumo-subtle">
+          Run <code className="selectable">bun run tauri dev</code> to launch it.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <ServicesProvider value={services}>
+    <ServicesProvider value={createRealServices()}>
       <AppShell />
     </ServicesProvider>
   );
