@@ -95,6 +95,7 @@ export class InjectedFetchHttpHandler
     // value. Drop it here so tauri-plugin-http doesn't warn on every call.
     const headers = new Headers(request.headers);
     headers.delete("host");
+    headers.delete("content-length");
     const requestInit: RequestInit = {
       body,
       headers,
