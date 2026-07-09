@@ -37,6 +37,8 @@ export interface MultipartDeps {
   store: TransferStore;
   onProgress?: (bytesSent: number, totalBytes: number) => void;
   signal?: AbortSignal;
+  /** Parallel UploadPart requests per file. Defaults to 1 (sequential). */
+  partsInFlight?: number;
 }
 
 function stripQuotes(etag: string): string {
@@ -104,6 +106,7 @@ async function uploadMultipart(
   deps: MultipartDeps,
 ): Promise<void> {
   const { client, bucket, reader, store, onProgress, signal } = deps;
+  const partsInFlight = Math.max(1, deps.partsInFlight ?? 1);
 
   let uploadId = transfer.uploadId;
   if (!uploadId) {
@@ -144,9 +147,15 @@ async function uploadMultipart(
   const finalParts: TransferPart[] = [];
   let bytesDone = 0;
 
-  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+  const partLength = (partNumber: number): number => {
     const offset = (partNumber - 1) * transfer.partSize;
-    const length = Math.min(transfer.partSize, transfer.size - offset);
+    return Math.min(transfer.partSize, transfer.size - offset);
+  };
+
+  // First pass: parts already on the server count as done up front.
+  const pending: number[] = [];
+  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+    const length = partLength(partNumber);
     const serverPart = serverByNumber.get(partNumber);
 
     if (serverPart?.ETag && serverPart.Size === length) {
@@ -159,27 +168,65 @@ async function uploadMultipart(
       }
       bytesDone += length;
       onProgress?.(bytesDone, transfer.size);
-      continue;
+    } else {
+      pending.push(partNumber);
     }
-
-    const chunk = await reader.readChunk(transfer.localPath, offset, length);
-    const res = await client.send(
-      new UploadPartCommand({
-        Bucket: bucket,
-        Key: transfer.key,
-        UploadId: uploadId,
-        PartNumber: partNumber,
-        Body: chunk,
-      }),
-      { abortSignal: signal },
-    );
-    const etag = res.ETag ?? "";
-    const part: TransferPart = { transferId: transfer.id, partNumber, etag, size: length };
-    finalParts.push(part);
-    await store.saveParts([part]);
-    bytesDone += length;
-    onProgress?.(bytesDone, transfer.size);
   }
+
+  // Worker pool: each worker holds one chunk at a time, so memory stays
+  // bounded at partsInFlight × partSize.
+  if (pending.length > 0) {
+    const local = new AbortController();
+    const abortLocal = () => local.abort(signal?.reason);
+    if (signal?.aborted) abortLocal();
+    else signal?.addEventListener("abort", abortLocal);
+
+    let firstError: unknown;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (local.signal.aborted) return;
+        const partNumber = pending.shift();
+        if (partNumber === undefined) return;
+        const offset = (partNumber - 1) * transfer.partSize;
+        const length = partLength(partNumber);
+        const chunk = await reader.readChunk(transfer.localPath, offset, length);
+        const res = await client.send(
+          new UploadPartCommand({
+            Bucket: bucket,
+            Key: transfer.key,
+            UploadId: uploadId,
+            PartNumber: partNumber,
+            Body: chunk,
+          }),
+          { abortSignal: local.signal },
+        );
+        const etag = res.ETag ?? "";
+        const part: TransferPart = { transferId: transfer.id, partNumber, etag, size: length };
+        await store.saveParts([part]);
+        finalParts.push(part);
+        bytesDone += length;
+        onProgress?.(bytesDone, transfer.size);
+      }
+    };
+
+    const workers = Array.from(
+      { length: Math.min(partsInFlight, pending.length) },
+      () =>
+        worker().catch((err) => {
+          firstError ??= err;
+          local.abort(err);
+        }),
+    );
+    try {
+      await Promise.all(workers);
+    } finally {
+      signal?.removeEventListener("abort", abortLocal);
+    }
+    if (signal?.aborted) throw signal.reason ?? firstError;
+    if (firstError !== undefined) throw firstError;
+  }
+
+  finalParts.sort((a, b) => a.partNumber - b.partNumber);
 
   await client.send(
     new CompleteMultipartUploadCommand({
