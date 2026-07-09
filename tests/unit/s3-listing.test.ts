@@ -38,6 +38,17 @@ describe("createS3Client", () => {
     );
     expect(c.config.forcePathStyle).toBe(true);
   });
+
+  test("sets checksum config to WHEN_REQUIRED (R2/S3-compatible endpoints mishandle the default)", async () => {
+    const fetchFn = (async () => new Response("")) as typeof fetch;
+    const c = createS3Client(
+      { endpoint: "https://example.test", region: "us-east-1" },
+      { accessKey: "ak", secretKey: "sk" },
+      fetchFn,
+    );
+    expect(await c.config.requestChecksumCalculation()).toBe("WHEN_REQUIRED");
+    expect(await c.config.responseChecksumValidation()).toBe("WHEN_REQUIRED");
+  });
 });
 
 describe("listEntries", () => {

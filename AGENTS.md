@@ -52,13 +52,21 @@ src/ui/             React components on Kumo, pastel palette
 src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements
 tests/unit/         bun test + happy-dom (no I/O)
 tests/integration/  real MinIO via docker
+tests/e2e/          real bucket (R2/S3/etc.), opt-in via env vars
 ```
 
 ## Testing
 
+Three tiers, each exercising more of the real stack:
+
+1. **Unit** (`tests/unit`, `src`) — fakes/mocks only, no I/O.
+2. **Integration** (`tests/integration`) — real engine code against a real MinIO container via docker; skips cleanly with a console.warn if docker is unavailable.
+3. **E2e** (`tests/e2e`) — real engine code against a real bucket (R2/S3/etc.), opt-in via `LOPLOAD_E2E_*` env vars in a gitignored `.env.e2e` (see `.env.e2e.example`); skips cleanly if the env vars aren't set. Every object it creates lives under a unique `e2e-<timestamp>-<rand>/` prefix deleted in `afterAll` — never point it at a bucket with data you can't lose from that prefix.
+
 ```sh
-bun run check     # tsc --noEmit + bun test tests/unit src
-bun run test:integration  # needs docker
+bun run check              # tsc --noEmit + bun test tests/unit src
+bun run test:integration   # needs docker
+bun run test:e2e           # needs .env.e2e with real bucket credentials
 ```
 
 Rust tests: `cd src-tauri && cargo test` (keychain tests that touch the real OS keychain are `#[ignore]`).

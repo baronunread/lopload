@@ -84,6 +84,11 @@ const CONNECTION_DROPPED_CODES = new Set([
 export function classifyError(err: unknown): ErrorClass {
   if (err == null) return "unknown";
 
+  // tauri-plugin-http's response stream can reject with a raw string from
+  // Rust IPC rather than an Error — wrap it so the message-substring checks
+  // below still apply instead of silently falling through to "unknown".
+  if (typeof err === "string") return classifyError(new Error(err));
+
   // Browser/runtime fetch failures: TypeError("Failed to fetch") / "fetch
   // failed" / "Load failed" (Safari) with no network at all reads as offline.
   if (err instanceof TypeError) {
@@ -141,4 +146,29 @@ export function classifyError(err: unknown): ErrorClass {
 export function toPlainError(err: unknown): PlainError {
   const errorClass = classifyError(err);
   return { errorClass, message: plainMessageFor(errorClass) };
+}
+
+/**
+ * Describes an arbitrary thrown value for diagnostic logging — never for
+ * user-facing text (see the file header). Never throws itself. Errors from
+ * tauri-plugin-http's response stream can be raw strings (Rust IPC
+ * rejections), so this exists to keep that detail out of logs as `""`.
+ */
+export function describeThrown(err: unknown): { message: string; type: string; ctor: string | null } {
+  if (err instanceof Error) {
+    return { message: err.message, type: "Error", ctor: err.constructor?.name ?? null };
+  }
+  let ctor: string | null = null;
+  try {
+    ctor = err != null ? (err as { constructor?: { name?: string } }).constructor?.name ?? null : null;
+  } catch {
+    ctor = null;
+  }
+  let message: string;
+  try {
+    message = String(err).slice(0, 500);
+  } catch {
+    message = "<unstringifiable>";
+  }
+  return { message, type: typeof err, ctor };
 }

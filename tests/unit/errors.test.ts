@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyError, plainMessageFor, toPlainError } from "../../src/lib/errors";
+import { classifyError, describeThrown, plainMessageFor, toPlainError } from "../../src/lib/errors";
 import type { ErrorClass } from "../../src/lib/types";
 
 const ALL_CLASSES: ErrorClass[] = [
@@ -89,5 +89,44 @@ describe("errors", () => {
       errorClass: "not-found",
       message: plainMessageFor("not-found"),
     });
+  });
+
+  test("string throws classify via matching message-substring branches, not unknown", () => {
+    expect(classifyError("socket hang up")).toBe("connection-dropped");
+    expect(classifyError("you are offline")).toBe("offline");
+  });
+
+  test("arbitrary string throw with no matching branch classifies as unknown", () => {
+    expect(classifyError("something totally arbitrary happened")).toBe("unknown");
+  });
+
+  test("describeThrown on an Error", () => {
+    const result = describeThrown(new TypeError("bad stuff"));
+    expect(result).toEqual({ message: "bad stuff", type: "Error", ctor: "TypeError" });
+  });
+
+  test("describeThrown on a raw string (tauri-plugin-http IPC rejection shape)", () => {
+    const result = describeThrown("stream errored: connection reset");
+    expect(result.message).toBe("stream errored: connection reset");
+    expect(result.type).toBe("string");
+    expect(result.ctor).toBe("String");
+  });
+
+  test("describeThrown on a plain object", () => {
+    const result = describeThrown({ foo: "bar" });
+    expect(result.type).toBe("object");
+    expect(result.ctor).toBe("Object");
+    expect(result.message).toBe("[object Object]");
+  });
+
+  test("describeThrown on null/undefined never throws", () => {
+    expect(describeThrown(null)).toEqual({ message: "null", type: "object", ctor: null });
+    expect(describeThrown(undefined)).toEqual({ message: "undefined", type: "undefined", ctor: null });
+  });
+
+  test("describeThrown truncates very long messages to 500 chars", () => {
+    const long = "x".repeat(1000);
+    const result = describeThrown(long);
+    expect(result.message.length).toBe(500);
   });
 });

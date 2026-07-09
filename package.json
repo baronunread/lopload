@@ -11,6 +11,7 @@
     "tauri-inner": "tauri",
     "test": "bun test tests/unit src",
     "test:integration": "bun test tests/integration",
+    "test:e2e": "bun --env-file=.env.e2e test tests/e2e",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run test"
   },

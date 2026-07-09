@@ -37,6 +37,14 @@ export function createS3Client(
       secretAccessKey: credentials.secretKey,
     },
     requestHandler: new InjectedFetchHttpHandler(fetchFn),
+    // R2 and other S3-compatible endpoints mishandle the SDK's default
+    // flexible-checksum middleware (WHEN_SUPPORTED), which wraps the
+    // single-shot Tauri body stream and breaks downloads. Integrity is
+    // already covered by our own MD5-vs-ETag verification (see
+    // download.ts/multipart.ts), so only compute/validate when the caller
+    // explicitly requires it.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
 }
 

@@ -8,7 +8,7 @@ import type {
   TransferStore,
 } from "./types";
 import { createLogger } from "./logger";
-import { classifyError } from "./errors";
+import { classifyError, describeThrown } from "./errors";
 
 const log = createLogger("engine");
 import {
@@ -324,7 +324,7 @@ export class TransferEngine {
         err instanceof VerificationError ? err.errorClass : classifyError(err);
       const current = this.transfers.get(id) ?? transfer;
       if (current.state.kind === "uploaded" || current.state.kind === "downloaded") return;
-      log.error("transfer failed", current.key, errorClass, err instanceof Error ? err.message : "");
+      log.error("transfer failed", current.key, errorClass, describeThrown(err));
       try {
         await this.setState(current, { kind: "failed", errorClass });
       } catch {
