@@ -52,8 +52,7 @@
         "language": "en-US"
       },
       "nsis": {
-        "installMode": "currentUser",
-        "displayName": "Lopload"
+        "installMode": "currentUser"
       }
     },
     "macOS": {
