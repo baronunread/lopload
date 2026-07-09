@@ -367,6 +367,120 @@ describe("TransferEngine — resumePending", () => {
 
     expect(engine["queue"]).toEqual([]);
   });
+
+  test("an upload with a persisted uploadId is re-queued instead of dropped", async () => {
+    const store = new MemoryTransferStore();
+    const now = Date.now();
+    const resumable: Transfer = {
+      id: "resumable-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 100,
+      partSize: 8 * 1024 * 1024,
+      uploadId: "upload-abc",
+      direction: "upload",
+      state: { kind: "sending", percent: 40 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.save(resumable);
+
+    const events: EngineEvent[] = [];
+    // concurrentFiles: 0 keeps pump() from immediately dequeuing the item
+    // into "sending" so the re-queue itself is observable.
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
+    });
+    engine.subscribe((e) => events.push(e));
+
+    await engine.resumePending();
+
+    const resumed = engine.getTransfer("resumable-1");
+    expect(resumed?.state).toEqual({ kind: "queued" });
+    expect(resumed?.uploadId).toBe("upload-abc");
+    expect(engine["queue"]).toContain("resumable-1");
+
+    const persisted = await store.get("resumable-1");
+    expect(persisted?.state).toEqual({ kind: "queued" });
+    expect(persisted?.uploadId).toBe("upload-abc");
+
+    const updateEvents = events.filter(
+      (e) => e.type === "transfer-updated" && e.transfer.id === "resumable-1",
+    );
+    expect(updateEvents.length).toBeGreaterThan(0);
+  });
+
+  test("an upload without a persisted uploadId is still dropped (unchanged behavior)", async () => {
+    const store = new MemoryTransferStore();
+    const now = Date.now();
+    const noUploadId: Transfer = {
+      id: "no-upload-id-1",
+      connectionId: "conn-1",
+      key: "small.bin",
+      localPath: "/local/small.bin",
+      size: 10,
+      partSize: 8 * 1024 * 1024,
+      direction: "upload",
+      state: { kind: "checking" },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.save(noUploadId);
+
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
+    });
+
+    await engine.resumePending();
+
+    expect(engine.getTransfer("no-upload-id-1")).toBeUndefined();
+    expect(await store.get("no-upload-id-1")).toBeNull();
+    expect(engine["queue"]).toEqual([]);
+  });
+
+  test("a non-terminal download is dropped, never re-queued (downloads resume from local temp-file state, not an engine-tracked id)", async () => {
+    const store = new MemoryTransferStore();
+    const now = Date.now();
+    const download: Transfer = {
+      id: "download-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 100,
+      partSize: 8 * 1024 * 1024,
+      direction: "download",
+      state: { kind: "sending", percent: 60 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.save(download);
+
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
+    });
+
+    await engine.resumePending();
+
+    expect(engine.getTransfer("download-1")).toBeUndefined();
+    expect(await store.get("download-1")).toBeNull();
+    expect(engine["queue"]).toEqual([]);
+  });
 });
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {

@@ -53,6 +53,7 @@ export interface FakeServices extends AppServices {
   checkForUpdateCalls: number[];
   installAndRelaunchCalls: number[];
   setTransferTuningCalls: TransferTuning[];
+  abortStaleUploadsCalls: string[];
 }
 
 export function createFakeServices(options: FakeServicesOptions = {}): FakeServices {
@@ -80,6 +81,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const checkForUpdateCalls: number[] = [];
   const installAndRelaunchCalls: number[] = [];
   const setTransferTuningCalls: TransferTuning[] = [];
+  const abortStaleUploadsCalls: string[] = [];
   let transferTuning: TransferTuning = options.transferTuning ?? DEFAULT_TUNING;
   let lastConnectionId: string | null = null;
 
@@ -162,6 +164,10 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       },
       async cancel(transferId) {
         cancelCalls.push(transferId);
+      },
+      async abortStaleUploads(connectionId) {
+        abortStaleUploadsCalls.push(connectionId);
+        return { aborted: 0, errors: 0 };
       },
     },
     keychain: {
@@ -250,6 +256,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     checkForUpdateCalls,
     installAndRelaunchCalls,
     setTransferTuningCalls,
+    abortStaleUploadsCalls,
   };
 
   return services;

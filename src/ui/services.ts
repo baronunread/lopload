@@ -144,6 +144,11 @@ export interface EngineService {
   dismiss(transferId: string): Promise<void>;
   /** Cancels a queued or in-flight transfer; aborts any in-flight request. */
   cancel(transferId: string): Promise<void>;
+  /** Aborts any leftover in-progress uploads for failed transfers (crash
+   * before completion), and clears their persisted state so a future retry
+   * starts fresh instead of trying to resume a dead one. Manual, from
+   * Settings — never runs on its own. */
+  abortStaleUploads(connectionId: string): Promise<{ aborted: number; errors: number }>;
 }
 
 export interface KeychainService {

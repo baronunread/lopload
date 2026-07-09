@@ -47,6 +47,7 @@ import {
   testConnection as s3TestConnection,
 } from "../lib/s3/client";
 import { sweepTrash } from "../lib/s3/trashSweep";
+import { abortStaleUploads } from "../lib/s3/orphanSweep";
 import {
   loadDatabase,
   SqliteConnectionStore,
@@ -482,6 +483,13 @@ class RealServices implements AppServices {
       await engine?.cancel(transferId);
       this.transferSnapshots.delete(transferId);
       this.updateTrayStatus();
+    },
+    abortStaleUploads: async (
+      connectionId: string,
+    ): Promise<{ aborted: number; errors: number }> => {
+      const { client, conn } = await this.getClient(connectionId);
+      const store = await this.getTransferStore();
+      return abortStaleUploads(client, conn.bucket, store, connectionId);
     },
   };
 

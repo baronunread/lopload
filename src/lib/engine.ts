@@ -203,11 +203,27 @@ export class TransferEngine {
         transfer.state.kind === "sending" ||
         transfer.state.kind === "checking"
       ) {
+        // An upload with a persisted uploadId can pick up where it left off
+        // — uploadMultipart's ListParts reconciliation skips whatever parts
+        // already made it to S3. Everything else (uploads that never got an
+        // uploadId, and downloads, which resume from local temp-file state
+        // rather than any engine-tracked id) keeps the previous behavior of
+        // being dropped rather than silently surfaced as failed.
+        if (transfer.direction === "upload" && transfer.uploadId) {
+          transfer.state = { kind: "queued" };
+          transfer.updatedAt = this.now();
+          await this.store.save(transfer);
+          this.transfers.set(transfer.id, transfer);
+          this.queue.push(transfer.id);
+          this.emit({ type: "transfer-updated", transfer: { ...transfer } });
+          continue;
+        }
         await this.store.delete(transfer.id);
         continue;
       }
       this.transfers.set(transfer.id, transfer);
     }
+    void this.pump();
   }
 
   private async setState(transfer: Transfer, next: TransferState): Promise<void> {
