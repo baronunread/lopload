@@ -311,6 +311,7 @@ export class TransferEngine {
           store: this.store,
           onProgress,
           signal: controller.signal,
+          partsInFlight: this.tuning().uploadPartsInFlight,
         });
       }
 
