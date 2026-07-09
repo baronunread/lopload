@@ -74,4 +74,41 @@ export const tauriFileWriter: LocalFileWriter = {
       // Temp file may never have been created (e.g. failure before the first chunk).
     }
   },
+
+  async allocate(tempPath: string, size: number): Promise<void> {
+    await ensureParentDir(tempPath);
+    const file = await open(tempPath, { write: true, create: true, truncate: true });
+    try {
+      await file.truncate(size);
+    } finally {
+      await file.close();
+    }
+  },
+
+  // Opens a fresh handle per call (open → seek → write → close), so
+  // concurrent calls at different offsets never share a seek position.
+  async writeAt(tempPath: string, offset: number, chunk: Uint8Array): Promise<void> {
+    const file = await open(tempPath, { write: true });
+    try {
+      await file.seek(offset, SeekMode.Start);
+      let written = 0;
+      while (written < chunk.length) {
+        const n = await file.write(chunk.subarray(written));
+        if (!n || n <= 0) {
+          throw new Error(`Short write to ${tempPath} at offset ${offset + written}`);
+        }
+        written += n;
+      }
+    } finally {
+      await file.close();
+    }
+  },
+
+  async sizeOf(tempPath: string): Promise<number | null> {
+    try {
+      return await fileSize(tempPath);
+    } catch {
+      return null;
+    }
+  },
 };
