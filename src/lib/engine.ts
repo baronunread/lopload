@@ -321,6 +321,9 @@ export class TransferEngine {
           client: this.client,
           bucket: this.bucket,
           writer: this.writer,
+          reader: this.reader,
+          store: this.store,
+          connections: this.tuning().downloadConnections,
           onProgress,
           signal: controller.signal,
         });

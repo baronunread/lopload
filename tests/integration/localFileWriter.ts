@@ -3,7 +3,7 @@
 // LocalFileWriter contract the engine depends on, streaming chunks to a temp
 // sibling file and renaming it into place on commit.
 
-import { mkdir, open, rename, rm } from "node:fs/promises";
+import { mkdir, open, rename, rm, stat, truncate } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { LocalFileWriter } from "../../src/lib/s3/download";
 
@@ -32,6 +32,30 @@ export const localFileWriter: LocalFileWriter = {
       await rm(tempPath, { force: true });
     } catch {
       // Temp file may never have been created (e.g. failure before the first chunk).
+    }
+  },
+
+  async allocate(tempPath: string, size: number): Promise<void> {
+    await mkdir(dirname(tempPath), { recursive: true });
+    const handle = await open(tempPath, "w");
+    await handle.close();
+    await truncate(tempPath, size);
+  },
+
+  async writeAt(tempPath: string, offset: number, chunk: Uint8Array): Promise<void> {
+    const handle = await open(tempPath, "r+");
+    try {
+      await handle.write(chunk, 0, chunk.length, offset);
+    } finally {
+      await handle.close();
+    }
+  },
+
+  async sizeOf(tempPath: string): Promise<number | null> {
+    try {
+      return (await stat(tempPath)).size;
+    } catch {
+      return null;
     }
   },
 };

@@ -7,7 +7,23 @@ import {
   type LocalFileWriter,
 } from "../../src/lib/s3/download";
 import { md5Hex } from "../../src/lib/md5";
+import { MemoryTransferStore } from "../../src/lib/stores/memory";
+import type { LocalFileReader } from "../../src/lib/s3/multipart";
 import type { Transfer } from "../../src/lib/types";
+
+/** Streaming-path tests never touch the store or read the temp back; these
+ * exist to satisfy DownloadDeps (used only by the ranged path). */
+function extraDeps() {
+  const reader: LocalFileReader = {
+    async size() {
+      return 0;
+    },
+    async readChunk() {
+      return new Uint8Array(0);
+    },
+  };
+  return { store: new MemoryTransferStore(), reader };
+}
 
 const client = new S3Client({
   region: "us-east-1",
@@ -47,6 +63,8 @@ function makeWriter() {
   const discarded: string[] = [];
   const staging = new Map<string, Uint8Array[]>();
 
+  const allocated = new Map<string, Uint8Array>();
+
   const writer: LocalFileWriter = {
     tempPathFor(finalPath) {
       return `${finalPath}.tmp`;
@@ -56,6 +74,12 @@ function makeWriter() {
       staging.get(tempPath)!.push(chunk);
     },
     async commit(tempPath, finalPath) {
+      const buffer = allocated.get(tempPath);
+      if (buffer) {
+        committed.set(finalPath, buffer);
+        allocated.delete(tempPath);
+        return;
+      }
       const chunks = staging.get(tempPath) ?? [];
       const total = chunks.reduce((n, c) => n + c.length, 0);
       const out = new Uint8Array(total);
@@ -70,6 +94,23 @@ function makeWriter() {
     async discard(tempPath) {
       discarded.push(tempPath);
       staging.delete(tempPath);
+      allocated.delete(tempPath);
+    },
+    async allocate(tempPath, size) {
+      allocated.set(tempPath, new Uint8Array(size));
+      staging.delete(tempPath);
+    },
+    async writeAt(tempPath, offset, chunk) {
+      const buffer = allocated.get(tempPath);
+      if (!buffer) throw new Error(`writeAt before allocate: ${tempPath}`);
+      buffer.set(chunk, offset);
+    },
+    async sizeOf(tempPath) {
+      const buffer = allocated.get(tempPath);
+      if (buffer) return buffer.length;
+      const chunks = staging.get(tempPath);
+      if (!chunks) return null;
+      return chunks.reduce((n, c) => n + c.length, 0);
     },
   };
 
@@ -99,7 +140,7 @@ describe("downloadTransfer — single-GET path", () => {
     const { writer, committed, discarded } = makeWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer }),
+      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() }),
     ).resolves.toBeUndefined();
 
     expect(committed.get(transfer.localPath)).toEqual(body);
@@ -118,7 +159,7 @@ describe("downloadTransfer — single-GET path", () => {
     const { writer, committed, discarded } = makeWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer }),
+      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() }),
     ).rejects.toThrow(/checksum/);
     expect(committed.size).toBe(0);
     expect(discarded).toEqual([`${transfer.localPath}.tmp`]);
@@ -136,7 +177,7 @@ describe("downloadTransfer — single-GET path", () => {
     const { writer, committed } = makeWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer }),
+      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() }),
     ).rejects.toThrow(/size/);
     expect(committed.size).toBe(0);
   });
@@ -157,6 +198,7 @@ describe("downloadTransfer — single-GET path", () => {
       client,
       bucket: "b",
       writer,
+      ...extraDeps(),
       onProgress: (received, total) => progressCalls.push([received, total]),
     });
 
@@ -175,7 +217,7 @@ describe("downloadTransfer — single-GET path", () => {
     const transfer = makeTransfer({ size: 0 });
     const { writer, committed } = makeWriter();
 
-    await downloadTransfer(transfer, { client, bucket: "b", writer });
+    await downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() });
     expect(committed.get(transfer.localPath)).toEqual(body);
   });
 
@@ -192,7 +234,7 @@ describe("downloadTransfer — single-GET path", () => {
     const { writer, committed, discarded } = makeWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer, signal: controller.signal }),
+      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps(), signal: controller.signal }),
     ).rejects.toThrow();
     expect(committed.size).toBe(0);
     // No bytes were ever staged in this case (GetObject itself rejected),

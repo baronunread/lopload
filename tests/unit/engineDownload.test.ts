@@ -42,6 +42,8 @@ function makeWriter() {
   const discarded: string[] = [];
   const staging = new Map<string, Uint8Array[]>();
 
+  const allocated = new Map<string, Uint8Array>();
+
   const writer: LocalFileWriter = {
     tempPathFor(finalPath) {
       return `${finalPath}.tmp`;
@@ -51,6 +53,12 @@ function makeWriter() {
       staging.get(tempPath)!.push(chunk);
     },
     async commit(tempPath, finalPath) {
+      const buffer = allocated.get(tempPath);
+      if (buffer) {
+        committed.set(finalPath, buffer);
+        allocated.delete(tempPath);
+        return;
+      }
       const chunks = staging.get(tempPath) ?? [];
       const total = chunks.reduce((n, c) => n + c.length, 0);
       const out = new Uint8Array(total);
@@ -65,6 +73,23 @@ function makeWriter() {
     async discard(tempPath) {
       discarded.push(tempPath);
       staging.delete(tempPath);
+      allocated.delete(tempPath);
+    },
+    async allocate(tempPath, size) {
+      allocated.set(tempPath, new Uint8Array(size));
+      staging.delete(tempPath);
+    },
+    async writeAt(tempPath, offset, chunk) {
+      const buffer = allocated.get(tempPath);
+      if (!buffer) throw new Error(`writeAt before allocate: ${tempPath}`);
+      buffer.set(chunk, offset);
+    },
+    async sizeOf(tempPath) {
+      const buffer = allocated.get(tempPath);
+      if (buffer) return buffer.length;
+      const chunks = staging.get(tempPath);
+      if (!chunks) return null;
+      return chunks.reduce((n, c) => n + c.length, 0);
     },
   };
 
