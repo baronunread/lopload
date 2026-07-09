@@ -13,6 +13,7 @@
 
 body {
   margin: 0;
+  cursor: default;
   /* Desktop-app feel: UI chrome (labels, headings, table text) isn't
      selectable — Cmd+A should act on files, not highlight the interface.
      Form fields opt back in below. */
@@ -28,6 +29,13 @@ body {
 input,
 textarea,
 [contenteditable="true"] {
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.selectable {
+  cursor: text;
   -webkit-user-select: text;
   user-select: text;
 }

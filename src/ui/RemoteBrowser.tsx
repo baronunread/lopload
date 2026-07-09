@@ -705,7 +705,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
             <Dialog.Title>
               {infoEntry.kind === "folder" ? "Folder info" : "File info"}
             </Dialog.Title>
-            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm selectable">
               <dt className="text-kumo-subtle">Name</dt>
               <dd className="break-all">{infoEntry.name}</dd>
               <dt className="text-kumo-subtle">Path</dt>
