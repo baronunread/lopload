@@ -4,6 +4,9 @@
 // across the IPC boundary.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { createLogger } from "../lib/logger";
+
+const log = createLogger("tray");
 
 export interface TrayStatus {
   /** Number of transfers currently queued/sending/checking. */
@@ -36,7 +39,7 @@ function sendStatus(status: TrayStatus): void {
     uploading: status.uploading,
     percent: status.percent,
     failed: status.failed,
-  }).catch(() => {});
+}).catch((err) => log.warn("tray_set_status failed", err));
 }
 
 /** Pushes the tray's status line and Quit label to Rust, throttled so a
@@ -67,7 +70,7 @@ export function setTrayStatus(status: TrayStatus): void {
 
 /** Pushes the current saved connections to the tray's "Upload files…" submenu. */
 export function setTrayConnections(connections: TrayUploadTarget[]): void {
-  void invoke("tray_set_connections", { connections }).catch(() => {});
+  void invoke("tray_set_connections", { connections }).catch((err) => log.warn("tray_set_connections failed", err));
 }
 
 /** Subscribes to a per-connection "Upload files…" click; the callback

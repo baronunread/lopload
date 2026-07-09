@@ -7,7 +7,7 @@ export interface Logger {
   error: (msg: string, ...args: unknown[]) => void;
 }
 
-export type LogSink = (level: LogLevel, module: string, line: string) => void;
+export type LogSink = (level: LogLevel, module: string, msg: string, args: unknown[]) => void;
 
 let extraSinks: LogSink[] = [];
 
@@ -26,7 +26,7 @@ function log(level: LogLevel, module: string, msg: string, args: unknown[]) {
   }
   for (const sink of extraSinks) {
     try {
-      sink(level, module, line);
+      sink(level, module, msg, args);
     } catch {
       // Sink failures must never break logging.
     }

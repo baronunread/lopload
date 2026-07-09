@@ -16,8 +16,11 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import type { Connection, Credentials, PlainError, RemoteEntry } from "../types";
 import { toPlainError } from "../errors";
+import { createLogger } from "../logger";
 import { InjectedFetchHttpHandler, type FetchFn } from "./http-handler";
 import { groupTrashObjects, isTrashKey, parseTrashKey, trashKey, TRASH_PREFIX, type TrashGroup } from "./trash";
+
+const log = createLogger("s3-client");
 
 /** Build an S3Client that routes all HTTP through the injected fetch. */
 export function createS3Client(
@@ -326,7 +329,8 @@ async function existsAtKey(client: S3Client, bucket: string, key: string): Promi
   try {
     await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
     return true;
-  } catch {
+  } catch (err) {
+    log.warn("existsAtKey failed", err);
     return false;
   }
 }

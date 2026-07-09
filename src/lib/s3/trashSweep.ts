@@ -5,6 +5,9 @@
 import { DeleteObjectsCommand, ListObjectsV2Command, type S3Client } from "@aws-sdk/client-s3";
 
 import { isExpired, parseTrashKey, TRASH_PREFIX, TRASH_RETENTION_MS } from "./trash";
+import { createLogger } from "../logger";
+
+const log = createLogger("trash-sweep");
 
 export interface TrashSweepStats {
   scanned: number;
@@ -41,7 +44,8 @@ export async function sweepTrash(
             ContinuationToken: continuationToken,
           }),
         );
-      } catch {
+      } catch (err) {
+        log.warn("Trash sweep: list page failed", err);
         stats.errors += 1;
         break;
       }
@@ -68,11 +72,13 @@ export async function sweepTrash(
           }),
         );
         stats.purged += batch.length;
-      } catch {
+      } catch (err) {
+        log.warn("Trash sweep: delete batch failed", err);
         stats.errors += 1;
       }
     }
-  } catch {
+  } catch (err) {
+    log.warn("Trash sweep: unexpected error", err);
     stats.errors += 1;
   }
 

@@ -24,6 +24,7 @@ import type {
   Transfer,
   TransferStore,
 } from "../lib/types";
+import { createLogger } from "../lib/logger";
 import { TransferEngine, type EnqueueFile } from "../lib/engine";
 import {
   copyLink as s3CopyLink,
@@ -80,6 +81,8 @@ import type {
   TrashItem,
 } from "../ui/services";
 import { expandDroppedPaths, type DropDirEntry } from "./dragDropExpand";
+
+const log = createLogger("services");
 
 const TRASH_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Thumbnails are re-requested each time they're shown, so this only needs
@@ -473,7 +476,8 @@ class RealServices implements AppServices {
           return { ok: true, message: "Connection works." };
         }
         return { ok: false, message: result.error.message };
-      } catch {
+      } catch (err) {
+        log.warn("testConnection threw unexpectedly", err);
         return { ok: false, message: "Something went wrong while testing the connection." };
       }
     },
@@ -562,7 +566,7 @@ class RealServices implements AppServices {
           // subdirectory, or a path outside what the OS lets this app
           // enumerate) must not silently do nothing — surface it so the
           // user knows the drop didn't queue anything.
-          console.error("Failed to expand dropped paths:", err);
+          log.error("Failed to expand dropped paths:", err);
           this.notify(
             "Lopload",
             "Couldn't read one or more of the dropped items - nothing was added.",
@@ -599,7 +603,7 @@ class RealServices implements AppServices {
       joinPath: (dirPath: string, childName: string) => `${dirPath}/${childName}`,
     });
     if (skipped.length > 0) {
-      console.error("Skipped unreadable dropped items:", skipped);
+      log.warn("Skipped unreadable dropped items:", skipped);
       onError?.(
         `${skipped.length} item${skipped.length === 1 ? "" : "s"} couldn't be read and ${skipped.length === 1 ? "was" : "were"} skipped.`,
       );
@@ -659,13 +663,12 @@ class RealServices implements AppServices {
         try {
           const { client } = await this.getClient(conn.id);
           await sweepTrash(client, conn.bucket, Date.now());
-        } catch {
-          // Silent — one connection's failure
-          // must not affect the others.
+        } catch (err) {
+          log.warn("Trash sweep failed for connection", conn.id, err);
         }
       }
-    } catch {
-      // Silent.
+    } catch (err) {
+      log.warn("Trash sweep: store iteration failed", err);
     }
   }
 }
