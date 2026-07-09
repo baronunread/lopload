@@ -1,17 +1,18 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Toasty, useKumoToastManager } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
 import { useAutoUpdate } from "./useAutoUpdate";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { AddStorageDialog } from "./AddStorageDialog";
-import { Onboarding } from "./Onboarding";
-import { RemoteBrowser } from "./RemoteBrowser";
 import { TransferWidget } from "./TransferWidget";
 import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
 import { GearIcon } from "@phosphor-icons/react";
 import { SettingsDialog } from "./SettingsDialog";
 import { ThemeToggle } from "./ThemeToggle";
+
+const Onboarding = lazy(() => import("./Onboarding").then((m) => ({ default: m.Onboarding })));
+const RemoteBrowser = lazy(() => import("./RemoteBrowser").then((m) => ({ default: m.RemoteBrowser })));
 
 /** Shows the "restart to update" toast once an update is found, and keeps
  * it in sync as transfer activity changes the notice's wording. Doesn't
@@ -89,7 +90,11 @@ function AppShellInner() {
   }
 
   if (connections.length === 0) {
-    return <Onboarding onDone={handleSaved} />;
+    return (
+      <Suspense fallback={<div className="flex h-screen items-center justify-center bg-kumo-canvas"><p className="text-kumo-subtle">Loading…</p></div>}>
+        <Onboarding onDone={handleSaved} />
+      </Suspense>
+    );
   }
 
   if (!current) return null;
@@ -135,7 +140,9 @@ function AppShellInner() {
       )}
       <main className="relative flex-1 overflow-auto p-4">
         <section className="h-full min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line">
-          <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
+          <Suspense fallback={<div className="flex h-full items-center justify-center"><p className="text-kumo-subtle">Loading…</p></div>}>
+            <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
+          </Suspense>
         </section>
       </main>
 

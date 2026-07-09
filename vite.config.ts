@@ -30,4 +30,20 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("@aws-sdk/")) return "aws-sdk";
+          if (id.includes("motion")) return "motion";
+          if (id.includes("hash-wasm")) return "hash-wasm";
+          if (id.includes("@phosphor-icons")) return "icons";
+          if (id.includes("@tanstack")) return "tanstack";
+          if (id.includes("@cloudflare/kumo")) return "kumo";
+          if (id.includes("react-dom") || id.includes("react/")) return "react";
+          if (id.includes("node_modules")) return "vendor";
+        },
+      },
+    },
+  },
 }));

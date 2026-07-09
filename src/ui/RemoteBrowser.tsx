@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Breadcrumbs,
   Button,
@@ -21,14 +21,15 @@ import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { CredentialsReentryForm } from "./CredentialsReentryForm";
 import { DragGhost } from "./browser/DragGhost";
-import { MoveToDialog } from "./browser/MoveToDialog";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
-import { ShareLinkDialog } from "./browser/ShareLinkDialog";
-import { TrashDialog } from "./browser/TrashDialog";
 import { filterEntries } from "./browser/filter";
 import { DEFAULT_SORT, nextSortState, sortEntries, type SortKey } from "./browser/sort";
 import { useDragMove } from "./browser/useDragMove";
 import { useSelection } from "./browser/useSelection";
+
+const MoveToDialog = lazy(() => import("./browser/MoveToDialog").then((m) => ({ default: m.MoveToDialog })));
+const ShareLinkDialog = lazy(() => import("./browser/ShareLinkDialog").then((m) => ({ default: m.ShareLinkDialog })));
+const TrashDialog = lazy(() => import("./browser/TrashDialog").then((m) => ({ default: m.TrashDialog })));
 
 export interface RemoteBrowserProps {
   connectionId: string;
@@ -775,30 +776,36 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       <DragGhost drag={dragMove.drag} ghostRef={dragMove.ghostRef} />
 
       {moveTargets && (
-        <MoveToDialog
-          connectionId={connectionId}
-          sourceKeys={moveTargets}
-          currentPrefix={prefix}
-          onClose={() => setMoveTargets(null)}
-          onMove={handleMove}
-        />
+        <Suspense fallback={null}>
+          <MoveToDialog
+            connectionId={connectionId}
+            sourceKeys={moveTargets}
+            currentPrefix={prefix}
+            onClose={() => setMoveTargets(null)}
+            onMove={handleMove}
+          />
+        </Suspense>
       )}
 
       {shareEntry && (
-        <ShareLinkDialog
-          connectionId={connectionId}
-          fileKey={shareEntry.key}
-          fileName={shareEntry.name}
-          onClose={() => setShareEntry(null)}
-        />
+        <Suspense fallback={null}>
+          <ShareLinkDialog
+            connectionId={connectionId}
+            fileKey={shareEntry.key}
+            fileName={shareEntry.name}
+            onClose={() => setShareEntry(null)}
+          />
+        </Suspense>
       )}
 
       {showTrash && (
-        <TrashDialog
-          connectionId={connectionId}
-          onClose={() => setShowTrash(false)}
-          onRestored={() => void refresh()}
-        />
+        <Suspense fallback={null}>
+          <TrashDialog
+            connectionId={connectionId}
+            onClose={() => setShowTrash(false)}
+            onRestored={() => void refresh()}
+          />
+        </Suspense>
       )}
     </div>
   );

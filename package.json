@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",
-    "@aws-sdk/lib-storage": "^3.1082.0",
     "@aws-sdk/s3-request-presigner": "^3.1079.0",
     "@cloudflare/kumo": "^2.6.0",
     "@fontsource/inter": "^5.2.8",
@@ -36,8 +35,7 @@
     "hash-wasm": "^4.12.0",
     "motion": "^12.42.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "zod": "^4.4.3"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.10.6",
