@@ -23,15 +23,20 @@ const PRESET_LABELS: Record<TransferPreset, string> = {
 
 export interface SettingsDialogProps {
   onClose: () => void;
+  /** Current connection, used for the "Abort stale uploads" action. Null
+   * hides that action (e.g. no connection selected yet). */
+  connectionId: string | null;
 }
 
-export function SettingsDialog({ onClose }: SettingsDialogProps) {
+export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
   const services = useServices();
   const [autoUpdateEnabled, setAutoUpdateEnabledState] = useState<boolean>(true);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [downloadDir, setDownloadDir] = useState<string | null>(null);
   const [tuning, setTuningState] = useState<TransferTuning>(DEFAULT_TUNING);
+  const [abortingStale, setAbortingStale] = useState(false);
+  const [abortStaleResult, setAbortStaleResult] = useState<string | null>(null);
 
   useEffect(() => {
     void services.updates.isAutoUpdateEnabled().then(setAutoUpdateEnabledState);
@@ -91,6 +96,28 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     if (typeof value !== "number") return;
     const knobs = { ...tuning, [knob]: value };
     await saveTuning({ ...knobs, preset: presetMatching(knobs) });
+  }
+
+  async function handleAbortStaleUploads() {
+    if (!connectionId) return;
+    setAbortingStale(true);
+    setAbortStaleResult(null);
+    try {
+      const { aborted, errors } = await services.engine.abortStaleUploads(connectionId);
+      if (aborted === 0 && errors === 0) {
+        setAbortStaleResult("Nothing to clean up.");
+      } else if (errors === 0) {
+        setAbortStaleResult(`Cleaned up ${aborted} stale upload${aborted === 1 ? "" : "s"}.`);
+      } else {
+        setAbortStaleResult(
+          `Cleaned up ${aborted}, ${errors} couldn't be cleaned up — try again later.`,
+        );
+      }
+    } catch {
+      setAbortStaleResult("Couldn't clean up stale uploads.");
+    } finally {
+      setAbortingStale(false);
+    }
   }
 
   const currentPreset = presetMatching(tuning);
@@ -249,6 +276,34 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
               )}
             </div>
           </section>
+
+          {connectionId && (
+            <>
+              <hr className="border-kumo-line" />
+              <section>
+                <h2 className="mb-3 text-sm font-semibold text-kumo-strong">Storage</h2>
+                <p className="mb-1 text-sm text-kumo-default">Abort stale uploads</p>
+                <p className="mb-3 text-xs text-kumo-subtle">
+                  Uploads interrupted by a crash or force-quit can leave unfinished data behind.
+                  This cleans up anything left over from a failed transfer on this connection.
+                </p>
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="secondary"
+                    onClick={handleAbortStaleUploads}
+                    disabled={abortingStale}
+                  >
+                    {abortingStale ? "Cleaning up…" : "Abort stale uploads"}
+                  </Button>
+                  {abortStaleResult && (
+                    <span className="text-sm text-kumo-subtle tabular-nums">
+                      {abortStaleResult}
+                    </span>
+                  )}
+                </div>
+              </section>
+            </>
+          )}
         </div>
 
       </Dialog>

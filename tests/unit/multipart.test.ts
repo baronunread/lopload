@@ -143,6 +143,42 @@ describe("uploadTransfer — multipart", () => {
     expect(parts.length).toBe(3);
   });
 
+  test("clears the persisted uploadId once CompleteMultipartUpload succeeds", async () => {
+    const partEtag = "d41d8cd98f00b204e9800998ecf8427e";
+    s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-789" });
+    s3Mock.on(ListPartsCommand).resolves({ Parts: [] });
+    s3Mock.on(UploadPartCommand).resolves({ ETag: q(partEtag) });
+    s3Mock.on(CompleteMultipartUploadCommand).resolves({});
+    const composite = await compositeEtag([partEtag, partEtag, partEtag]);
+    s3Mock.on(HeadObjectCommand).resolves({
+      ETag: q(composite),
+      ContentLength: body.length,
+    });
+
+    const store = new MemoryTransferStore();
+    const transfer = makeTransfer({
+      id: "multi-clear",
+      size: body.length,
+      partSize,
+    });
+
+    expect(transfer.uploadId).toBeUndefined();
+    await uploadTransfer(transfer, {
+      client,
+      bucket: "b",
+      reader: makeReader(body),
+      store,
+    });
+
+    // The uploadId set on CreateMultipartUpload must be cleared, both on
+    // the in-memory transfer object the engine holds a reference to, and
+    // in the store — otherwise a future resume would try to reuse an
+    // already-completed (dead) uploadId.
+    expect(transfer.uploadId).toBeUndefined();
+    const persisted = await store.get("multi-clear");
+    expect(persisted?.uploadId).toBeUndefined();
+  });
+
   test("skips already-uploaded parts (server truth)", async () => {
     const serverEtag = "ab56b4d92b40713acc5af89985d4b786";
     const newEtag = "d41d8cd98f00b204e9800998ecf8427e";

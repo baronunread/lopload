@@ -132,7 +132,7 @@ function AppShellInner() {
       </header>
 
       {showSettings && (
-        <SettingsDialog onClose={() => setShowSettings(false)} />
+        <SettingsDialog onClose={() => setShowSettings(false)} connectionId={currentId} />
       )}
 
       {showSetup && (

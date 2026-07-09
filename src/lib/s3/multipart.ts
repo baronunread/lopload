@@ -240,6 +240,12 @@ async function uploadMultipart(
     { abortSignal: signal },
   );
 
+  // The uploadId is spent the moment CompleteMultipartUpload succeeds —
+  // even if verification below fails, ListParts/UploadPart against it will
+  // no longer work, so a future resume must never try to reuse it.
+  transfer.uploadId = undefined;
+  await store.save({ ...transfer, uploadId: undefined });
+
   const head = await client.send(
     new HeadObjectCommand({ Bucket: bucket, Key: transfer.key }),
     { abortSignal: signal },
