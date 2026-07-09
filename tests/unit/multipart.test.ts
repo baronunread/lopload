@@ -16,7 +16,7 @@ import {
   uploadTransfer,
   type LocalFileReader,
 } from "../../src/lib/s3/multipart";
-import { md5Hex, bytesToHex } from "../../src/lib/md5";
+import { md5Hex, bytesToHex, compositeEtag } from "../../src/lib/md5";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
 import type { Transfer } from "../../src/lib/types";
 
@@ -114,14 +114,14 @@ describe("uploadTransfer — multipart", () => {
   const body = new Uint8Array(partSize * 2 + 1).fill(42); // 16MB+1 > MULTIPART_THRESHOLD
 
   test("creates upload, uploads parts, completes, and verifies composite ETag", async () => {
+    const partEtag = "d41d8cd98f00b204e9800998ecf8427e";
     s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-123" });
     s3Mock.on(ListPartsCommand).resolves({ Parts: [] });
-    s3Mock.on(UploadPartCommand).resolves({ ETag: q("part-etag") });
+    s3Mock.on(UploadPartCommand).resolves({ ETag: q(partEtag) });
     s3Mock.on(CompleteMultipartUploadCommand).resolves({});
-    const tags = ["part-etag", "part-etag", "part-etag"];
-    const composite = await md5Hex(new TextEncoder().encode(tags.join("")));
+    const composite = await compositeEtag([partEtag, partEtag, partEtag]);
     s3Mock.on(HeadObjectCommand).resolves({
-      ETag: q(`${composite}-3`),
+      ETag: q(composite),
       ContentLength: body.length,
     });
 
@@ -144,17 +144,18 @@ describe("uploadTransfer — multipart", () => {
   });
 
   test("skips already-uploaded parts (server truth)", async () => {
+    const serverEtag = "ab56b4d92b40713acc5af89985d4b786";
+    const newEtag = "d41d8cd98f00b204e9800998ecf8427e";
     s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-456" });
     s3Mock.on(ListPartsCommand).resolves({
       Parts: [
-        { PartNumber: 1, ETag: q("server-etag"), Size: partSize },
+        { PartNumber: 1, ETag: q(serverEtag), Size: partSize },
       ],
     });
-    s3Mock.on(UploadPartCommand).resolves({ ETag: q("new-etag") });
-    const tags = ["server-etag", "new-etag", "new-etag"];
-    const composite = await md5Hex(new TextEncoder().encode(tags.join("")));
+    s3Mock.on(UploadPartCommand).resolves({ ETag: q(newEtag) });
+    const composite = await compositeEtag([serverEtag, newEtag, newEtag]);
     s3Mock.on(HeadObjectCommand).resolves({
-      ETag: q(`${composite}-3`),
+      ETag: q(composite),
       ContentLength: body.length,
     });
 

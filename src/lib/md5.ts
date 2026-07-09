@@ -32,10 +32,18 @@ export async function md5Hex(data: Uint8Array): Promise<string> {
   return bytesToHex(h.digest());
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
 export async function compositeEtag(partEtags: string[]): Promise<string> {
   const h = await Md5.create();
   for (const etag of partEtags) {
-    h.update(new TextEncoder().encode(etag));
+    h.update(hexToBytes(etag));
   }
   return `${bytesToHex(h.digest())}-${partEtags.length}`;
 }
