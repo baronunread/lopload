@@ -12,7 +12,8 @@ import {
 } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
 import { md5Hex } from "../../src/lib/md5";
-import type { EngineEvent, Transfer, TransferState } from "../../src/lib/types";
+import type { EngineEvent, Transfer, TransferState, TransferTuning } from "../../src/lib/types";
+import { DEFAULT_TUNING } from "../../src/lib/tuning";
 import type { LocalFileReader } from "../../src/lib/s3/multipart";
 
 const client = new S3Client({
@@ -230,7 +231,7 @@ describe("TransferEngine — concurrency and batching", () => {
       connectionId: "conn-1",
       reader,
       store,
-      concurrency: 3,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 3 }),
     });
     engine.subscribe((e) => events.push(e));
 
@@ -241,6 +242,64 @@ describe("TransferEngine — concurrency and batching", () => {
 
     const batchEvent = events.find((e) => e.type === "batch-finished");
     expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 5, downloaded: 0, failed: 0 });
+  });
+});
+
+describe("TransferEngine — live tuning", () => {
+  test("raising concurrentFiles mid-batch admits more transfers on the next pump", async () => {
+    s3Mock.on(PutObjectCommand).callsFake(() => new Promise(() => {})); // hangs forever
+    const reader = makeReader({
+      "/local/1.txt": new Uint8Array([1]),
+      "/local/2.txt": new Uint8Array([2]),
+      "/local/3.txt": new Uint8Array([3]),
+      "/local/4.txt": new Uint8Array([4]),
+    });
+    const store = new MemoryTransferStore();
+    let currentTuning: TransferTuning = { ...DEFAULT_TUNING, concurrentFiles: 1 };
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader,
+      store,
+      tuning: () => currentTuning,
+    });
+
+    await engine.enqueue([
+      { localPath: "/local/1.txt", size: 1, key: "1.txt" },
+      { localPath: "/local/2.txt", size: 1, key: "2.txt" },
+      { localPath: "/local/3.txt", size: 1, key: "3.txt" },
+    ]);
+
+    await waitUntil(() => engine["active"].size === 1);
+    expect(engine["queue"].length).toBe(2);
+
+    // Raising the live tuning alone doesn't retrigger a pump — the next
+    // enqueue does, which is exactly the "no restart needed" contract.
+    currentTuning = { ...currentTuning, concurrentFiles: 3 };
+    await engine.enqueue([{ localPath: "/local/4.txt", size: 1, key: "4.txt" }]);
+
+    await waitUntil(() => engine["active"].size === 3);
+    expect(engine["queue"].length).toBe(1);
+  });
+
+  test("enqueue captures partSize from tuning's partSizeMiB at enqueue time", async () => {
+    const reader = makeReader({});
+    const store = new MemoryTransferStore();
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader,
+      store,
+      tuning: () => ({ ...DEFAULT_TUNING, partSizeMiB: 32 }),
+    });
+
+    const [transfer] = await engine.enqueue([
+      { localPath: "/local/x.bin", size: 0, key: "x.bin" },
+    ]);
+
+    expect(transfer.partSize).toBe(32 * 1024 * 1024);
   });
 });
 

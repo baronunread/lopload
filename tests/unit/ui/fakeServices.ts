@@ -1,4 +1,11 @@
-import type { Connection, EngineEvent, RemoteEntry, Transfer } from "../../../src/lib/types";
+import type {
+  Connection,
+  EngineEvent,
+  RemoteEntry,
+  Transfer,
+  TransferTuning,
+} from "../../../src/lib/types";
+import { DEFAULT_TUNING } from "../../../src/lib/tuning";
 import { CredentialsUnreadableError } from "../../../src/ui/services";
 import type {
   AppServices,
@@ -22,6 +29,7 @@ export interface FakeServicesOptions {
   trashItems?: TrashItem[];
   credentialsUnreadableFor?: Set<string>;
   updateVersion?: string | null;
+  transferTuning?: TransferTuning;
 }
 
 export interface FakeServices extends AppServices {
@@ -44,6 +52,7 @@ export interface FakeServices extends AppServices {
   triggerFileDropError(message: string): void;
   checkForUpdateCalls: number[];
   installAndRelaunchCalls: number[];
+  setTransferTuningCalls: TransferTuning[];
 }
 
 export function createFakeServices(options: FakeServicesOptions = {}): FakeServices {
@@ -70,6 +79,8 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   let fileDropErrorHandler: ((message: string) => void) | null = null;
   const checkForUpdateCalls: number[] = [];
   const installAndRelaunchCalls: number[] = [];
+  const setTransferTuningCalls: TransferTuning[] = [];
+  let transferTuning: TransferTuning = options.transferTuning ?? DEFAULT_TUNING;
 
   const services: FakeServices = {
     connections: {
@@ -176,10 +187,13 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
         return null;
       },
       async setDefaultDownloadDir() {},
-      async getConcurrentTransfers() {
-        return 3;
+      async getTransferTuning() {
+        return transferTuning;
       },
-      async setConcurrentTransfers() {},
+      async setTransferTuning(tuning) {
+        transferTuning = tuning;
+        setTransferTuningCalls.push(tuning);
+      },
     },
     async pickFiles() {
       return options.pickFilesResult ?? [];
@@ -228,6 +242,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     emptyTrashCalls,
     checkForUpdateCalls,
     installAndRelaunchCalls,
+    setTransferTuningCalls,
   };
 
   return services;

@@ -13,6 +13,7 @@ import type {
   EngineEvent,
   RemoteEntry,
   Transfer,
+  TransferTuning,
 } from "../lib/types";
 
 /** Fields collected by the setup screen, before a Connection has an id. */
@@ -168,8 +169,8 @@ export interface UpdatesService {
 export interface SettingsService {
   getDefaultDownloadDir(): Promise<string | null>;
   setDefaultDownloadDir(path: string | null): Promise<void>;
-  getConcurrentTransfers(): Promise<number>;
-  setConcurrentTransfers(count: number): Promise<void>;
+  getTransferTuning(): Promise<TransferTuning>;
+  setTransferTuning(tuning: TransferTuning): Promise<void>;
 }
 
 /** Everything the UI needs from the outside world, injected via context. */

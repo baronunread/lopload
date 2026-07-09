@@ -8,6 +8,7 @@ import { md5Hex } from "../../src/lib/md5";
 import type { LocalFileWriter } from "../../src/lib/s3/download";
 import type { LocalFileReader } from "../../src/lib/s3/multipart";
 import type { EngineEvent } from "../../src/lib/types";
+import { DEFAULT_TUNING } from "../../src/lib/tuning";
 
 const client = new S3Client({
   region: "us-east-1",
@@ -219,7 +220,7 @@ describe("TransferEngine — cancel", () => {
       connectionId: "conn-1",
       reader,
       store,
-      concurrency: 1,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 1 }),
     });
 
     const [first, second] = await engine.enqueue([
