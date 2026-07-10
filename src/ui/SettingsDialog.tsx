@@ -124,8 +124,8 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog className="w-full max-w-md p-6">
-        <div className="flex items-center gap-3">
+      <Dialog className="flex h-[32rem] w-full max-w-md flex-col p-6">
+        <div className="flex shrink-0 items-center gap-3">
           <Dialog.Title className="m-0">Settings</Dialog.Title>
           <Dialog.Close
             render={(p) => (
@@ -140,7 +140,10 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
             )}
           />
         </div>
-        <div className="flex flex-col gap-6">
+        <div
+          className="mt-4 -ml-1 flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto py-1 pr-4 pl-1"
+          style={{ scrollbarGutter: "stable" }}
+        >
           <section>
             <h2 className="mb-3 text-sm font-semibold text-kumo-strong">General</h2>
             <div className="flex flex-col gap-4">
