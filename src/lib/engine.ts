@@ -88,6 +88,7 @@ export class TransferEngine {
     samples: { bytes: number; time: number }[];
     lastDisplayedSpeed?: number;
     lastDisplayTime: number;
+    lastEmitTime: number;
   }>();
 
   private batchUploaded = 0;
@@ -227,7 +228,11 @@ export class TransferEngine {
     void this.pump();
   }
 
-  private async setState(transfer: Transfer, next: TransferState): Promise<void> {
+  /**
+   * Real state-machine transitions (queued -> sending -> checking -> ...).
+   * Validates via canTransition, persists to the store, and emits.
+   */
+  private async persistState(transfer: Transfer, next: TransferState): Promise<void> {
     if (!canTransition(transfer.state, next)) {
       log.warn("invalid transition", transfer.id, transfer.state.kind, "->", next.kind);
       throw new InvalidTransitionError(transfer.state, next);
@@ -238,6 +243,33 @@ export class TransferEngine {
     if (this.cancelledIds.has(transfer.id)) return;
     this.transfers.set(transfer.id, transfer);
     this.emit({ type: "transfer-updated", transfer: { ...transfer } });
+  }
+
+  /**
+   * In-progress percent/speed ticks within the "sending" state. Streamed
+   * transfers can call this once per ~64 KiB chunk, so unlike persistState
+   * this never touches the store (SqliteTransferStore.save only persists
+   * transfer.state.kind, never percent — a progress write is pure waste)
+   * and throttles transfer-updated emits to at most once per ~200ms per
+   * transfer, always emitting immediately at 100% so the UI doesn't stick.
+   * Synchronous — no awaits — so it can't build an unbounded backlog of
+   * promises on the hot path the way `void this.setState(...)` used to.
+   */
+  private updateProgress(
+    transfer: Transfer,
+    percent: number,
+    speedBytesPerSec: number | undefined,
+    tracker: { lastEmitTime: number },
+  ): void {
+    if (this.cancelledIds.has(transfer.id)) return;
+    transfer.state = { kind: "sending", percent, speedBytesPerSec };
+    transfer.updatedAt = this.now();
+    this.transfers.set(transfer.id, transfer);
+    const now = this.now();
+    if (percent >= 100 || now - tracker.lastEmitTime >= 200) {
+      tracker.lastEmitTime = now;
+      this.emit({ type: "transfer-updated", transfer: { ...transfer } });
+    }
   }
 
   private async pump(): Promise<void> {
@@ -285,11 +317,11 @@ export class TransferEngine {
 
     try {
       if (transfer.state.kind === "queued") {
-        await this.setState(transfer, { kind: "sending", percent: 0 });
+        await this.persistState(transfer, { kind: "sending", percent: 0 });
       } else if (transfer.state.kind !== "sending" && transfer.state.kind !== "checking") {
         return;
       } else if (transfer.state.kind === "checking") {
-        await this.setState(transfer, { kind: "sending", percent: 0 });
+        await this.persistState(transfer, { kind: "sending", percent: 0 });
       }
 
       const onProgress = (sent: number, total: number) => {
@@ -297,7 +329,12 @@ export class TransferEngine {
         const now = this.now();
         let tracker = this.speedTrackers.get(id);
         if (!tracker) {
-          tracker = { samples: [], lastDisplayedSpeed: undefined, lastDisplayTime: 0 };
+          tracker = {
+            samples: [],
+            lastDisplayedSpeed: undefined,
+            lastDisplayTime: 0,
+            lastEmitTime: 0,
+          };
           this.speedTrackers.set(id, tracker);
         }
         tracker.samples.push({ bytes: sent, time: now });
@@ -318,11 +355,7 @@ export class TransferEngine {
             tracker.lastDisplayTime = now;
           }
         }
-        void this.setState(transfer, {
-          kind: "sending",
-          percent,
-          speedBytesPerSec: tracker.lastDisplayedSpeed,
-        });
+        this.updateProgress(transfer, percent, tracker.lastDisplayedSpeed, tracker);
       };
 
       if (transfer.direction === "download") {
@@ -351,8 +384,8 @@ export class TransferEngine {
         });
       }
 
-      await this.setState(transfer, { kind: "checking" });
-      await this.setState(transfer, { kind: transfer.direction === "download" ? "downloaded" : "uploaded" });
+      await this.persistState(transfer, { kind: "checking" });
+      await this.persistState(transfer, { kind: transfer.direction === "download" ? "downloaded" : "uploaded" });
       if (transfer.direction === "download") this.batchDownloaded += 1;
       else this.batchUploaded += 1;
     } catch (err) {
@@ -365,7 +398,7 @@ export class TransferEngine {
       if (current.state.kind === "uploaded" || current.state.kind === "downloaded") return;
       log.error("transfer failed", current.key, errorClass, describeThrown(err));
       try {
-        await this.setState(current, { kind: "failed", errorClass });
+        await this.persistState(current, { kind: "failed", errorClass });
       } catch {
         current.state = { kind: "failed", errorClass };
         current.updatedAt = this.now();
