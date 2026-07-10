@@ -2,7 +2,7 @@
 
 All notable changes to Lopload are documented here. Release binaries and full notes live on the [releases page](https://github.com/baronunread/lopload/releases).
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-07-10
 
 Initial public release.
 
