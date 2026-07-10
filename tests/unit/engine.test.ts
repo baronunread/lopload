@@ -1,6 +1,7 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mockClient } from "aws-sdk-client-mock";
 import {
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -15,6 +16,7 @@ import { md5Hex } from "../../src/lib/md5";
 import type { EngineEvent, Transfer, TransferState, TransferTuning } from "../../src/lib/types";
 import { DEFAULT_TUNING } from "../../src/lib/tuning";
 import type { LocalFileReader } from "../../src/lib/s3/multipart";
+import type { LocalFileWriter } from "../../src/lib/s3/download";
 
 const client = new S3Client({
   region: "us-east-1",
@@ -566,6 +568,266 @@ class CountingTransferStore extends MemoryTransferStore {
     return super.list(connectionId);
   }
 }
+
+describe("TransferEngine — progress throttling (updateProgress vs persistState)", () => {
+  test("500 progress ticks trigger no additional store.save calls beyond the real state transitions", async () => {
+    // PutObjectCommand hangs forever so the transfer stays parked in
+    // "sending" — we can then hammer the progress path directly without
+    // racing the real upload to completion.
+    s3Mock.on(PutObjectCommand).callsFake(() => new Promise(() => {}));
+
+    let saveCount = 0;
+    class CountingStore extends MemoryTransferStore {
+      override async save(t: Transfer): Promise<void> {
+        saveCount += 1;
+        return super.save(t);
+      }
+    }
+    const store = new CountingStore();
+    const reader = makeReader({ "/local/big.bin": new Uint8Array(10) });
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader,
+      store,
+    });
+
+    const [transfer] = await engine.enqueue([
+      { localPath: "/local/big.bin", size: 10, key: "big.bin" },
+    ]);
+    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "sending");
+
+    // enqueue's initial save + the queued->sending transition save.
+    const savesBeforeProgress = saveCount;
+    expect(savesBeforeProgress).toBeLessThanOrEqual(5);
+
+    const live = engine.getTransfer(transfer.id)!;
+    const tracker = { lastEmitTime: 0 };
+    for (let i = 1; i <= 500; i++) {
+      (engine as unknown as {
+        updateProgress: (
+          t: Transfer,
+          percent: number,
+          speed: number | undefined,
+          tr: { lastEmitTime: number },
+        ) => void;
+      }).updateProgress(live, Math.min(100, Math.round((i / 500) * 100)), undefined, tracker);
+    }
+
+    // Progress ticks must never call store.save — SqliteTransferStore.save
+    // only persists state.kind, never percent, so persisting on every tick
+    // would be pure write amplification for zero benefit.
+    expect(saveCount).toBe(savesBeforeProgress);
+  });
+
+  test("transfer-updated emits during progress are throttled to ~200ms per transfer", () => {
+    let fakeNow = 1_000_000;
+    const store = new MemoryTransferStore();
+    const events: EngineEvent[] = [];
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+      now: () => fakeNow,
+    });
+    engine.subscribe((e) => events.push(e));
+
+    const transfer: Transfer = {
+      id: "t-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 1000,
+      partSize: 8 * 1024 * 1024,
+      direction: "upload",
+      state: { kind: "sending", percent: 0 },
+      createdAt: fakeNow,
+      updatedAt: fakeNow,
+    };
+    const tracker = { lastEmitTime: fakeNow };
+
+    const updateProgress = (
+      engine as unknown as {
+        updateProgress: (
+          t: Transfer,
+          percent: number,
+          speed: number | undefined,
+          tr: { lastEmitTime: number },
+        ) => void;
+      }
+    ).updateProgress.bind(engine);
+
+    // 500 ticks, 10ms apart in fake time (5000ms total) — at a 200ms
+    // throttle that's at most ~26 emits, not 500.
+    for (let i = 1; i <= 500; i++) {
+      fakeNow += 10;
+      const percent = i === 500 ? 100 : Math.min(99, Math.round((i / 500) * 100));
+      updateProgress(transfer, percent, undefined, tracker);
+    }
+
+    const progressEmits = events.filter(
+      (e) => e.type === "transfer-updated" && e.transfer.state.kind === "sending",
+    );
+    expect(progressEmits.length).toBeGreaterThan(0);
+    expect(progressEmits.length).toBeLessThan(50);
+
+    // The final 100% tick must always emit immediately, regardless of the
+    // throttle window, so the UI never sticks at 99%.
+    const last = progressEmits[progressEmits.length - 1] as { transfer: Transfer };
+    expect(last.transfer.state).toEqual({ kind: "sending", percent: 100, speedBytesPerSec: undefined });
+  });
+
+  test("updateProgress never resurrects a cancelled transfer", () => {
+    const store = new MemoryTransferStore();
+    const events: EngineEvent[] = [];
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+    });
+    engine.subscribe((e) => events.push(e));
+
+    const transfer: Transfer = {
+      id: "cancelled-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 1000,
+      partSize: 8 * 1024 * 1024,
+      direction: "upload",
+      state: { kind: "sending", percent: 10 },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    (engine as unknown as { cancelledIds: Set<string> }).cancelledIds.add(transfer.id);
+
+    const tracker = { lastEmitTime: 0 };
+    (
+      engine as unknown as {
+        updateProgress: (
+          t: Transfer,
+          percent: number,
+          speed: number | undefined,
+          tr: { lastEmitTime: number },
+        ) => void;
+      }
+    ).updateProgress(transfer, 50, undefined, tracker);
+
+    expect(engine.getTransfer(transfer.id)).toBeUndefined();
+    expect(events.filter((e) => e.type === "transfer-updated")).toEqual([]);
+  });
+});
+
+describe("TransferEngine — progress wiring end-to-end", () => {
+  function chunkedBodyStreamOf(bytes: Uint8Array, chunkSize: number): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      start(controller) {
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          controller.enqueue(bytes.slice(offset, offset + chunkSize));
+        }
+        controller.close();
+      },
+    });
+  }
+
+  function makeDownloadWriter(): LocalFileWriter {
+    const staging = new Map<string, Uint8Array[]>();
+    const allocated = new Map<string, Uint8Array>();
+    const committed = new Map<string, Uint8Array>();
+    return {
+      tempPathFor(finalPath) {
+        return `${finalPath}.tmp`;
+      },
+      async writeChunk(tempPath, chunk, isFirst) {
+        if (isFirst || !staging.has(tempPath)) staging.set(tempPath, []);
+        staging.get(tempPath)!.push(chunk);
+      },
+      async commit(tempPath, finalPath) {
+        const chunks = staging.get(tempPath) ?? [];
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) {
+          out.set(c, offset);
+          offset += c.length;
+        }
+        committed.set(finalPath, out);
+        staging.delete(tempPath);
+      },
+      async discard(tempPath) {
+        staging.delete(tempPath);
+        allocated.delete(tempPath);
+      },
+      async allocate(tempPath, size) {
+        allocated.set(tempPath, new Uint8Array(size));
+        staging.delete(tempPath);
+      },
+      async writeAt(tempPath, offset, chunk) {
+        const buffer = allocated.get(tempPath);
+        if (!buffer) throw new Error(`writeAt before allocate: ${tempPath}`);
+        buffer.set(chunk, offset);
+      },
+      async sizeOf(tempPath) {
+        const buffer = allocated.get(tempPath);
+        if (buffer) return buffer.length;
+        const chunks = staging.get(tempPath);
+        if (!chunks) return null;
+        return chunks.reduce((n, c) => n + c.length, 0);
+      },
+    };
+  }
+
+  test("a download that ticks onProgress hundreds of times still ends with few store.save calls and a bounded number of emits", async () => {
+    const body = new Uint8Array(500).map((_, i) => i % 256);
+    s3Mock.on(GetObjectCommand).resolves({
+      Body: chunkedBodyStreamOf(body, 1) as never,
+      ETag: q(await md5Hex(body)),
+      ContentLength: body.length,
+    });
+
+    let saveCount = 0;
+    class CountingStore extends MemoryTransferStore {
+      override async save(t: Transfer): Promise<void> {
+        saveCount += 1;
+        return super.save(t);
+      }
+    }
+    const store = new CountingStore();
+    const writer = makeDownloadWriter();
+    const events: EngineEvent[] = [];
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      writer,
+      store,
+    });
+    engine.subscribe((e) => events.push(e));
+
+    const [transfer] = await engine.enqueueDownloads([
+      { key: "big.bin", localPath: "/local/big.bin", size: body.length },
+    ]);
+
+    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "downloaded");
+
+    const progressEmits = events.filter(
+      (e) => e.type === "transfer-updated" && e.transfer.state.kind === "sending",
+    );
+    // 500 one-byte chunks would be 500 store writes under the old
+    // `void this.setState(...)` behavior; the throttle means real time
+    // (test runs in well under 200ms) collapses almost all of them.
+    expect(progressEmits.length).toBeLessThan(500);
+    // save() is only ever called for real transitions (queued->sending,
+    // sending->checking, checking->downloaded), never per progress tick.
+    expect(saveCount).toBeLessThanOrEqual(5);
+  });
+});
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
