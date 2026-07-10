@@ -196,9 +196,42 @@ export class TransferEngine {
     await this.store.delete(transferId);
   }
 
+  private resumePendingPromise: Promise<void> | null = null;
+
+  /** Idempotent and safe to call concurrently: a second call that overlaps
+   * with an in-flight one simply awaits the same in-flight work rather than
+   * re-reading the store and racing to re-queue the same transfers (the
+   * per-transfer queue/active checks below only protect against *sequential*
+   * repeat calls, since two truly concurrent calls would both pass those
+   * checks before either had a chance to push to the queue). */
   async resumePending(): Promise<void> {
+    if (!this.resumePendingPromise) {
+      this.resumePendingPromise = this.resumePendingInternal().finally(() => {
+        this.resumePendingPromise = null;
+      });
+    }
+    return this.resumePendingPromise;
+  }
+
+  private async resumePendingInternal(): Promise<void> {
     const all = await this.store.list(this.connectionId);
     for (const transfer of all) {
+      // Idempotency guard: if this transfer id is already queued, actively
+      // running, or already tracked in a non-terminal state, a previous
+      // (possibly concurrent) call to resumePending already handled it —
+      // skip it so we never double-queue the same upload.
+      if (this.queue.includes(transfer.id) || this.active.has(transfer.id)) {
+        continue;
+      }
+      const tracked = this.transfers.get(transfer.id);
+      if (
+        tracked &&
+        (tracked.state.kind === "queued" ||
+          tracked.state.kind === "sending" ||
+          tracked.state.kind === "checking")
+      ) {
+        continue;
+      }
       if (
         transfer.state.kind === "queued" ||
         transfer.state.kind === "sending" ||
