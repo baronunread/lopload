@@ -87,6 +87,7 @@ export class TransferEngine {
   private readonly speedTrackers = new Map<string, {
     samples: { bytes: number; time: number }[];
     lastDisplayedSpeed?: number;
+    lastDisplayTime: number;
   }>();
 
   private batchUploaded = 0;
@@ -293,40 +294,35 @@ export class TransferEngine {
 
       const onProgress = (sent: number, total: number) => {
         const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 100;
-        let speedBytesPerSec: number | undefined;
-        const tracker = this.speedTrackers.get(id);
-        const now = Date.now();
-        if (tracker) {
-          const gapMs = tracker.samples.length > 0
-            ? now - tracker.samples[tracker.samples.length - 1].time
-            : 0;
-          tracker.samples.push({ bytes: sent, time: now });
-          if (tracker.samples.length > 15) tracker.samples.shift();
-          if (gapMs > 2000 && tracker.lastDisplayedSpeed !== undefined) {
-            speedBytesPerSec = tracker.lastDisplayedSpeed;
-          } else if (tracker.samples.length >= 2) {
-            const first = tracker.samples[0];
-            const last = tracker.samples[tracker.samples.length - 1];
-            const elapsedMs = last.time - first.time;
-            const bytesDelta = last.bytes - first.bytes;
-            if (elapsedMs > 0 && bytesDelta > 0) {
-              const computed = Math.round((bytesDelta / elapsedMs) * 1000);
-              if (tracker.lastDisplayedSpeed === undefined) {
-                speedBytesPerSec = computed;
-                tracker.lastDisplayedSpeed = computed;
-              } else {
-                const change = Math.abs(computed - tracker.lastDisplayedSpeed) / tracker.lastDisplayedSpeed;
-                speedBytesPerSec = change > 0.05 ? computed : tracker.lastDisplayedSpeed;
-              }
-            }
-          }
-        } else {
-          this.speedTrackers.set(id, {
-            samples: [{ bytes: sent, time: now }],
-            lastDisplayedSpeed: undefined,
-          });
+        const now = this.now();
+        let tracker = this.speedTrackers.get(id);
+        if (!tracker) {
+          tracker = { samples: [], lastDisplayedSpeed: undefined, lastDisplayTime: 0 };
+          this.speedTrackers.set(id, tracker);
         }
-        void this.setState(transfer, { kind: "sending", percent, speedBytesPerSec });
+        tracker.samples.push({ bytes: sent, time: now });
+        while (tracker.samples.length > 2 && now - tracker.samples[1].time > 5000) {
+          tracker.samples.shift();
+        }
+        if (now - tracker.lastDisplayTime >= 750) {
+          const first = tracker.samples[0];
+          const elapsedMs = now - first.time;
+          const bytesDelta = sent - first.bytes;
+          if (elapsedMs >= 500 && bytesDelta > 0) {
+            const computed = (bytesDelta / elapsedMs) * 1000;
+            tracker.lastDisplayedSpeed = Math.round(
+              tracker.lastDisplayedSpeed === undefined
+                ? computed
+                : tracker.lastDisplayedSpeed * 0.6 + computed * 0.4,
+            );
+            tracker.lastDisplayTime = now;
+          }
+        }
+        void this.setState(transfer, {
+          kind: "sending",
+          percent,
+          speedBytesPerSec: tracker.lastDisplayedSpeed,
+        });
       };
 
       if (transfer.direction === "download") {
