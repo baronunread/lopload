@@ -123,9 +123,16 @@ jobs:
       - name: Build updater manifest (latest.json)
         run: bun run .github/scripts/build-latest-json.mjs
 
+      - name: Determine if this is a prerelease
+        # Semver convention: a tag with a "-" after the version (v1.2.0-beta.1,
+        # v1.2.0-rc.1) is a prerelease; a plain vX.Y.Z tag is a full release.
+        id: prerelease
+        run: echo "value=${{ contains(github.ref_name, '-') }}" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          prerelease: ${{ steps.prerelease.outputs.value }}
           # Sig globs follow createUpdaterArtifacts: true (Tauri v2 native)
           # naming: .sig sits next to the bundle itself (.AppImage.sig,
           # -setup.exe.sig, .msi.sig), except macOS which keeps .app.tar.gz.
