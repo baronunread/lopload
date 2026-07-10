@@ -126,6 +126,11 @@ class RealServices implements AppServices {
   private clients = new Map<string, S3Client>();
   /** Cached per-connection engines, created lazily on first use (a "switch to"). */
   private engines = new Map<string, TransferEngine>();
+  /** In-flight/completed engine construction promises, memoized per
+   * connection so concurrent callers (e.g. listTransfers + enqueue at
+   * startup) await the same construction instead of each building — and
+   * each resuming pending transfers on — their own TransferEngine instance. */
+  private enginePromises = new Map<string, Promise<TransferEngine>>();
 
   private engineSubscribers = new Set<(event: EngineEvent) => void>();
   /** Latest known state of every transfer across all engines, for tray progress. */
@@ -193,15 +198,28 @@ class RealServices implements AppServices {
   private invalidateConnection(connectionId: string): void {
     this.clients.delete(connectionId);
     this.engines.delete(connectionId);
+    this.enginePromises.delete(connectionId);
   }
 
   private async getEngine(connectionId: string): Promise<TransferEngine> {
-    let engine = this.engines.get(connectionId);
-    if (engine) return engine;
+    let enginePromise = this.enginePromises.get(connectionId);
+    if (!enginePromise) {
+      enginePromise = this.buildEngine(connectionId).catch((err) => {
+        // Construction failed — clear the memoized promise so a later call
+        // can retry instead of being stuck replaying the same rejection.
+        this.enginePromises.delete(connectionId);
+        throw err;
+      });
+      this.enginePromises.set(connectionId, enginePromise);
+    }
+    return enginePromise;
+  }
+
+  private async buildEngine(connectionId: string): Promise<TransferEngine> {
     await this.ensureTuningLoaded();
     const { client, conn } = await this.getClient(connectionId);
     const store = await this.getTransferStore();
-    engine = new TransferEngine({
+    const engine = new TransferEngine({
       client,
       bucket: conn.bucket,
       connectionId,

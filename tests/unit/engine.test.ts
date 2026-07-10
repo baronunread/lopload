@@ -481,7 +481,91 @@ describe("TransferEngine — resumePending", () => {
     expect(await store.get("download-1")).toBeNull();
     expect(engine["queue"]).toEqual([]);
   });
+
+  test("calling resumePending twice sequentially never double-queues a resumable upload", async () => {
+    const store = new CountingTransferStore();
+    const now = Date.now();
+    const resumable: Transfer = {
+      id: "resumable-seq-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 100,
+      partSize: 8 * 1024 * 1024,
+      uploadId: "upload-abc",
+      direction: "upload",
+      state: { kind: "sending", percent: 40 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.save(resumable);
+
+    // concurrentFiles: 0 keeps pump() from dequeuing the item so we can
+    // observe the queue contents directly.
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
+    });
+
+    await engine.resumePending();
+    await engine.resumePending();
+
+    const queue = engine["queue"] as string[];
+    expect(queue.filter((id) => id === "resumable-seq-1")).toHaveLength(1);
+    expect(store.listCallCount).toBe(2);
+  });
+
+  test("calling resumePending concurrently (Promise.all) never double-queues a resumable upload", async () => {
+    const store = new CountingTransferStore();
+    const now = Date.now();
+    const resumable: Transfer = {
+      id: "resumable-conc-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 100,
+      partSize: 8 * 1024 * 1024,
+      uploadId: "upload-def",
+      direction: "upload",
+      state: { kind: "sending", percent: 40 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.save(resumable);
+
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      store,
+      tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
+    });
+
+    await Promise.all([engine.resumePending(), engine.resumePending()]);
+
+    const queue = engine["queue"] as string[];
+    expect(queue.filter((id) => id === "resumable-conc-1")).toHaveLength(1);
+    expect(engine["active"].has("resumable-conc-1")).toBe(false);
+  });
 });
+
+/** A MemoryTransferStore that counts list() calls, for asserting a
+ * resumePending call actually re-read the store rather than merely
+ * verifying its guard short-circuits — the guard itself is what's
+ * under test, so the store must be exercised on every call. */
+class CountingTransferStore extends MemoryTransferStore {
+  listCallCount = 0;
+
+  override async list(connectionId: string): Promise<Transfer[]> {
+    this.listCallCount++;
+    return super.list(connectionId);
+  }
+}
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
