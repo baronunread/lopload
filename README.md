@@ -50,6 +50,11 @@ bun run tauri dev
 
 Download from the [releases page](https://github.com/baronunread/lopload/releases).
 
+> [!NOTE]
+> macOS builds are not notarized yet, so Gatekeeper will warn on first launch.
+> Right-click the app → **Open** (once), or clear the quarantine flag:
+> `xattr -dr com.apple.quarantine /Applications/Lopload.app`
+
 ---
 
 ### Features
@@ -92,13 +97,14 @@ Until these are done, everyday CI builds (push/PR) are unaffected — they pass 
 - Credentials live only in the OS keychain. Never in SQLite, config files, or logs.
 - All S3 requests go through Rust via `@tauri-apps/plugin-http`. No CORS, no proxy, no third-party relay.
 - Error messages shown to the user are plain sentences. Raw SDK or XML error text never reaches the UI.
+- Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 - [Documentation](https://docs.lopload.com) *(coming soon)*
 
 ---
 
 ### Contributing
 
-See [`AGENTS.md`](AGENTS.md) for architecture, commands, and conventions.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) to get started, and [`AGENTS.md`](AGENTS.md) for architecture, commands, and conventions.
 
 <p align="center">
   <a href="https://github.com/baronunread/lopload">GitHub</a> •

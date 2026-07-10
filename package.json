@@ -2,6 +2,12 @@
   "name": "lopload",
   "private": true,
   "version": "0.1.0",
+  "description": "A desktop file manager for S3-compatible storage",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/baronunread/lopload.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
