@@ -198,6 +198,13 @@ async function downloadStreamed(
 /** Read-back chunk size for post-download MD5 verification. */
 const VERIFY_CHUNK_SIZE = 4 * 1024 * 1024;
 
+/** Ranged workers coalesce stream chunks (~64 KiB each from the SDK) into a
+ * buffer of roughly this size before issuing a single `writeAt`, so a part
+ * (up to `transfer.partSize`, typically 8 MiB) costs a handful of writes
+ * instead of one per chunk. Kept well under partSize so large parts still
+ * flush incrementally rather than buffering the whole part in memory. */
+const WRITE_BUFFER_WINDOW = 2 * 1024 * 1024;
+
 /**
  * Parallel ranged download with resume. The object is split into
  * `transfer.partSize` ranges numbered 1..N (mirroring upload part numbers); a
@@ -294,16 +301,47 @@ async function downloadRanged(
 
       const streamReader = bodyToWebStream(res.Body).getReader();
       let written = 0;
+
+      // Coalesce small stream chunks into a single buffer and flush with one
+      // writeAt() per window, instead of one writeAt() per (~64 KiB) chunk.
+      // Progress accounting stays per-chunk below so UI granularity/speed
+      // tracking is unaffected by the buffering.
+      let pending: Uint8Array[] = [];
+      let pendingBytes = 0;
+      let pendingOffset = start + written;
+
+      const flush = async (): Promise<void> => {
+        if (pendingBytes === 0) return;
+        const buffer = new Uint8Array(pendingBytes);
+        let pos = 0;
+        for (const chunk of pending) {
+          buffer.set(chunk, pos);
+          pos += chunk.length;
+        }
+        await writer.writeAt(tempPath, pendingOffset, buffer);
+        pending = [];
+        pendingBytes = 0;
+        pendingOffset = start + written;
+      };
+
       while (true) {
         const { value, done } = await streamReader.read();
         if (done) break;
         if (value && value.length > 0) {
-          await writer.writeAt(tempPath, start + written, value);
+          pending.push(value);
+          pendingBytes += value.length;
           written += value.length;
           received += value.length;
           onProgress?.(received, totalSize);
+          if (pendingBytes >= WRITE_BUFFER_WINDOW) {
+            await flush();
+          }
         }
       }
+      // Flush any remainder BEFORE marking the part complete — saveParts
+      // must never record a part whose bytes aren't fully on disk yet, or
+      // resume would skip re-fetching data that was never actually written.
+      await flush();
 
       const part: TransferPart = {
         transferId: transfer.id,
