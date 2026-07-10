@@ -112,6 +112,24 @@ function parseRange(range: string): { start: number; end: number } {
   return { start: Number(m[1]), end: Number(m[2]) };
 }
 
+/** A ReadableStream that dribbles `slice` out in `chunkSize`-byte pieces,
+ * mimicking the ~64 KiB chunking a real HTTP body stream does — used to
+ * exercise writeAt() coalescing in the ranged worker loop. */
+function chunkedStream(slice: Uint8Array, chunkSize: number): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= slice.length) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(offset + chunkSize, slice.length);
+      controller.enqueue(slice.slice(offset, end));
+      offset = end;
+    },
+  });
+}
+
 /** Mocks HEAD + ranged GETs over `data`. Returns the Range headers observed. */
 function mockRangedObject(data: Uint8Array, etagHex: string) {
   const ranges: string[] = [];
@@ -470,5 +488,187 @@ describe("downloadTransfer — ranged parallel path", () => {
 
     expect(s3Mock.commandCalls(HeadObjectCommand)).toHaveLength(0);
     expect(fs.committed.get(transfer.localPath)).toEqual(body);
+  });
+});
+
+describe("downloadRanged — writeAt coalescing", () => {
+  // 64 chunks of 32 KiB — matches the WRITE_BUFFER_WINDOW (2 MiB) so a full
+  // part should collapse into (about) one writeAt() call instead of 64.
+  const CHUNK_SIZE = 32 * 1024;
+  const CHUNKS_PER_PART = 64;
+  const COALESCE_PART_SIZE = CHUNK_SIZE * CHUNKS_PER_PART; // 2 MiB
+
+  function makeCoalesceTransfer(overrides: Partial<Transfer> = {}): Transfer {
+    const now = Date.now();
+    return {
+      id: "transfer-coalesce",
+      connectionId: "conn-1",
+      key: "path/to/big.bin",
+      localPath: "/local/dest/big.bin",
+      size: MULTIPART_THRESHOLD,
+      partSize: COALESCE_PART_SIZE,
+      direction: "download",
+      state: { kind: "sending", percent: 0 },
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+  }
+
+  /** Instruments a ranged fs fake so events (`writeAt:<part>` / `save:<part>`)
+   * are recorded in call order, to assert flush-before-saveParts ordering. */
+  function makeInstrumentedFs() {
+    const fs = makeRangedFs();
+    const events: string[] = [];
+    const originalWriteAt = fs.writer.writeAt.bind(fs.writer);
+    fs.writer.writeAt = async (tempPath, offset, chunk) => {
+      await originalWriteAt(tempPath, offset, chunk);
+      events.push(`writeAt:${offset}:${chunk.length}`);
+    };
+    return { ...fs, events };
+  }
+
+  test("many small chunks per part collapse into ~1 writeAt call per part", async () => {
+    const totalSize = COALESCE_PART_SIZE * 2 + 1024; // 2 full parts + a small tail part
+    const data = makeData(totalSize);
+    const etag = await md5Hex(data);
+
+    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: data.length, ETag: q(etag) });
+    s3Mock.on(GetObjectCommand).callsFake((input: { Range?: string }) => {
+      if (!input.Range) throw new Error("expected a ranged GET");
+      const { start, end } = parseRange(input.Range);
+      const slice = data.slice(start, end + 1);
+      return {
+        Body: chunkedStream(slice, CHUNK_SIZE),
+        ContentLength: slice.length,
+        ETag: q(etag),
+      };
+    });
+
+    const transfer = makeCoalesceTransfer();
+    const fs = makeRangedFs();
+    const store = new MemoryTransferStore();
+
+    await downloadTransfer(transfer, {
+      client,
+      bucket: "b",
+      writer: fs.writer,
+      reader: fs.reader,
+      store,
+      connections: 2,
+    });
+
+    // 3 parts total (2 full 2 MiB parts + one 1 KiB tail part) — each part's
+    // bytes fully fit in one buffered window, so each should flush ~once.
+    expect(fs.writeAtCalls.length).toBeLessThanOrEqual(3);
+    expect(fs.writeAtCalls.length).toBeGreaterThan(0);
+    expect(fs.writeAtCalls.length).toBeLessThan(CHUNKS_PER_PART * 2); // nowhere near per-chunk
+
+    expect(fs.committed.get(transfer.localPath)).toEqual(data);
+    const parts = await store.listParts(transfer.id);
+    expect(parts.map((p) => p.partNumber).sort()).toEqual([1, 2, 3]);
+  });
+
+  test("a part's bytes are flushed to disk before saveParts records it as complete", async () => {
+    const totalSize = COALESCE_PART_SIZE; // single part
+    const data = makeData(totalSize);
+    const etag = await md5Hex(data);
+
+    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: data.length, ETag: q(etag) });
+    s3Mock.on(GetObjectCommand).callsFake((input: { Range?: string }) => {
+      const { start, end } = parseRange(input.Range!);
+      const slice = data.slice(start, end + 1);
+      return {
+        Body: chunkedStream(slice, CHUNK_SIZE),
+        ContentLength: slice.length,
+        ETag: q(etag),
+      };
+    });
+
+    const transfer = makeCoalesceTransfer();
+    const fs = makeInstrumentedFs();
+    const events = fs.events;
+    const store = new MemoryTransferStore();
+    const originalSaveParts = store.saveParts.bind(store);
+    store.saveParts = async (parts) => {
+      await originalSaveParts(parts);
+      for (const p of parts) events.push(`save:${p.partNumber}`);
+    };
+
+    await downloadTransfer(transfer, {
+      client,
+      bucket: "b",
+      writer: fs.writer,
+      reader: fs.reader,
+      store,
+      // Single part → pool size collapses to 1 worker regardless, so this
+      // stays deterministic while still exercising the ranged path (which
+      // requires connections > 1).
+      connections: 2,
+    });
+
+    expect(events.length).toBeGreaterThan(0);
+    // Every save event must be preceded by at least one writeAt for that part —
+    // i.e. bytes hit disk before the part is marked complete for resume.
+    const firstSaveIdx = events.findIndex((e) => e.startsWith("save:"));
+    expect(firstSaveIdx).toBeGreaterThan(-1);
+    const writeAtBeforeSave = events.slice(0, firstSaveIdx).some((e) => e.startsWith("writeAt:"));
+    expect(writeAtBeforeSave).toBe(true);
+    expect(fs.committed.get(transfer.localPath)).toEqual(data);
+  });
+
+  test("error mid-part (before the buffered window flushes) leaves the part unrecorded", async () => {
+    // Only 2 small chunks arrive (well under the 2 MiB window) before the
+    // stream errors — nothing should have flushed, so nothing should save.
+    const totalSize = COALESCE_PART_SIZE;
+    const data = makeData(totalSize);
+    const etag = await md5Hex(data);
+
+    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: data.length, ETag: q(etag) });
+    s3Mock.on(GetObjectCommand).callsFake(() => {
+      let reads = 0;
+      return {
+        Body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            reads++;
+            if (reads === 1) {
+              controller.enqueue(data.slice(0, CHUNK_SIZE));
+              return;
+            }
+            if (reads === 2) {
+              controller.enqueue(data.slice(CHUNK_SIZE, CHUNK_SIZE * 2));
+              return;
+            }
+            controller.error(new Error("connection reset"));
+          },
+        }),
+        ContentLength: data.length,
+        ETag: q(etag),
+      };
+    });
+
+    const transfer = makeCoalesceTransfer();
+    const fs = makeRangedFs();
+    const store = new MemoryTransferStore();
+
+    await expect(
+      downloadTransfer(transfer, {
+        client,
+        bucket: "b",
+        writer: fs.writer,
+        reader: fs.reader,
+        store,
+        connections: 2,
+      }),
+    ).rejects.toThrow("connection reset");
+
+    // The buffered bytes from before the error were never flushed (under the
+    // 2 MiB window), and the part must not be recorded as complete.
+    expect(fs.writeAtCalls).toHaveLength(0);
+    const parts = await store.listParts(transfer.id);
+    expect(parts).toHaveLength(0);
+    expect(fs.committed.size).toBe(0);
+    // Temp file is kept for resume (as with any other mid-download error).
+    expect(fs.discarded).toHaveLength(0);
   });
 });
