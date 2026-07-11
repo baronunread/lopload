@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import { Toasty } from "@cloudflare/kumo";
-import { SetupForm } from "../../../src/ui/SetupForm";
+import { SetupForm, STORAGE_NAME_BRIDGE } from "../../../src/ui/SetupForm";
 import { Onboarding } from "../../../src/ui/Onboarding";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { TransferWidget } from "../../../src/ui/TransferWidget";
@@ -16,7 +16,13 @@ afterEach(cleanup);
 const BANNED = [/bucket/i, /object key/i, /\bprefix\b/i, /etag/i];
 
 function assertNoJargon(container: HTMLElement) {
-  const text = container.textContent ?? "";
+  // The Storage name field's description is the one sanctioned "bucket":
+  // it bridges to the provider console the user copies values from during
+  // setup. Strip exactly that sentence; anything else still fails.
+  const text = (container.textContent ?? "").replaceAll(
+    STORAGE_NAME_BRIDGE,
+    "",
+  );
   for (const pattern of BANNED) {
     expect(text).not.toMatch(pattern);
   }

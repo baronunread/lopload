@@ -45,10 +45,17 @@ const EMPTY_FORM: FormState = {
 /**
  * The storage connection form: fields + the test-then-save morphing submit
  * button (with a shake on failure). Used both inside the first-run
- * onboarding flow and inside AddStorageDialog. Never uses the words
- * bucket/object/key in copy — the field that maps to Connection.bucket is
- * labeled "Storage name".
+ * onboarding flow and inside AddStorageDialog. The field that maps to
+ * Connection.bucket is labeled "Storage name"; its description is the one
+ * place the app says "bucket", bridging to the provider console the user
+ * is copying values from — everywhere else the app avoids S3 jargon.
  */
+
+/** The single sanctioned use of the word "bucket" in the app. The
+ *  jargon-sweep test strips exactly this string before scanning, so any
+ *  other occurrence anywhere still fails. */
+export const STORAGE_NAME_BRIDGE =
+  "Your provider's console calls this the bucket name.";
 export function SetupForm({
   existing,
   onSaved,
@@ -201,7 +208,7 @@ export function SetupForm({
       />
       <Input
         label="Storage name"
-        description="The folder space this connection reads and writes to."
+        description={STORAGE_NAME_BRIDGE}
         value={form.bucket}
         onChange={(e) => update("bucket", e.target.value)}
         required
