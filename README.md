@@ -26,7 +26,7 @@
 [![Screenshot](media/screenshot.png)](https://lopload.com)
 
 > [!TIP]
-> Add credentials for one or more storage connections, then drag files in like any other file manager — Windows, macOS, and Linux. Nothing in the interface ever says "bucket," "object," or "key": these are just folders and files.
+> S3 stands for *Simple* Storage Service — Lopload holds it to that. Add credentials for one or more storage connections, then drag files in like any other file manager — Windows, macOS, and Linux: just folders and files.
 
 ---
 
