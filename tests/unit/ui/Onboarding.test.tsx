@@ -31,7 +31,7 @@ describe("Onboarding", () => {
     await user.type(screen.getByLabelText("Endpoint URL"), "https://s3.example.test");
     await user.type(screen.getByLabelText("Access key"), "AKIA...");
     await user.type(screen.getByLabelText("Secret key"), "secret");
-    await user.type(screen.getByLabelText("Storage name"), "videos-bucket");
+    await user.type(screen.getByLabelText("Bucket name"), "videos-bucket");
     await user.click(screen.getByRole("button", { name: "Test connection" }));
     await user.click(await screen.findByRole("button", { name: "Save connection" }));
 

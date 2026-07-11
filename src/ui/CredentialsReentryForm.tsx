@@ -15,7 +15,7 @@ export interface CredentialsReentryFormProps {
  * signing identity change). Reuses the same Input/SensitiveInput/Button
  * pieces as SetupForm rather than a full duplicate connection form — only
  * the two secret fields need re-entry, everything else about the connection
- * (endpoint, storage name, region) is unchanged.
+ * (endpoint, bucket name, region) is unchanged.
  */
 export function CredentialsReentryForm({ connection, onSaved, onCancel }: CredentialsReentryFormProps) {
   const services = useServices();

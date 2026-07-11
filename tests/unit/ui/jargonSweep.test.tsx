@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import { Toasty } from "@cloudflare/kumo";
-import { SetupForm, STORAGE_NAME_BRIDGE } from "../../../src/ui/SetupForm";
+import { SetupForm } from "../../../src/ui/SetupForm";
 import { Onboarding } from "../../../src/ui/Onboarding";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { TransferWidget } from "../../../src/ui/TransferWidget";
@@ -13,16 +13,13 @@ import type { Connection, RemoteEntry, Transfer, TransferState } from "../../../
 
 afterEach(cleanup);
 
-const BANNED = [/bucket/i, /object key/i, /\bprefix\b/i, /etag/i];
+// "Bucket" is deliberately not banned: it's the provider's own word for the
+// thing, and users copy the value from a console that uses it. What stays
+// banned is raw protocol internals a user never needs.
+const BANNED = [/object key/i, /\bprefix\b/i, /etag/i];
 
 function assertNoJargon(container: HTMLElement) {
-  // The Storage name field's description is the one sanctioned "bucket":
-  // it bridges to the provider console the user copies values from during
-  // setup. Strip exactly that sentence; anything else still fails.
-  const text = (container.textContent ?? "").replaceAll(
-    STORAGE_NAME_BRIDGE,
-    "",
-  );
+  const text = container.textContent ?? "";
   for (const pattern of BANNED) {
     expect(text).not.toMatch(pattern);
   }
@@ -57,7 +54,7 @@ const transfers: Transfer[] = [
 ];
 
 describe("jargon sweep", () => {
-  test("no rendered screen ever says bucket/object key/prefix/ETag", () => {
+  test("no rendered screen ever says object key/prefix/ETag", () => {
     const services = createFakeServices({
       connections: [conn],
       entriesByPrefix: { "conn-1::": entries },
