@@ -1,6 +1,11 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mockClient } from "aws-sdk-client-mock";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 import { TransferEngine } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
@@ -350,12 +355,167 @@ describe("TransferEngine — cancel", () => {
     expect(events.some((e) => e.type === "transfer-updated" && e.transfer.state.kind === "failed")).toBe(
       false,
     );
-    // GetObject itself rejected before any bytes were staged, so there was
-    // nothing on disk for the writer to clean up.
-    expect(discarded).toEqual([]);
+    // Cancelling always asks the writer to clean up, even here where GetObject
+    // rejected before a byte was staged: the engine can't tell how far the
+    // download got, and cancelling deletes the transfer's row (and with it the
+    // part rows resume needs), so anything already on disk is unresumable
+    // litter. discard() is best-effort and no-ops on a file that was never
+    // created.
+    expect(discarded).toEqual(["/local/slow.bin.tmp"]);
 
     const persisted = await store.get(transfer.id);
     expect(persisted).toBeNull();
   });
 
+});
+
+/**
+ * A download's temp file is resume state for as long as the transfer's row
+ * survives: a ranged download deliberately keeps both on failure so a retry
+ * can pick up from the bytes already on disk. The moment the row is deleted,
+ * though, the part rows go with it and nothing can ever resume from that file
+ * again — so every path that deletes the row has to take the temp file too,
+ * or downloads quietly pile up litter next to the user's files.
+ */
+describe("TransferEngine — download temp-file cleanup", () => {
+  const MiB = 1024 * 1024;
+
+  test("cancelling a ranged download removes the temp file it was resuming from", async () => {
+    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: 32 * MiB, ETag: q("etag-not-md5") });
+    let rejectGet!: (err: unknown) => void;
+    const hangingGet = new Promise<never>((_, reject) => {
+      rejectGet = reject;
+    });
+    s3Mock.on(GetObjectCommand).callsFake(() => hangingGet);
+
+    const store = new MemoryTransferStore();
+    const { writer, discarded } = makeWriter();
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      writer,
+      store,
+    });
+
+    // Big enough (and enough connections, per DEFAULT_TUNING) to take the
+    // ranged path — the one that keeps its temp file on abort.
+    const [transfer] = await engine.enqueueDownloads([
+      { key: "big.bin", localPath: "/local/big.bin", size: 32 * MiB },
+    ]);
+
+    // Wait for all four range workers to be parked on their GET, not just for
+    // the transfer to read "sending": the mocked client ignores abort signals,
+    // so a worker that hasn't issued its GET yet would exit on the aborted
+    // signal instead and leave nobody awaiting the hanging promise below.
+    await waitUntil(() => s3Mock.commandCalls(GetObjectCommand).length === 4);
+
+    await engine.cancel(transfer.id);
+    const abortErr = new Error("Request aborted");
+    abortErr.name = "AbortError";
+    rejectGet(abortErr);
+
+    await waitUntil(() => discarded.includes("/local/big.bin.tmp"));
+    expect(await store.get(transfer.id)).toBeNull();
+  });
+
+  test("dismissing a failed download removes the temp file it kept for a retry", async () => {
+    s3Mock.on(GetObjectCommand).rejects(new Error("network went away"));
+
+    const store = new MemoryTransferStore();
+    const { writer, discarded } = makeWriter();
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      writer,
+      store,
+    });
+
+    const [transfer] = await engine.enqueueDownloads([
+      { key: "gone.bin", localPath: "/local/gone.bin", size: 100 },
+    ]);
+    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
+
+    // Failing on its own keeps the transfer around — the user can still retry
+    // it, so its bytes on disk are still worth something.
+    expect(discarded).toEqual([]);
+
+    await engine.dismiss(transfer.id);
+
+    // Dismissing is the user saying they're done with it. The row goes, so the
+    // bytes can never be resumed from and have to go too.
+    expect(discarded).toEqual(["/local/gone.bin.tmp"]);
+    expect(await store.get(transfer.id)).toBeNull();
+  });
+
+  test("a download interrupted by the app quitting doesn't leave its temp file behind", async () => {
+    const store = new MemoryTransferStore();
+    const { writer, discarded } = makeWriter();
+
+    // A row still marked "sending" in the store is what a download that was
+    // running when the app quit looks like on the next launch.
+    await store.save({
+      id: "t-1",
+      connectionId: "conn-1",
+      key: "big.bin",
+      localPath: "/local/big.bin",
+      size: 32 * MiB,
+      partSize: 8 * MiB,
+      direction: "download",
+      state: { kind: "sending", percent: 42 },
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      writer,
+      store,
+    });
+    await engine.resumePending();
+
+    // Downloads aren't picked back up across launches: the row is dropped,
+    // which drops the part rows resume would need — so the half-written file
+    // is dead weight rather than something to resume from.
+    expect(await store.get("t-1")).toBeNull();
+    expect(discarded).toEqual(["/local/big.bin.tmp"]);
+  });
+
+  test("leaves an upload's row alone — only downloads stage into a temp file", async () => {
+    const store = new MemoryTransferStore();
+    const { writer, discarded } = makeWriter();
+    const engine = new TransferEngine({
+      client,
+      bucket: "b",
+      connectionId: "conn-1",
+      reader: makeReader({}),
+      writer,
+      store,
+    });
+
+    await store.save({
+      id: "u-1",
+      connectionId: "conn-1",
+      key: "up.bin",
+      localPath: "/local/up.bin",
+      size: 10,
+      partSize: 8 * MiB,
+      direction: "upload",
+      state: { kind: "failed", errorClass: "connection-dropped" },
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await engine.resumePending();
+    await engine.dismiss("u-1");
+
+    // An upload reads from the user's own file — there's no temp file to
+    // remove, and reaching for one would mean deleting the source.
+    expect(discarded).toEqual([]);
+  });
 });

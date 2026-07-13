@@ -176,16 +176,46 @@ export class TransferEngine {
     this.acknowledged.add(transferId);
   }
 
+  /**
+   * Removes the temp file a download was streaming into.
+   *
+   * A *failed* download keeps its temp file and its part rows on purpose —
+   * together they're the resume state, and a retry picks up from them. But
+   * once the transfer's row is gone from the store the part rows go with it,
+   * so nothing can ever resume from those bytes again and the temp file is
+   * simply litter. Every path that deletes the row has to come through here.
+   */
+  private async discardDownloadTemp(transfer: Transfer): Promise<void> {
+    if (transfer.direction !== "download" || !this.writer) return;
+    try {
+      await this.writer.discard(this.writer.tempPathFor(transfer.localPath));
+    } catch (err) {
+      log.warn("couldn't remove temp file", transfer.localPath, describeThrown(err));
+    }
+  }
+
   async dismiss(transferId: string): Promise<void> {
+    const t = this.transfers.get(transferId);
     this.transfers.delete(transferId);
     this.acknowledged.delete(transferId);
     await this.store.delete(transferId);
+    // A download that finished has already had its temp file renamed into
+    // place, so this only ever catches what a failed one left behind. One
+    // that's still running is left alone: it's still writing to that file,
+    // and cancel() is the path that stops it.
+    if (t && !this.active.has(transferId) && t.state.kind !== "downloaded") {
+      await this.discardDownloadTemp(t);
+    }
   }
 
   async cancel(transferId: string): Promise<void> {
     const t = this.transfers.get(transferId);
     log.info("cancel", t?.key ?? transferId, transferId);
     this.cancelledIds.add(transferId);
+    // A running download is torn down by runTransfer(), which discards the
+    // temp file once its worker pool has actually stopped writing to it.
+    // Discarding here instead would race those in-flight writes.
+    const running = this.active.has(transferId);
     const controller = this.abortControllers.get(transferId);
     controller?.abort();
     this.abortControllers.delete(transferId);
@@ -195,6 +225,7 @@ export class TransferEngine {
     this.active.delete(transferId);
     this.transfers.delete(transferId);
     await this.store.delete(transferId);
+    if (!running && t) await this.discardDownloadTemp(t);
   }
 
   private resumePendingPromise: Promise<void> | null = null;
@@ -253,6 +284,11 @@ export class TransferEngine {
           this.emit({ type: "transfer-updated", transfer: { ...transfer } });
           continue;
         }
+        // Dropping the row drops its part rows too, so a download interrupted
+        // by the app quitting can never resume from whatever it had already
+        // streamed to disk. Take the temp file with it instead of leaving one
+        // behind after every quit mid-download.
+        await this.discardDownloadTemp(transfer);
         await this.store.delete(transfer.id);
         continue;
       }
@@ -370,9 +406,17 @@ export class TransferEngine {
           };
           this.speedTrackers.set(id, tracker);
         }
-        tracker.samples.push({ bytes: sent, time: now });
-        while (tracker.samples.length > 2 && now - tracker.samples[1].time > 5000) {
-          tracker.samples.shift();
+        // onProgress fires once per stream chunk (~64 KiB), which on a fast
+        // transfer is thousands of times a second — a sample each would mean
+        // thousands of live entries and an O(n) shift() per chunk to prune
+        // them. The speed readout only needs a coarse trail, so sample at
+        // ~4 Hz: the window below then holds ~20 entries instead of ~5000.
+        const newest = tracker.samples[tracker.samples.length - 1];
+        if (!newest || now - newest.time >= 250) {
+          tracker.samples.push({ bytes: sent, time: now });
+          while (tracker.samples.length > 2 && now - tracker.samples[1].time > 5000) {
+            tracker.samples.shift();
+          }
         }
         if (now - tracker.lastDisplayTime >= 750) {
           const first = tracker.samples[0];
@@ -423,6 +467,10 @@ export class TransferEngine {
       else this.batchUploaded += 1;
     } catch (err) {
       if (this.cancelledIds.has(id)) {
+        // Safe to clean up now and not before: downloadTransfer only throws
+        // after awaiting every one of its workers, so nothing is still
+        // writing to the temp file by the time we get here.
+        await this.discardDownloadTemp(transfer);
         return;
       }
       const errorClass: ErrorClass =

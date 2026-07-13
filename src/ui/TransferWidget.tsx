@@ -214,11 +214,15 @@ export function TransferWidget({
     for (const m of visibleMoves) dismissMove(m.moveId);
   }
 
-  // Failed count feeds the dock/taskbar badge, per spec.
+  // Failed count feeds the dock/taskbar badge, per spec. Keyed on the count
+  // itself rather than the arrays it comes from: those are rebuilt on every
+  // render, and this effect crosses into Rust — during a download it would
+  // fire an IPC call on every progress tick to report a number that hasn't
+  // changed.
+  const badgeCount = failed.length + failedMoves.length;
   useEffect(() => {
-    services.setBadgeCount(failed.length + failedMoves.length);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transfers, dismissed, visibleMoves, services]);
+    services.setBadgeCount(badgeCount);
+  }, [badgeCount, services]);
 
   const shouldShow = visibleTransfers.length > 0 || visibleMoves.length > 0;
   const total = visibleTransfers.length + visibleMoves.length;

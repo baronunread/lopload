@@ -123,6 +123,16 @@ export async function downloadTransfer(
   return downloadStreamed(transfer, deps);
 }
 
+/**
+ * Both download paths coalesce the stream's chunks (~64 KiB each from the SDK)
+ * into a buffer of roughly this size before handing them to the writer. Every
+ * write crosses the IPC boundary into Rust, so writing chunks 1:1 costs ~32×
+ * the round-trips for no benefit. Kept well under a typical `transfer.partSize`
+ * (8 MiB) so large parts still flush incrementally rather than buffering whole
+ * in memory.
+ */
+const WRITE_BUFFER_WINDOW = 2 * 1024 * 1024;
+
 /** Single streamed GetObject — small files, or a single allowed connection.
  * Restarts from byte zero on failure. */
 async function downloadStreamed(
@@ -151,18 +161,37 @@ async function downloadStreamed(
   let received = 0;
   let wroteAnything = false;
 
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+
+  const flush = async (): Promise<void> => {
+    if (pendingBytes === 0) return;
+    const buffer = new Uint8Array(pendingBytes);
+    let pos = 0;
+    for (const chunk of pending) {
+      buffer.set(chunk, pos);
+      pos += chunk.length;
+    }
+    await writer.writeChunk(tempPath, buffer, !wroteAnything);
+    wroteAnything = true;
+    pending = [];
+    pendingBytes = 0;
+  };
+
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       if (value && value.length > 0) {
-        await writer.writeChunk(tempPath, value, !wroteAnything);
-        wroteAnything = true;
+        pending.push(value);
+        pendingBytes += value.length;
         hasher?.update(value);
         received += value.length;
         onProgress?.(received, expectedSize || received);
+        if (pendingBytes >= WRITE_BUFFER_WINDOW) await flush();
       }
     }
+    await flush();
     if (!wroteAnything) {
       // Zero-byte file — still materialize an (empty) temp file so commit()
       // has something to rename into place.
@@ -197,13 +226,6 @@ async function downloadStreamed(
 
 /** Read-back chunk size for post-download MD5 verification. */
 const VERIFY_CHUNK_SIZE = 4 * 1024 * 1024;
-
-/** Ranged workers coalesce stream chunks (~64 KiB each from the SDK) into a
- * buffer of roughly this size before issuing a single `writeAt`, so a part
- * (up to `transfer.partSize`, typically 8 MiB) costs a handful of writes
- * instead of one per chunk. Kept well under partSize so large parts still
- * flush incrementally rather than buffering the whole part in memory. */
-const WRITE_BUFFER_WINDOW = 2 * 1024 * 1024;
 
 /**
  * Parallel ranged download with resume. The object is split into

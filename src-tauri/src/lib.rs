@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod fastfs;
 mod keychain;
 mod tray;
 
@@ -25,6 +26,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            fastfs::write_at,
             keychain::keychain_set,
             keychain::keychain_get,
             keychain::keychain_delete,
