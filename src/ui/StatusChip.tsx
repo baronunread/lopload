@@ -21,7 +21,7 @@ export function StatusChip({ state, direction }: StatusChipProps) {
 
   if (sending) {
     return (
-      <div data-state="sending" className="flex min-w-40 items-center">
+      <div data-state="sending" className="flex w-36 items-center">
         <Meter
           label={direction === "download" ? "Downloading" : "Uploading"}
           value={state.percent}

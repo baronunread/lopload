@@ -290,7 +290,7 @@ export function TransferWidget({
       animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
       transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
       onContextMenu={(e) => e.preventDefault()}
-      className="fixed bottom-8 right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line sm:w-96"
+      className="fixed bottom-8 right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line sm:w-[26rem]"
     >
       <div className="flex items-center justify-between gap-2 border-b border-kumo-line bg-kumo-elevated px-4 py-0 text-kumo-strong">
         <button
@@ -331,13 +331,13 @@ export function TransferWidget({
               key={move.moveId}
               className="lopload-settle flex items-center justify-between gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
             >
-              <div className="flex min-w-0 items-center gap-2 lopload-body">
+              <div className="flex min-w-0 flex-1 items-center gap-2 lopload-body">
                 <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
                 <div className="min-w-0">
                   <p className="truncate font-medium">
                     {baseName(move.toKey)}
                   </p>
-                  <p className="text-xs text-kumo-subtle tabular-nums">
+                  <p className="truncate text-xs text-kumo-subtle tabular-nums">
                     {move.status === "moving"
                       ? move.totalItems > 0
                         ? moveDetail(move)
@@ -350,14 +350,16 @@ export function TransferWidget({
               </div>
               <div className="flex flex-shrink-0 items-center gap-2">
                 {move.status === "moving" && move.totalItems > 0 && (
-                  <Meter
-                    label={`Moving ${movePercent(move)}%`}
-                    value={movePercent(move)}
-                    showValue
-                    className="min-w-40"
-                    trackClassName="!h-1"
-                    indicatorClassName="bg-kumo-warning"
-                  />
+                  <div className="flex w-36 items-center">
+                    <Meter
+                      label="Moving"
+                      value={movePercent(move)}
+                      showValue
+                      className="w-full"
+                      trackClassName="!h-1"
+                      indicatorClassName="bg-kumo-warning"
+                    />
+                  </div>
                 )}
                 {move.status === "completed" && (
                   <Badge variant="success">Moved ✓</Badge>
@@ -404,13 +406,13 @@ export function TransferWidget({
                 className="lopload-settle flex flex-col gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2 lopload-body">
+                  <div className="flex min-w-0 flex-1 items-center gap-2 lopload-body">
                     {isFolder && (
                       <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
                     )}
                     <div className="min-w-0">
                       <p className="truncate font-medium">{name}</p>
-                      <p className="text-xs text-kumo-subtle tabular-nums">{subtitle}</p>
+                      <p className="truncate text-xs text-kumo-subtle tabular-nums">{subtitle}</p>
                     </div>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">

@@ -87,7 +87,7 @@ describe("move progress in the transfer widget", () => {
     await waitFor(() => expect(screen.getByText(/13 items/)).toBeInTheDocument());
     expect(screen.getByText(/7 GB of 13 GB · 13 items/)).toBeInTheDocument();
     expect(screen.queryByText(/1 of 13 items/)).not.toBeInTheDocument();
-    expect(screen.getByText("Moving 53%")).toBeInTheDocument();
+    expect(screen.getByText("53%")).toBeInTheDocument();
   });
 
   test("falls back to an item count for a folder with no bytes in it", async () => {
@@ -97,7 +97,7 @@ describe("move progress in the transfer widget", () => {
     await emitMove(services, makeMove({ totalBytes: 0, copiedBytes: 0, copiedItems: 2, totalItems: 4 }));
 
     await screen.findByText("2 of 4 items");
-    expect(screen.getByText("Moving 50%")).toBeInTheDocument();
+    expect(screen.getByText("50%")).toBeInTheDocument();
   });
 
   test("holds short of 100% until the move actually reports completion", async () => {
@@ -108,6 +108,6 @@ describe("move progress in the transfer widget", () => {
     // bar on a row that's still working would be a lie.
     await emitMove(services, makeMove({ copiedBytes: 13 * GB, copiedItems: 13 }));
 
-    await screen.findByText("Moving 99%");
+    await screen.findByText("99%");
   });
 });
