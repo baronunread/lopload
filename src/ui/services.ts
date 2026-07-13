@@ -84,13 +84,50 @@ export interface FolderInfo {
   lastModified: number | null;
 }
 
+/**
+ * How far along a move's copy phase is. Weighted both ways on purpose: bytes
+ * drive the percentage, because a folder of a few huge files would otherwise
+ * sit at 0% and jump to 100% as each object lands; items drive the
+ * "N of M items" label, because bytes read as nothing on a folder of empty
+ * folder markers.
+ */
+export interface CopyProgress {
+  copiedBytes: number;
+  totalBytes: number;
+  copiedItems: number;
+  totalItems: number;
+}
+
+/** Progress of an in-flight S3 move (rename or drag-to-move). Emitted by
+ * BrowserService.subscribeMoves and used by TransferWidget to show status. */
+export interface MoveProgress extends CopyProgress {
+  moveId: string;
+  connectionId: string;
+  fromKey: string;
+  toKey: string;
+  status: "moving" | "completed" | "failed";
+  errorMessage?: string;
+}
+
 export interface BrowserService {
   list(connectionId: string, prefix: string): Promise<RemoteEntry[]>;
   createFolder(connectionId: string, prefix: string, name: string): Promise<void>;
-  rename(connectionId: string, key: string, newName: string): Promise<void>;
+  rename(
+    connectionId: string,
+    key: string,
+    newName: string,
+    onProgress?: (progress: CopyProgress) => void,
+  ): Promise<void>;
   /** Moves a file or folder to a new full path — used for drag-and-drop moves
-   * (renaming within the same parent goes through rename() above). */
-  move(connectionId: string, key: string, toKey: string): Promise<void>;
+   * (renaming within the same parent goes through rename() above).
+   * `onProgress`, if given, is called as each object — or each part of a large
+   * object — finishes copying, not just at the end. */
+  move(
+    connectionId: string,
+    key: string,
+    toKey: string,
+    onProgress?: (progress: CopyProgress) => void,
+  ): Promise<void>;
   /** Moves a file or folder into the Trash rather than deleting it outright —
    * see TrashService for restoring it or removing it for good. */
   delete(connectionId: string, key: string): Promise<void>;
@@ -105,6 +142,8 @@ export interface BrowserService {
   /** Every file (not folder markers) under a folder prefix, with size — used
    * to enqueue a recursive folder download. */
   listFilesRecursive(connectionId: string, prefix: string): Promise<{ key: string; size: number }[]>;
+  /** Subscribe to move progress events. Returns an unsubscribe function. */
+  subscribeMoves(cb: (event: MoveProgress) => void): () => void;
 }
 
 /** One row in the Trash view: a file, or a whole folder trashed as a single

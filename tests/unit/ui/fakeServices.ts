@@ -12,6 +12,7 @@ import type {
   ConnectionDraft,
   DownloadTarget,
   FolderInfo,
+  MoveProgress,
   PickedFile,
   TrashItem,
 } from "../../../src/ui/services";
@@ -34,6 +35,8 @@ export interface FakeServicesOptions {
 
 export interface FakeServices extends AppServices {
   emit(event: EngineEvent): void;
+  /** Push a move-progress event to whatever's subscribed via subscribeMoves. */
+  emitMove(event: MoveProgress): void;
   dismissCalls: string[];
   cancelCalls: string[];
   enqueueDownloadsCalls: Array<{ connectionId: string; targets: DownloadTarget[] }>;
@@ -71,6 +74,7 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const savedConnections: Connection[] = [];
   const testConnectionCalls: ConnectionDraft[] = [];
   const moveCalls: Array<{ connectionId: string; key: string; toKey: string }> = [];
+  const moveSubscribers = new Set<(event: MoveProgress) => void>();
   const deleteCalls: string[] = [];
   const folderInfoCalls: Array<{ connectionId: string; key: string }> = [];
   const restoreCalls: TrashItem[] = [];
@@ -131,6 +135,10 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
       },
       async listFilesRecursive(connectionId, prefix) {
         return options.filesRecursiveByPrefix?.[`${connectionId}::${prefix}`] ?? [];
+      },
+      subscribeMoves(cb: (event: MoveProgress) => void): () => void {
+        moveSubscribers.add(cb);
+        return () => moveSubscribers.delete(cb);
       },
     },
     trash: {
@@ -234,6 +242,9 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     },
     emit(event) {
       for (const cb of listeners) cb(event);
+    },
+    emitMove(event) {
+      for (const cb of moveSubscribers) cb(event);
     },
     triggerFileDropError(message) {
       fileDropErrorHandler?.(message);

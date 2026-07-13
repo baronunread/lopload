@@ -10,6 +10,7 @@ import { ManageConnectionsDialog } from "./ManageConnectionsDialog";
 import { GearIcon } from "@phosphor-icons/react";
 import { SettingsDialog } from "./SettingsDialog";
 import { ThemeToggle } from "./ThemeToggle";
+import { MoveProgressProvider } from "./browser/MoveProgressContext";
 
 const Onboarding = lazy(() => import("./Onboarding").then((m) => ({ default: m.Onboarding })));
 const RemoteBrowser = lazy(() => import("./RemoteBrowser").then((m) => ({ default: m.RemoteBrowser })));
@@ -146,15 +147,17 @@ function AppShellInner() {
           onDeleted={handleDeleted}
         />
       )}
-      <main className="relative flex-1 overflow-auto p-4">
-        <section className="h-full min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line">
-          <Suspense fallback={<div className="flex h-full items-center justify-center"><p className="text-kumo-subtle">Loading…</p></div>}>
-            <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
-          </Suspense>
-        </section>
-      </main>
+      <MoveProgressProvider>
+        <main className="relative flex-1 overflow-auto p-4">
+          <section className="h-full min-h-[40vh] overflow-auto rounded-lg bg-kumo-base p-4 ring-1 ring-kumo-line">
+            <Suspense fallback={<div className="flex h-full items-center justify-center"><p className="text-kumo-subtle">Loading…</p></div>}>
+              <RemoteBrowser connectionId={current.id} prefix={prefix} onNavigate={setPrefix} />
+            </Suspense>
+          </section>
+        </main>
 
-      <TransferWidget connectionId={current.id} />
+        <TransferWidget connectionId={current.id} />
+      </MoveProgressProvider>
     </div>
   );
 }

@@ -370,7 +370,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   /** Moves every dragged key to live under `toPrefix` — a single row, or the
    * whole selection when dragging one of several selected rows. Rows that
    * resolve to a no-op (missing entry, or already at `toPrefix`) are left
-   * alone. */
+   * alone. Runs in the background — progress is shown in TransferWidget via
+   * BrowserService.subscribeMoves. */
   async function handleMove(fromKeys: string[], toPrefix: string) {
     const moves = fromKeys
       .map((fromKey) => {
@@ -387,16 +388,25 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       (prev) => [...prev, ...removed.filter((r) => !prev.some((e) => e.key === r.key))],
     );
 
-    try {
-      await Promise.all(moves.map((m) => services.browser.move(connectionId, m.fromKey, m.toKey)));
-      await refreshSilently();
-    } catch (err) {
-      rollback();
-      toasts.add({
-        variant: "error",
-        title: "Couldn't move",
-        description: err instanceof Error ? err.message : "Something went wrong.",
-      });
+    let completed = 0;
+    const total = moves.length;
+    for (const m of moves) {
+      services.browser
+        .move(connectionId, m.fromKey, m.toKey)
+        .then(() => {
+          completed++;
+          if (completed === total) void refreshSilently();
+        })
+        .catch((err) => {
+          completed++;
+          rollback();
+          toasts.add({
+            variant: "error",
+            title: "Couldn't move",
+            description: err instanceof Error ? err.message : "Something went wrong.",
+          });
+          if (completed === total) void refreshSilently();
+        });
     }
   }
 

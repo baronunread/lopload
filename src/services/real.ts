@@ -79,8 +79,10 @@ import { CredentialsUnreadableError } from "../ui/services";
 import type {
   AppServices,
   ConnectionDraft,
+  CopyProgress,
   DownloadTarget,
   FolderInfo,
+  MoveProgress,
   PickedFile,
   TestConnectionResult,
   TrashItem,
@@ -135,6 +137,9 @@ class RealServices implements AppServices {
   private engineSubscribers = new Set<(event: EngineEvent) => void>();
   /** Latest known state of every transfer across all engines, for tray progress. */
   private transferSnapshots = new Map<string, Transfer>();
+
+  private moveSubscribers = new Set<(event: MoveProgress) => void>();
+  private activeMoves = new Map<string, MoveProgress>();
 
   private trashSweepStarted = false;
   private trayUploadListening = false;
@@ -371,22 +376,83 @@ class RealServices implements AppServices {
       const { client, conn } = await this.getClient(connectionId);
       await s3CreateFolder(client, conn.bucket, `${prefix}${name}`);
     },
-    rename: async (connectionId: string, key: string, newName: string): Promise<void> => {
+    rename: async (
+      connectionId: string,
+      key: string,
+      newName: string,
+      onProgress?: (progress: CopyProgress) => void,
+    ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       const toKey = renameKey(key, newName);
       if (isFolderKey(key)) {
-        await s3RenameFolder(client, conn.bucket, key, toKey);
+        await s3RenameFolder(client, conn.bucket, key, toKey, onProgress);
       } else {
-        await s3RenameFile(client, conn.bucket, key, toKey);
+        await s3RenameFile(client, conn.bucket, key, toKey, onProgress);
       }
     },
-    move: async (connectionId: string, key: string, toKey: string): Promise<void> => {
+    move: async (
+      connectionId: string,
+      key: string,
+      toKey: string,
+      onProgress?: (progress: CopyProgress) => void,
+    ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
-      if (isFolderKey(key)) {
-        await s3RenameFolder(client, conn.bucket, key, toKey);
-      } else {
-        await s3RenameFile(client, conn.bucket, key, toKey);
+      const moveId = crypto.randomUUID();
+      const emit = (partial: Partial<MoveProgress>) => {
+        const current = this.activeMoves.get(moveId);
+        if (!current) return;
+        const next: MoveProgress = { ...current, ...partial };
+        this.activeMoves.set(moveId, next);
+        for (const fn of this.moveSubscribers) fn(next);
+      };
+
+      // Totals start at zero and are filled in by the first progress event,
+      // once the copy has listed what's actually under the prefix.
+      const initial: MoveProgress = {
+        moveId,
+        connectionId,
+        fromKey: key,
+        toKey,
+        copiedBytes: 0,
+        totalBytes: 0,
+        copiedItems: 0,
+        totalItems: isFolderKey(key) ? 0 : 1,
+        status: "moving",
+      };
+      this.activeMoves.set(moveId, initial);
+      for (const fn of this.moveSubscribers) fn(initial);
+
+      const progress = (p: CopyProgress) => {
+        emit(p);
+        onProgress?.(p);
+      };
+
+      // A settled move is the subscriber's to remember, not ours: the map
+      // tracks what's in flight, so the terminal event goes out and then the
+      // entry goes away rather than accumulating for the life of the process.
+      try {
+        if (isFolderKey(key)) {
+          await s3RenameFolder(client, conn.bucket, key, toKey, progress);
+        } else {
+          await s3RenameFile(client, conn.bucket, key, toKey, progress);
+        }
+        const final = this.activeMoves.get(moveId);
+        emit({
+          status: "completed",
+          copiedItems: final?.totalItems ?? 1,
+          copiedBytes: final?.totalBytes ?? 0,
+        });
+        this.activeMoves.delete(moveId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Something went wrong.";
+        emit({ status: "failed", errorMessage: msg });
+        this.activeMoves.delete(moveId);
+        throw err;
       }
+    },
+    subscribeMoves: (cb: (event: MoveProgress) => void): (() => void) => {
+      this.moveSubscribers.add(cb);
+      return () => this.moveSubscribers.delete(cb);
     },
     delete: async (connectionId: string, key: string): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);

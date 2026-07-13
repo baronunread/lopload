@@ -33,6 +33,7 @@ beforeEach(() => {
 
 describe("moveFileToTrash", () => {
   test("copies to the trash location, then deletes the original", async () => {
+    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: 1024 });
     s3Mock.on(CopyObjectCommand).resolves({});
     s3Mock.on(DeleteObjectCommand).resolves({});
 
@@ -107,7 +108,12 @@ describe("restoreFileFromTrash", () => {
   });
 
   test("copies back to the original path and deletes the trashed copy when nothing's in the way", async () => {
-    s3Mock.on(HeadObjectCommand).rejects({ name: "NotFound" });
+    // Nothing at the destination (so the restore proceeds), but the trashed
+    // source is there — the copy heads it to size the transfer.
+    s3Mock.on(HeadObjectCommand, { Key: "notes.txt" }).rejects({ name: "NotFound" });
+    s3Mock
+      .on(HeadObjectCommand, { Key: trashKey(1000, "notes.txt") })
+      .resolves({ ContentLength: 1024 });
     s3Mock.on(CopyObjectCommand).resolves({});
     s3Mock.on(DeleteObjectCommand).resolves({});
 

@@ -30,8 +30,6 @@ export function MoveToDialog({
   const services = useServices();
   const [prefix, setPrefix] = useState(currentPrefix);
   const [folders, setFolders] = useState<RemoteEntry[] | null>(null);
-  const [moving, setMoving] = useState(false);
-
   useEffect(() => {
     let cancelled = false;
     setFolders(null);
@@ -48,14 +46,9 @@ export function MoveToDialog({
   const segments = segmentsForPrefix(prefix);
   const sourceSet = new Set(sourceKeys);
 
-  async function confirm() {
-    setMoving(true);
-    try {
-      await onMove(sourceKeys, prefix);
-      onClose();
-    } finally {
-      setMoving(false);
-    }
+  function confirm() {
+    onMove(sourceKeys, prefix);
+    onClose();
   }
 
   return (
@@ -143,9 +136,8 @@ export function MoveToDialog({
         <div className="mt-4 flex items-center justify-end gap-2">
           <Button
             variant="primary"
-            loading={moving}
             disabled={prefix === currentPrefix}
-            onClick={() => void confirm()}
+            onClick={() => confirm()}
           >
             Move here
           </Button>

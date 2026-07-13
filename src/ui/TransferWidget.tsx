@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
+import { Badge, Meter } from "@cloudflare/kumo";
 import { motion } from "motion/react";
-import { CaretDownIcon, FolderIcon, FolderOpenIcon, StopCircleIcon, XIcon } from "@phosphor-icons/react";
+import {
+  CaretDownIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  StopCircleIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import type { EngineEvent, Transfer, TransferState } from "../lib/types";
+import type { MoveProgress } from "./services";
 import { useServices } from "./services";
 import { StatusChip } from "./StatusChip";
 import { formatBytes, formatSpeed } from "./format";
+import { useMoveProgress } from "./browser/MoveProgressContext";
 
 /** One widget row: either a single file, or every file from the same
  * dropped/picked folder (`folderId`) collapsed into one aggregated row. */
@@ -61,6 +70,47 @@ function rowState(transfers: Transfer[]): TransferState {
   return transfers[0]?.direction === "download" ? { kind: "downloaded" } : { kind: "uploaded" };
 }
 
+function baseName(key: string): string {
+  const trimmed = key.endsWith("/") ? key.slice(0, -1) : key;
+  const idx = trimmed.lastIndexOf("/");
+  return idx === -1 ? trimmed : trimmed.slice(idx + 1);
+}
+
+/** Percentage for a move, off bytes where we have them (an item count reads as
+ * 0% for minutes on a folder of huge files) and off items otherwise, for a
+ * folder that's all empty markers. Held below 100 until the move actually
+ * reports completion — copying is followed by a delete pass, so a full bar
+ * next to a still-spinning row would be a lie. */
+function movePercent(move: MoveProgress): number {
+  if (move.status === "completed") return 100;
+  const fraction =
+    move.totalBytes > 0
+      ? move.copiedBytes / move.totalBytes
+      : move.totalItems > 0
+        ? move.copiedItems / move.totalItems
+        : 0;
+  return Math.min(99, Math.floor(fraction * 100));
+}
+
+/**
+ * "4.2 GB of 18.1 GB · 13 items", falling back to "3 of 13 items" for a folder
+ * with no bytes to speak of.
+ *
+ * Deliberately not a running "N of 13 items" count next to the bytes: objects
+ * are copied several at a time, so a dozen of them can each be most of the way
+ * across with none of them *finished* — a bar reading 57% beside "1 of 13
+ * items" looks broken even though both numbers are true. Bytes are the honest
+ * measure of how far along a move is, so bytes lead and the item count is
+ * reported as what it reliably is, a total.
+ */
+function moveDetail(move: MoveProgress): string {
+  if (move.totalBytes === 0) {
+    return `${move.copiedItems} of ${move.totalItems} item${move.totalItems === 1 ? "" : "s"}`;
+  }
+  const items = `${move.totalItems} item${move.totalItems === 1 ? "" : "s"}`;
+  return `${formatBytes(move.copiedBytes)} of ${formatBytes(move.totalBytes)} · ${items}`;
+}
+
 export interface TransferWidgetProps {
   connectionId: string;
   /** Called with a plain-language batch summary once a batch completes. */
@@ -84,22 +134,16 @@ const EXIT_ANIMATION_MS = 200;
  * transfers are sticky — they stay rendered (and count toward the badge)
  * until the user explicitly dismisses them or closes the whole widget.
  *
- * Closing the widget while transfers are still in flight doesn't cancel
- * them — it just hides the widget; each row has its own stop button for
- * that. If further events arrive afterwards for still-running transfers,
- * the widget reappears with those, which mirrors Drive's own behavior of
- * staying visible during activity.
- *
- * Only ever shows transfers that became active while this widget was
- * mounted for the given connection — historical, already-uploaded entries
- * from `listTransfers` are filtered out on load so switching (or falling
- * back to another) connection never resurrects a stale "done" widget.
+ * Also shows in-flight folder move progress (drag-to-move / "Move to…")
+ * from BrowserService.subscribeMoves, so the user sees non-blocking
+ * progress instead of a blocking dialog.
  */
 export function TransferWidget({
   connectionId,
   onBatchFinished,
 }: TransferWidgetProps) {
   const services = useServices();
+  const { moves: allMoves, dismissMove } = useMoveProgress();
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState(false);
@@ -149,55 +193,81 @@ export function TransferWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 
-  const visible = transfers.filter((t) => !dismissed.has(t.id));
-  const inFlight = visible.filter((t) => IN_FLIGHT_KINDS.has(t.state.kind));
-  const failed = visible.filter((t) => t.state.kind === "failed");
-  const completedTransfers = visible.filter(
+  const visibleMoves = allMoves.filter((m) => m.connectionId === connectionId);
+  const visibleTransfers = transfers.filter((t) => !dismissed.has(t.id));
+  const inFlight = visibleTransfers.filter((t) => IN_FLIGHT_KINDS.has(t.state.kind));
+  const failed = visibleTransfers.filter((t) => t.state.kind === "failed");
+  const completedTransfers = visibleTransfers.filter(
     (t) => t.state.kind === "uploaded" || t.state.kind === "downloaded",
   );
+
+  const movingMoves = visibleMoves.filter((m) => m.status === "moving");
+  const failedMoves = visibleMoves.filter((m) => m.status === "failed");
 
   function clearAll() {
     setDismissed((prev) => {
       const next = new Set(prev);
-      for (const t of visible) next.add(t.id);
+      for (const t of visibleTransfers) next.add(t.id);
       return next;
     });
-    for (const t of visible) void services.engine.dismiss(t.id);
+    for (const t of visibleTransfers) void services.engine.dismiss(t.id);
+    for (const m of visibleMoves) dismissMove(m.moveId);
   }
 
   // Failed count feeds the dock/taskbar badge, per spec.
   useEffect(() => {
-    services.setBadgeCount(failed.length);
+    services.setBadgeCount(failed.length + failedMoves.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transfers, dismissed, services]);
+  }, [transfers, dismissed, visibleMoves, services]);
 
-  const shouldShow = visible.length > 0;
-  const total = visible.length;
-  const completed = completedTransfers.length;
+  const shouldShow = visibleTransfers.length > 0 || visibleMoves.length > 0;
+  const total = visibleTransfers.length + visibleMoves.length;
+  const completed = completedTransfers.length + visibleMoves.filter((m) => m.status === "completed").length;
 
-  // Both directions in the same batch keep the neutral "transfer" wording;
-  // an all-upload or all-download batch gets the more specific verb.
-  const hasUpload = visible.some((t) => t.direction === "upload");
-  const hasDownload = visible.some((t) => t.direction === "download");
+  const hasUpload = visibleTransfers.some((t) => t.direction === "upload");
+  const hasDownload = visibleTransfers.some((t) => t.direction === "download");
+  const completedMoves = visibleMoves.filter((m) => m.status === "completed");
+
+  // Both directions in the same batch keep the neutral "transfer" wording; an
+  // all-upload or all-download batch gets the more specific verb.
   const verb = hasUpload && hasDownload ? "transfer" : hasDownload ? "download" : "upload";
-  const verbIng = verb === "transfer" ? "Transferring" : verb === "download" ? "Downloading" : "Uploading";
+  const verbIng =
+    verb === "transfer" ? "Transferring" : verb === "download" ? "Downloading" : "Uploading";
 
-  // Drive-style dynamic title: "Uploading…" (or "Downloading…"/
-  // "Transferring…") while anything's still in flight, then a completion
-  // summary once the batch settles. Never auto-dismisses — the widget stays
-  // up until the user closes it.
-  const title =
-    inFlight.length > 0
-      ? `${verbIng} ${total} item${total === 1 ? "" : "s"}…`
-      : failed.length > 0
-        ? `${completed} of ${total} ${verb}s complete`
-        : `${completed} ${verb}${completed === 1 ? "" : "s"} complete`;
+  // Drive-style dynamic title: says what's still happening while anything's in
+  // flight, then summarizes once the batch settles. A title counts only what's
+  // actually still running — rows that already finished stay listed below, but
+  // "Moving 3 items…" next to two "Moved ✓" rows would just be wrong.
+  const title = (() => {
+    if (movingMoves.length > 0 && inFlight.length > 0) {
+      const n = movingMoves.length + inFlight.length;
+      return `Transferring ${n} item${n === 1 ? "" : "s"}…`;
+    }
+    if (movingMoves.length > 0) {
+      const n = movingMoves.length;
+      return `Moving ${n} item${n === 1 ? "" : "s"}…`;
+    }
+    if (inFlight.length > 0) {
+      const n = visibleTransfers.length;
+      return `${verbIng} ${n} item${n === 1 ? "" : "s"}…`;
+    }
+    // Nothing left in flight — summarize what landed.
+    if (visibleTransfers.length === 0) {
+      const n = completedMoves.length;
+      return failedMoves.length > 0
+        ? `${n} of ${visibleMoves.length} moves complete`
+        : `${n} item${n === 1 ? "" : "s"} moved`;
+    }
+    if (visibleMoves.length === 0) {
+      return failed.length > 0
+        ? `${completedTransfers.length} of ${visibleTransfers.length} ${verb}s complete`
+        : `${completedTransfers.length} ${verb}${completedTransfers.length === 1 ? "" : "s"} complete`;
+    }
+    return failed.length > 0 || failedMoves.length > 0
+      ? `${completed} of ${total} complete`
+      : `${completed} complete`;
+  })();
 
-  // Keep the widget mounted for a beat after shouldShow flips to false so
-  // the fade/slide-out has time to play, then drop it from the tree
-  // ourselves. Timed locally rather than via the animation library's own
-  // exit-complete lifecycle, which onBatchFinished/auto-dismiss shouldn't
-  // depend on to actually hide the widget.
   const [mounted, setMounted] = useState(shouldShow);
   useEffect(() => {
     if (shouldShow) {
@@ -252,7 +322,60 @@ export function TransferWidget({
 
       {!collapsed && (
         <ul className="flex flex-col gap-2 overflow-y-auto p-2">
-          {groupTransfers(visible).map((row) => {
+          {visibleMoves.map((move) => (
+            <li
+              key={move.moveId}
+              className="lopload-settle flex items-center justify-between gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
+            >
+              <div className="flex min-w-0 items-center gap-2 lopload-body">
+                <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    {baseName(move.toKey)}
+                  </p>
+                  <p className="text-xs text-kumo-subtle tabular-nums">
+                    {move.status === "moving"
+                      ? move.totalItems > 0
+                        ? moveDetail(move)
+                        : "Preparing…"
+                      : move.status === "completed"
+                        ? `${move.totalItems} item${move.totalItems === 1 ? "" : "s"} moved`
+                        : move.errorMessage ?? "Couldn't move"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-2">
+                {move.status === "moving" && move.totalItems > 0 && (
+                  <Meter
+                    label={`Moving ${movePercent(move)}%`}
+                    value={movePercent(move)}
+                    showValue
+                    className="min-w-40"
+                    trackClassName="!h-1"
+                    indicatorClassName="bg-kumo-warning"
+                  />
+                )}
+                {move.status === "completed" && (
+                  <Badge variant="success">Moved ✓</Badge>
+                )}
+                {move.status === "failed" && (
+                  <Badge variant="error">Couldn't move</Badge>
+                )}
+                {(move.status === "completed" || move.status === "failed") && (
+                  <button
+                    type="button"
+                    aria-label="Dismiss"
+                    className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
+                    onClick={() => dismissMove(move.moveId)}
+                  >
+                    <XIcon size={16} />
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+
+          {groupTransfers(visibleTransfers).map((row) => {
             const isFolder = row.transfers.length > 1 || row.folderName !== undefined;
             const state = isFolder ? rowState(row.transfers) : row.transfers[0].state;
             const totalSize = row.transfers.reduce((sum, t) => sum + t.size, 0);
@@ -270,7 +393,7 @@ export function TransferWidget({
             const inFlightIds = row.transfers
               .filter((t) => IN_FLIGHT_KINDS.has(t.state.kind))
               .map((t) => t.id);
-            
+
             return (
               <li
                 key={row.rowKey}

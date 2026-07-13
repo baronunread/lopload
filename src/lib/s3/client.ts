@@ -3,7 +3,10 @@
 // fetch implementation (and therefore the CORS bypass) stays dependency-injected.
 
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CopyObjectCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -11,6 +14,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  UploadPartCopyCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -203,42 +207,235 @@ export async function folderStats(
   return { files, totalSize, lastModified };
 }
 
-/** Rename a file: CopyObject to the new key, then DeleteObject the old one. */
+/** Objects copied at once. */
+const OBJECT_CONCURRENCY = 8;
+/** UploadPartCopy requests in flight per large object. */
+const PART_CONCURRENCY = 4;
+/** DeleteObjects' maximum batch size. */
+const DELETE_BATCH_SIZE = 1000;
+
+/**
+ * Objects at or above this size are copied as a multipart upload of
+ * UploadPartCopy parts rather than one CopyObject.
+ *
+ * A server-side CopyObject is atomic and silent: it reports nothing until the
+ * whole object lands, so a folder of multi-gigabyte files sits at 0% for
+ * minutes and then snaps to 100%. Copying in parts lets progress advance as
+ * each part completes. It also lifts CopyObject's hard 5 GB ceiling, above
+ * which S3 rejects a single-shot copy outright.
+ */
+export const COPY_MULTIPART_THRESHOLD = 64 * 1024 * 1024;
+export const COPY_PART_SIZE = 32 * 1024 * 1024;
+
+/**
+ * Progress of a recursive copy, weighted both ways: `copiedBytes` drives a
+ * percentage that still moves while a single huge object is in flight, while
+ * `copiedItems` drives an "N of M items" label. Callers need both — bytes
+ * alone read as nothing on a folder of empty markers, items alone read as
+ * nothing on a folder of a few huge files.
+ */
+export interface CopyProgress {
+  copiedBytes: number;
+  totalBytes: number;
+  copiedItems: number;
+  totalItems: number;
+}
+
+/** Copy one object to `destKey`, calling `onBytes` with each newly-copied
+ * chunk: once with the whole size for a small object, once per part for a
+ * large one. */
+async function copyObject(
+  client: S3Client,
+  bucket: string,
+  src: RemoteObjectRef,
+  destKey: string,
+  onBytes: (bytes: number) => void,
+): Promise<void> {
+  const CopySource = copySourceFor(bucket, src.key);
+
+  if (src.size < COPY_MULTIPART_THRESHOLD) {
+    await client.send(new CopyObjectCommand({ Bucket: bucket, CopySource, Key: destKey }));
+    onBytes(src.size);
+    return;
+  }
+
+  const created = await client.send(
+    new CreateMultipartUploadCommand({ Bucket: bucket, Key: destKey }),
+  );
+  const uploadId = created.UploadId;
+  if (!uploadId) throw new Error("CreateMultipartUpload did not return an UploadId");
+
+  try {
+    const partCount = Math.ceil(src.size / COPY_PART_SIZE);
+    const pending = Array.from({ length: partCount }, (_, i) => i + 1);
+    const parts: { PartNumber: number; ETag: string }[] = [];
+    let failed = false;
+
+    const worker = async (): Promise<void> => {
+      while (!failed) {
+        const partNumber = pending.shift();
+        if (partNumber === undefined) return;
+        const start = (partNumber - 1) * COPY_PART_SIZE;
+        const end = Math.min(start + COPY_PART_SIZE, src.size) - 1;
+        try {
+          const res = await client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucket,
+              Key: destKey,
+              UploadId: uploadId,
+              CopySource,
+              CopySourceRange: `bytes=${start}-${end}`,
+              PartNumber: partNumber,
+            }),
+          );
+          parts.push({ PartNumber: partNumber, ETag: res.CopyPartResult?.ETag ?? "" });
+          onBytes(end - start + 1);
+        } catch (err) {
+          failed = true;
+          throw err;
+        }
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(PART_CONCURRENCY, partCount) }, () => worker()),
+    );
+
+    parts.sort((a, b) => a.PartNumber - b.PartNumber);
+    await client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: destKey,
+        UploadId: uploadId,
+        MultipartUpload: { Parts: parts },
+      }),
+    );
+  } catch (err) {
+    // Never leave a dangling multipart upload behind: its parts occupy (and
+    // on most providers bill as) storage until they're aborted.
+    try {
+      await client.send(
+        new AbortMultipartUploadCommand({ Bucket: bucket, Key: destKey, UploadId: uploadId }),
+      );
+    } catch (abortErr) {
+      log.warn("AbortMultipartUpload failed", abortErr);
+    }
+    throw err;
+  }
+}
+
+/** Copy one key, looking up its size first so large objects take the
+ * multipart path. */
+async function copyKey(
+  client: S3Client,
+  bucket: string,
+  fromKey: string,
+  toKey: string,
+  onBytes: (bytes: number) => void = () => {},
+): Promise<void> {
+  const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: fromKey }));
+  await copyObject(client, bucket, { key: fromKey, size: head.ContentLength ?? 0 }, toKey, onBytes);
+}
+
+/** Copy every object to the key `destKeyFor` maps it to, with bounded
+ * parallelism, reporting progress as each object — or each part of a large
+ * object — lands rather than at a batch boundary. */
+async function copyObjects(
+  client: S3Client,
+  bucket: string,
+  objects: RemoteObjectRef[],
+  destKeyFor: (key: string) => string,
+  onProgress?: (progress: CopyProgress) => void,
+): Promise<void> {
+  const totalItems = objects.length;
+  const totalBytes = objects.reduce((sum, o) => sum + o.size, 0);
+  let copiedItems = 0;
+  let copiedBytes = 0;
+  const emit = () => onProgress?.({ copiedBytes, totalBytes, copiedItems, totalItems });
+
+  emit(); // tell the UI the totals before the first copy starts
+
+  const pending = objects.slice();
+  let failed = false;
+
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const obj = pending.shift();
+      if (obj === undefined) return;
+      try {
+        await copyObject(client, bucket, obj, destKeyFor(obj.key), (bytes) => {
+          copiedBytes += bytes;
+          emit();
+        });
+        copiedItems++;
+        emit();
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(OBJECT_CONCURRENCY, totalItems) }, () => worker()),
+  );
+}
+
+/** Delete keys in DeleteObjects-sized batches. */
+async function deleteKeys(client: S3Client, bucket: string, keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += DELETE_BATCH_SIZE) {
+    const batch = keys.slice(i, i + DELETE_BATCH_SIZE);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: batch.map((Key) => ({ Key })) },
+      }),
+    );
+  }
+}
+
+/** Rename a file: copy it to the new key, then delete the old one. */
 export async function renameFile(
   client: S3Client,
   bucket: string,
   fromKey: string,
   toKey: string,
+  onProgress?: (progress: CopyProgress) => void,
 ): Promise<void> {
-  await client.send(
-    new CopyObjectCommand({
-      Bucket: bucket,
-      CopySource: copySourceFor(bucket, fromKey),
-      Key: toKey,
-    }),
-  );
+  const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: fromKey }));
+  const totalBytes = head.ContentLength ?? 0;
+  let copiedBytes = 0;
+  onProgress?.({ copiedBytes: 0, totalBytes, copiedItems: 0, totalItems: 1 });
+
+  await copyObject(client, bucket, { key: fromKey, size: totalBytes }, toKey, (bytes) => {
+    copiedBytes += bytes;
+    onProgress?.({ copiedBytes, totalBytes, copiedItems: 0, totalItems: 1 });
+  });
+  onProgress?.({ copiedBytes: totalBytes, totalBytes, copiedItems: 1, totalItems: 1 });
+
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: fromKey }));
 }
 
-/** Rename a folder: copy+delete every key under the old prefix to the new one. */
+/** Rename a folder: copy every key under the old prefix to the new one, then
+ * delete the originals in bulk. */
 export async function renameFolder(
   client: S3Client,
   bucket: string,
   fromPrefix: string,
   toPrefix: string,
+  onProgress?: (progress: CopyProgress) => void,
 ): Promise<void> {
-  const keys = await listAllKeysUnder(client, bucket, fromPrefix);
-  for (const key of keys) {
-    const newKey = toPrefix + key.slice(fromPrefix.length);
-    await client.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: copySourceFor(bucket, key),
-        Key: newKey,
-      }),
-    );
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-  }
+  const objects = await listObjectsUnder(client, bucket, fromPrefix);
+  if (objects.length === 0) return;
+
+  await copyObjects(
+    client,
+    bucket,
+    objects,
+    (key) => toPrefix + key.slice(fromPrefix.length),
+    onProgress,
+  );
+  await deleteKeys(client, bucket, objects.map((o) => o.key));
 }
 
 /** Delete a single file. */
@@ -258,30 +455,18 @@ export async function deleteFolder(
 ): Promise<void> {
   const keys = await listAllKeysUnder(client, bucket, prefix);
   if (keys.length === 0) return;
-  const CHUNK = 1000; // DeleteObjects max batch size
-  for (let i = 0; i < keys.length; i += CHUNK) {
-    const batch = keys.slice(i, i + CHUNK);
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: batch.map((Key) => ({ Key })) },
-      }),
-    );
-  }
+  await deleteKeys(client, bucket, keys);
 }
 
-/** Moves a single file to the trash location: CopyObject there, then delete
- * the original. */
+/** Moves a single file to the trash location: copy it there, then delete the
+ * original. */
 export async function moveFileToTrash(
   client: S3Client,
   bucket: string,
   key: string,
   deletedAtMs: number,
 ): Promise<void> {
-  const dest = trashKey(deletedAtMs, key);
-  await client.send(
-    new CopyObjectCommand({ Bucket: bucket, CopySource: copySourceFor(bucket, key), Key: dest }),
-  );
+  await copyKey(client, bucket, key, trashKey(deletedAtMs, key));
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
@@ -296,18 +481,11 @@ export async function moveFolderToTrash(
   prefix: string,
   deletedAtMs: number,
 ): Promise<void> {
-  const keys = await listAllKeysUnder(client, bucket, prefix);
-  const hasOwnMarker = keys.includes(prefix);
+  const objects = await listObjectsUnder(client, bucket, prefix);
+  const hasOwnMarker = objects.some((o) => o.key === prefix);
 
-  for (const key of keys) {
-    await client.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: copySourceFor(bucket, key),
-        Key: trashKey(deletedAtMs, key),
-      }),
-    );
-  }
+  await copyObjects(client, bucket, objects, (key) => trashKey(deletedAtMs, key));
+
   if (!hasOwnMarker) {
     await client.send(
       new PutObjectCommand({
@@ -318,16 +496,7 @@ export async function moveFolderToTrash(
     );
   }
 
-  const CHUNK = 1000;
-  for (let i = 0; i < keys.length; i += CHUNK) {
-    const batch = keys.slice(i, i + CHUNK);
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: batch.map((Key) => ({ Key })) },
-      }),
-    );
-  }
+  await deleteKeys(client, bucket, objects.map((o) => o.key));
 }
 
 const RESTORE_CONFLICT_MESSAGE =
@@ -363,9 +532,7 @@ export async function restoreFileFromTrash(
     throw new Error(RESTORE_CONFLICT_MESSAGE);
   }
   const src = trashKey(deletedAtMs, originalKey);
-  await client.send(
-    new CopyObjectCommand({ Bucket: bucket, CopySource: copySourceFor(bucket, src), Key: originalKey }),
-  );
+  await copyKey(client, bucket, src, originalKey);
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: src }));
 }
 
@@ -382,25 +549,15 @@ export async function restoreFolderFromTrash(
     throw new Error(RESTORE_CONFLICT_MESSAGE);
   }
   const groupPrefix = trashKey(deletedAtMs, originalPrefix);
-  const trashedKeys = await listAllKeysUnder(client, bucket, groupPrefix);
+  const trashed = await listObjectsUnder(client, bucket, groupPrefix);
 
-  for (const key of trashedKeys) {
-    const destKey = originalPrefix + key.slice(groupPrefix.length);
-    await client.send(
-      new CopyObjectCommand({ Bucket: bucket, CopySource: copySourceFor(bucket, key), Key: destKey }),
-    );
-  }
-
-  const CHUNK = 1000;
-  for (let i = 0; i < trashedKeys.length; i += CHUNK) {
-    const batch = trashedKeys.slice(i, i + CHUNK);
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: batch.map((Key) => ({ Key })) },
-      }),
-    );
-  }
+  await copyObjects(
+    client,
+    bucket,
+    trashed,
+    (key) => originalPrefix + key.slice(groupPrefix.length),
+  );
+  await deleteKeys(client, bucket, trashed.map((o) => o.key));
 }
 
 /** Permanently deletes one trashed row — every object under it if it was a
@@ -419,17 +576,7 @@ export async function deleteTrashItem(
     return;
   }
   const groupPrefix = trashKey(deletedAtMs, originalKey);
-  const keys = await listAllKeysUnder(client, bucket, groupPrefix);
-  const CHUNK = 1000;
-  for (let i = 0; i < keys.length; i += CHUNK) {
-    const batch = keys.slice(i, i + CHUNK);
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: batch.map((Key) => ({ Key })) },
-      }),
-    );
-  }
+  await deleteKeys(client, bucket, await listAllKeysUnder(client, bucket, groupPrefix));
 }
 
 /** Every trashed item, grouped into one row per originally-deleted file or folder. */
@@ -459,17 +606,7 @@ export async function listTrash(client: S3Client, bucket: string): Promise<Trash
 
 /** Permanently empties the entire trash. */
 export async function emptyTrash(client: S3Client, bucket: string): Promise<void> {
-  const keys = await listAllKeysUnder(client, bucket, TRASH_PREFIX);
-  const CHUNK = 1000;
-  for (let i = 0; i < keys.length; i += CHUNK) {
-    const batch = keys.slice(i, i + CHUNK);
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: { Objects: batch.map((Key) => ({ Key })) },
-      }),
-    );
-  }
+  await deleteKeys(client, bucket, await listAllKeysUnder(client, bucket, TRASH_PREFIX));
 }
 
 /** Create a zero-byte "folder marker" object ending in "/". */
