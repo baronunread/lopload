@@ -39,6 +39,9 @@ export interface HostRecord {
   notifications: Array<{ title: string; body: string }>;
   opened: string[];
   revealed: string[];
+  /** Timestamps of each installAndRelaunch() call — there's nothing else to
+   * observe about it (it would tear down the real process). */
+  installAndRelaunchCalls: number[];
 }
 
 /** What the test scripts *into* the host: the answers native dialogs would
@@ -75,6 +78,7 @@ export async function createNodeHost(): Promise<NodeHost> {
     notifications: [],
     opened: [],
     revealed: [],
+    installAndRelaunchCalls: [],
   };
 
   const credentials = new Map<string, Credentials>();
@@ -159,7 +163,7 @@ export async function createNodeHost(): Promise<NodeHost> {
 
     updates: {
       checkForUpdate: async () => control.availableUpdate,
-      installAndRelaunch: async () => {},
+      installAndRelaunch: async () => void record.installAndRelaunchCalls.push(Date.now()),
     },
 
     notify: async (title, body) => void record.notifications.push({ title, body }),

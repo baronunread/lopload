@@ -1,14 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-import { createTauriFetch, type TauriFetchDeps } from "../../src/tauri/rawFetch";
+import { createTauriFetch, type TauriFetchDeps } from "../../src/tauri/http";
 
 type InvokeOptions = { headers: Record<string, string> };
 
 const OK_REPLY = { status: 200, statusText: "OK", headers: [["etag", '"abc123"']], body: [] };
 
-// Injected rather than mock.module'd: the service harness installs process-wide
-// module mocks it never removes (realServicesHarness.ts), so a mocked
-// "@tauri-apps/api/core" here would be at the mercy of test file ordering.
+// Injected rather than mock.module'd: bun's module mocks are process-wide and
+// would put this test at the mercy of file ordering across the whole suite.
 const invoke = mock(
   async (_cmd: string, _payload?: unknown, _options?: InvokeOptions): Promise<unknown> => OK_REPLY,
 );
