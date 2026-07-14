@@ -71,7 +71,11 @@ describe("move progress in the transfer widget", () => {
         // "1" here counts moves still in flight (one), not the item count.
         await screen.findByText("Moving 1 item…");
         expect(screen.queryByText("Moving 3 items…")).not.toBeInTheDocument();
-        expect(screen.getAllByText("13 items moved")).toHaveLength(2);
+        // The two finished moves each render their own summary row. Their
+        // "completed" events and the third move's "moving" event are separate
+        // React updates, so the title above can be on screen a beat before both
+        // summaries are — wait for them rather than assuming they landed together.
+        await waitFor(() => expect(screen.getAllByText("13 items moved")).toHaveLength(2));
       } finally {
         harness.dispose();
       }
