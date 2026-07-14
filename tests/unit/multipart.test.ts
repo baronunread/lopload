@@ -235,14 +235,14 @@ describe("uploadTransfer — multipart", () => {
   });
 });
 
-// The "parallel multipart (partsInFlight)" suite below drives uploadTransfer
-// against a hand-rolled fake S3Client (not aws-sdk-client-mock, and not the
-// old fakeS3Bucket) to observe internal worker-pool concurrency and abort
-// wiring precisely — real concurrent requests against MinIO would complete
-// too fast over loopback to deterministically observe "exactly N in flight"
-// or "abort mid-flight" without reintroducing the same kind of fake this
-// migration removes elsewhere. It doesn't touch aws-sdk-client-mock, so it
-// needs no migration and is left exactly as it was.
+// The suite below is the deliberate exception to "no fakes": it drives
+// uploadTransfer against a hand-rolled S3Client stub to watch the worker pool's
+// internals — that exactly N parts are in flight, and that an abort mid-flight
+// unwinds correctly. Those are claims about scheduling, not about storage, and
+// real requests over loopback finish far too fast to pin either one down.
+//
+// Everything above this line talks to a real MinIO. Don't "fix" this by
+// migrating it; there's nothing to migrate it to.
 describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
   // Small sizes: setting uploadId forces the multipart path regardless of
   // MULTIPART_THRESHOLD, so tests stay fast and memory-light.
