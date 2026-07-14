@@ -54,5 +54,14 @@ export interface Scenario {
   /** Skip in the in-app runner — for scenarios that can't work there (e.g. ones
    * needing fault injection, which lives on the Node host's fetch). */
   nodeOnly?: boolean;
+  /**
+   * Seed the bucket BEFORE the app mounts.
+   *
+   * This is not a style preference — it's required. The app lists the current
+   * folder once on mount and does not poll, so anything `run()` puts in the
+   * bucket afterwards races that listing and may simply never be shown. Arrange
+   * here; act and assert in `run`.
+   */
+  arrange?(bucket: BucketProbe): Promise<void>;
   run(ctx: ScenarioCtx): Promise<void>;
 }

@@ -55,6 +55,9 @@ async function settle(ctx: ScenarioCtx, key: string, timeoutMs = 60_000) {
   });
 }
 
+/** Seeded in `arrange` (before the app lists), compared against in `run`. */
+const DOWNLOAD_PAYLOAD = bytes(128 * 1024, 3);
+
 export const transferScenarios: Scenario[] = [
   {
     name: "uploading through the Upload button puts the exact bytes in the bucket",
@@ -111,10 +114,12 @@ export const transferScenarios: Scenario[] = [
 
   {
     name: "downloading writes the real bytes to the chosen local path",
+    async arrange(bucket) {
+      await bucket.put("archive.bin", DOWNLOAD_PAYLOAD);
+    },
     async run(ctx) {
-      const { bucket, control, workdir, user, expect, waitFor } = ctx;
-      const payload = bytes(128 * 1024, 3);
-      await bucket.put("archive.bin", payload);
+      const { control, workdir, user, expect, waitFor } = ctx;
+      const payload = DOWNLOAD_PAYLOAD;
 
       const destination = join(workdir, "downloaded.bin");
       control.saveDestination = destination;

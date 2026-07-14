@@ -15,7 +15,7 @@ import { AppShell } from "../../src/ui/AppShell";
 import { ServicesProvider } from "../../src/ui/services";
 import { createRealServices } from "../../src/services/real";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
-import { bucketProbe } from "./bucketProbe";
+import { bucketProbe, type BucketProbe } from "./bucketProbe";
 import { freshBucket } from "./minio";
 import { createNodeHost } from "./nodeHost";
 import type { Expect, ScenarioCtx } from "../scenarios/types";
@@ -26,6 +26,10 @@ export interface HarnessOptions {
   connected?: boolean;
   /** Wrap the host's fetch — used by fault-injection scenarios (see faultyFetch.ts). */
   wrapFetch?: (inner: FetchFn) => FetchFn;
+  /** Seed the bucket before the app is rendered. The app lists once on mount and
+   * doesn't poll, so state that arrives after render can lose the race and never
+   * appear — see Scenario.arrange. */
+  arrange?(bucket: BucketProbe): Promise<void>;
 }
 
 export interface Harness extends ScenarioCtx {
@@ -61,12 +65,17 @@ export async function mountApp(
   expect: Expect,
   options: HarnessOptions = {},
 ): Promise<Harness> {
-  const { connected = true, wrapFetch } = options;
+  const { connected = true, wrapFetch, arrange } = options;
 
   const bucket = await freshBucket();
+  const probe = bucketProbe(bucket.client, bucket.name);
   const { host, record, control, workdir } = await createNodeHost();
 
   if (wrapFetch) host.fetch = wrapFetch(host.fetch);
+
+  // Everything the scenario wants to already be there must land before render() —
+  // the app lists on mount and never polls.
+  await arrange?.(probe);
 
   const services = createRealServices(host);
 
@@ -91,7 +100,7 @@ export async function mountApp(
 
   return {
     services,
-    bucket: bucketProbe(bucket.client, bucket.name),
+    bucket: probe,
     connectionId: CONNECTION_ID,
     workdir,
     control,

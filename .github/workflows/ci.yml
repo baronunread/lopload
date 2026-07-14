@@ -10,9 +10,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Typecheck, the pure unit tests, and the scenario suite — the last of which
+  # drives the real app against a real MinIO. `ensureMinio()` starts the
+  # container itself (docker is preinstalled on the runner), so there's no
+  # service block here; that keeps the local and CI paths identical.
   check:
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v5
@@ -23,5 +27,39 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck + unit tests
-        run: bun run check
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Tests
+        run: bun run test
+
+  # Never ran in CI before this: the Rust half of the app — the tray status
+  # line, positional file writes (fastfs), and the upload fast path's header
+  # parsing and cancel registry (fasthttp) — was covered only by whatever a
+  # developer happened to run locally.
+  rust:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test

@@ -4,6 +4,10 @@
 // These put real objects in real storage and let the app go find them — so the
 // listing code, the delimiter/folder synthesis, and the rendering are all on
 // the hook together.
+//
+// Note the split: seeding happens in `arrange`, which runs before the app
+// mounts. The app lists once on mount and doesn't poll, so an object written
+// during `run` can lose the race and never appear.
 import { screen } from "@testing-library/react";
 
 import type { Scenario } from "./types";
@@ -11,13 +15,12 @@ import type { Scenario } from "./types";
 export const browseScenarios: Scenario[] = [
   {
     name: "lists the files and folders that are actually in the bucket",
-    async run({ bucket, expect, waitFor }) {
+    async arrange(bucket) {
       await bucket.put("readme.txt", "hello");
       await bucket.put("photos/cat.png", "not really a png");
       await bucket.put("photos/dog.png", "nor this");
-
-      // The app lists on mount; the seeding above raced that first call, so
-      // this waits for the listing the app does once it settles.
+    },
+    async run({ expect, waitFor }) {
       await waitFor(() => {
         expect(screen.queryByText("readme.txt") !== null).toBe(true);
       });
@@ -31,10 +34,11 @@ export const browseScenarios: Scenario[] = [
 
   {
     name: "opening a folder shows what's inside it",
-    async run({ bucket, user, expect, waitFor }) {
+    async arrange(bucket) {
       await bucket.put("photos/cat.png", "meow");
       await bucket.put("readme.txt", "hello");
-
+    },
+    async run({ user, expect, waitFor }) {
       await waitFor(() => {
         expect(screen.queryByText("photos") !== null).toBe(true);
       });

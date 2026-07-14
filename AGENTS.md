@@ -47,29 +47,57 @@ tracked in the improvement plan.
 ```
 src/lib/            framework-free TS engine (S3, stores, state machine)
 src/tauri/          thin wrappers around Tauri plugins (keychain, fs, HTTP, notifications)
-src/services/       wires engine + Tauri into the AppServices contract
+src/services/       host.ts (the platform boundary) + real.ts (wires engine → AppServices)
 src/ui/             React components on Kumo, pastel palette
 src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs + fasthttp (zero-copy file writes / request bodies over IPC)
-tests/unit/         bun test + happy-dom (no I/O)
-tests/integration/  real MinIO via docker
-tests/e2e/          real bucket (R2/S3/etc.), opt-in via env vars
+tests/scenarios/    what the app does, driven through the real UI
+tests/support/      MinIO, the Node host, fault injection, the app harness
+tests/unit/         pure functions only
 ```
 
 ## Testing
 
-Three tiers, each exercising more of the real stack:
+**There are no fake services, and no fake bucket.** Tests run the real UI against
+the real services against the real engine against a real MinIO. If you find
+yourself writing a double for something the app owns, you're solving it wrong.
 
-1. **Unit** (`tests/unit`, `src`) — fakes/mocks only, no I/O.
-2. **Integration** (`tests/integration`) — real engine code against a real MinIO container via docker; skips cleanly with a console.warn if docker is unavailable.
-3. **E2e** (`tests/e2e`) — real engine code against a real bucket (R2/S3/etc.), opt-in via `LOPLOAD_E2E_*` env vars in a gitignored `.env.e2e` (see `.env.e2e.example`); skips cleanly if the env vars aren't set. Every object it creates lives under a unique `e2e-<timestamp>-<rand>/` prefix deleted in `afterAll` — never point it at a bucket with data you can't lose from that prefix.
+The one substitution boundary is `Host` (`src/services/host.ts`) — the ~12 things
+that genuinely cannot run outside a webview (OS keychain, native dialogs, tray,
+notifications, local fs, the Rust fetch path). It has two real implementations:
+`createTauriHost()` for the app, `createNodeHost()` for tests. Everything above
+it — `real.ts`, the engine, the S3 client, the React tree — is the same code in
+both.
+
+**Scenarios** (`tests/scenarios/`) are plain functions over a `ScenarioCtx`, not
+bun tests, because the same file runs in two places:
 
 ```sh
-bun run check              # tsc --noEmit + bun test tests/unit src
-bun run test:integration   # needs docker
-bun run test:e2e           # needs .env.e2e with real bucket credentials
+bun test                   # Node host → MinIO. Seconds. The inner loop.
+bun run selftest           # the REAL Tauri binary → real Rust IPC → MinIO.
 ```
 
-Rust tests: `cd src-tauri && cargo test` (keychain tests that touch the real OS keychain are `#[ignore]`).
+Write a scenario once; both runners pick it up from `tests/scenarios/index.ts`.
+Assert on the **bucket**, not just the DOM — `bucketProbe` reads the bucket with
+its own S3 client, so a bug in the app's client can't hide itself.
+
+**Arrange with real state; produce failures with faults.** To test an error path,
+don't fake a service — inject a fault at the fetch seam (`tests/support/faultyFetch.ts`):
+`s3Error` returns genuine S3 error XML (so `classifyError()` is really exercised),
+`stall` opens a window for a cancel, `corruptEtag` / `truncateBody` break
+verification.
+
+MinIO (port 9400) is **persistent** — `ensureMinio()` reuses a healthy container
+and never stops it, so only the first run of the day pays startup. Isolation
+comes from `freshBucket()` per suite, not from restarting anything. Docker must
+be running; the suite **fails** rather than skipping if it isn't, because a suite
+that silently passes without its storage backend is worse than no suite at all.
+`bun run minio:stop` tears it down.
+
+`tests/unit/` is now only genuinely pure functions (error classification, MD5,
+tuning, update policy, sort/filter, trash key parsing). No mocks, no I/O.
+
+Rust tests: `cd src-tauri && cargo test` (keychain tests that touch the real OS
+keychain are `#[ignore]`). These run in CI.
 
 ## Building for production
 
