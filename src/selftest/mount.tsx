@@ -274,9 +274,15 @@ function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
 
 /** A real, empty directory under the Tauri temp dir — the in-app equivalent
  * of nodeHost's mkdtemp(). */
-async function makeWorkdir(host: Host): Promise<string> {
-  const base = await host.files.tempDir();
-  const dir = `${base}/lopload-selftest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+async function makeWorkdir(_host: Host): Promise<string> {
+  // Under /tmp, not the OS temp dir. This runs through @tauri-apps/plugin-fs,
+  // which is governed by the capability scope in capabilities/default.json —
+  // and that scope already permits /tmp/** (for drag-drop), whereas the macOS
+  // temp dir (/var/folders/…) is not in it. Using /tmp keeps the selftest from
+  // forcing a capability grant into the shipped app that the app itself never
+  // needs. (The app's own temp writes go through the write_at command, which
+  // isn't scope-governed, so it's unaffected either way.)
+  const dir = `/tmp/lopload-selftest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mkdir(dir, { recursive: true });
   return dir;
 }

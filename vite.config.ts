@@ -7,11 +7,11 @@ const host = process.env.TAURI_DEV_HOST;
 
 // The self-test (`bun run selftest`) launches a second Tauri dev server, and
 // would collide with a `bun run tauri dev` you already have open — strictPort
-// makes that a hard failure. So it runs on its own port, passed through here
-// and matched by a devUrl override in scripts/selftest.ts. Normal dev is
-// unaffected and stays on 14320.
+// makes that a hard failure. So it runs on its own port (scripts/selftest.ts
+// sets LOPLOAD_VITE_PORT and a matching devUrl override). Normal dev is
+// unaffected and stays on 1420.
 // @ts-expect-error process is a nodejs global
-const port = Number(process.env.LOPLOAD_VITE_PORT ?? 14320);
+const port = Number(process.env.LOPLOAD_VITE_PORT ?? 1420);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
