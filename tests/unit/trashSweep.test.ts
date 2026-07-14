@@ -4,7 +4,7 @@ import { sweepTrash } from "../../src/lib/s3/trashSweep";
 import { TRASH_PREFIX, trashKey } from "../../src/lib/s3/trash";
 import { createS3Client } from "../../src/lib/s3/client";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
-import { freshBucket, type Bucket } from "../support/minio";
+import { freshBucket, type Bucket } from "../support/storage";
 import { bucketProbe } from "../support/bucketProbe";
 import { faultyFetch } from "../support/faultyFetch";
 import { nativeFetch } from "../setup";

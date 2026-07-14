@@ -12,7 +12,7 @@ import {
 } from "../../src/lib/s3/client";
 import { TRASH_PREFIX, trashKey } from "../../src/lib/s3/trash";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
-import { freshBucket, type Bucket } from "../support/minio";
+import { freshBucket, type Bucket } from "../support/storage";
 import { bucketProbe } from "../support/bucketProbe";
 import { nativeFetch } from "../setup";
 

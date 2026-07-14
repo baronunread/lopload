@@ -23,7 +23,7 @@
 // VITE_LOPLOAD_SELFTEST is statically absent at build time (see main.tsx).
 // So nothing here may import a node-only module — that's why the BucketProbe
 // comes from tests/support/bucketProbe.ts (a plain S3Client wrapper) rather
-// than tests/support/minio.ts or nodeHost.ts, both of which shell out to
+// than tests/support/storage.ts or nodeHost.ts, both of which shell out to
 // docker and touch node:fs. Type-only imports from those two are fine: they
 // vanish at the esbuild/Rollup layer and never reach the bundle.
 import "../../tests/support/noActEnv"; // must precede the @testing-library/react import
@@ -353,6 +353,9 @@ async function runScenario(
       services,
       bucket: probe,
       connectionId: CONNECTION_ID,
+      // The self-test always runs against a bucket of its own (scripts/selftest.ts
+      // provisions a fresh MinIO one), so it never needs to share by prefix.
+      prefix: "",
       workdir,
       control,
       record,

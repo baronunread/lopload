@@ -9,7 +9,7 @@ import {
   testConnection,
 } from "../../src/lib/s3/client";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
-import { freshBucket, type Bucket } from "../support/minio";
+import { freshBucket, type Bucket } from "../support/storage";
 import { bucketProbe } from "../support/bucketProbe";
 import { faultyFetch } from "../support/faultyFetch";
 import { nativeFetch } from "../setup";

@@ -5,7 +5,7 @@
 //
 // This script:
 //   1. makes sure a real MinIO is up and hands it a fresh bucket (reusing the
-//      exact container logic tests/support/minio.ts already has — this runs
+//      exact container logic tests/support/storage.ts already has — this runs
 //      under bun, not the webview, so importing it is fine here),
 //   2. launches `bunx tauri dev` with VITE_LOPLOAD_SELFTEST=1 and that
 //      bucket's connection details as VITE_LOPLOAD_SELFTEST_* env vars,
@@ -19,7 +19,7 @@
 // sentinel line out of its stdout rather than waiting on its exit code.
 import { resolve } from "node:path";
 
-import { ensureMinio, freshBucket } from "../tests/support/minio";
+import { ensureMinio, freshBucket } from "../tests/support/storage";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 

@@ -11,7 +11,7 @@ import { createAppServices, type Services } from "../../src/services/appServices
 import type { Host } from "../../src/services/host";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
 import { bucketProbe, type BucketProbe } from "./bucketProbe";
-import { freshBucket, type Bucket } from "./minio";
+import { freshBucket, type Bucket } from "./storage";
 import { createNodeHost, type HostControl, type HostRecord } from "./nodeHost";
 
 export interface ServiceHarnessOptions {
@@ -49,7 +49,7 @@ export async function createServiceHarness(
   return {
     services,
     host,
-    bucket: bucketProbe(bucket.client, bucket.name),
+    bucket: bucketProbe(bucket.client, bucket.name, bucket.prefix),
     bucketConnection: bucket.connection,
     credentials: bucket.credentials,
     control,

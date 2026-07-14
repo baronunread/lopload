@@ -34,6 +34,15 @@ export interface ScenarioCtx {
   bucket: BucketProbe;
   /** The connection the app has been set up with, already saved and selected. */
   connectionId: string;
+  /**
+   * The folder the app starts in — "" on MinIO, `lopload-test/<run>/` against a
+   * real provider, where the suite is a guest in someone's real bucket.
+   *
+   * `bucket` already scopes itself to this, so `put("a.txt")` needs no thought.
+   * You only need it where you reason about a *remote key* directly — a
+   * Transfer's `key`, say, which the app builds as prefix + filename.
+   */
+  prefix: string;
   /** A real, empty directory on disk: put files here to upload, look here after a download. */
   workdir: string;
   /** Scripts the answers native dialogs would give, and fires drag-and-drop. */

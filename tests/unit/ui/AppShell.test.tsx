@@ -10,7 +10,7 @@ import { ServicesProvider } from "../../../src/ui/services";
 import { createAppServices, type Services } from "../../../src/services/appServices";
 import { bucketProbe } from "../../support/bucketProbe";
 import { faultyFetch, type Fault } from "../../support/faultyFetch";
-import { freshBucket } from "../../support/minio";
+import { freshBucket } from "../../support/storage";
 import { createNodeHost } from "../../support/nodeHost";
 
 afterEach(cleanup);

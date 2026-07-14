@@ -28,13 +28,23 @@ export interface BucketProbe {
   clear(prefix?: string): Promise<void>;
 }
 
-export function bucketProbe(client: S3Client, bucket: string): BucketProbe {
+/**
+ * @param scope Key prefix every operation is confined to — empty for a MinIO
+ *   bucket the suite owns outright, `lopload-test/<run>/` against a real
+ *   provider, where the suite is a guest in somebody's real bucket. Scoping here
+ *   rather than at each call site means a scenario says `put("readme.txt")` and
+ *   stays correct under both, and cannot reach outside its prefix even by
+ *   mistake.
+ */
+export function bucketProbe(client: S3Client, bucket: string, scope = ""): BucketProbe {
+  const scoped = (key: string) => `${scope}${key}`;
+
   const probe: BucketProbe = {
     async put(key, body) {
       await client.send(
         new PutObjectCommand({
           Bucket: bucket,
-          Key: key,
+          Key: scoped(key),
           Body: typeof body === "string" ? new TextEncoder().encode(body) : body,
         }),
       );
@@ -42,7 +52,9 @@ export function bucketProbe(client: S3Client, bucket: string): BucketProbe {
 
     async get(key) {
       try {
-        const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        const res = await client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: scoped(key) }),
+        );
         return new Uint8Array(await res.Body!.transformToByteArray());
       } catch {
         return null;
@@ -65,11 +77,14 @@ export function bucketProbe(client: S3Client, bucket: string): BucketProbe {
         const res = await client.send(
           new ListObjectsV2Command({
             Bucket: bucket,
-            Prefix: prefix,
+            Prefix: scoped(prefix),
             ContinuationToken: token,
           }),
         );
-        for (const obj of res.Contents ?? []) if (obj.Key) found.push(obj.Key);
+        // Hand back keys as the scenario thinks of them, not as they're stored.
+        for (const obj of res.Contents ?? []) {
+          if (obj.Key) found.push(obj.Key.slice(scope.length));
+        }
         token = res.NextContinuationToken;
       } while (token);
       return found.sort();
@@ -78,10 +93,13 @@ export function bucketProbe(client: S3Client, bucket: string): BucketProbe {
     async clear(prefix = "") {
       const keys = await probe.keys(prefix);
       if (keys.length === 0) return;
+      // Deliberately re-scoped rather than deleting the raw keys listed above:
+      // against a real provider this is the call that could do real damage, and
+      // it must be structurally incapable of naming an object outside `scope`.
       await client.send(
         new DeleteObjectsCommand({
           Bucket: bucket,
-          Delete: { Objects: keys.map((Key) => ({ Key })) },
+          Delete: { Objects: keys.map((key) => ({ Key: scoped(key) })) },
         }),
       );
     },

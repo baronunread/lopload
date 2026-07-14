@@ -16,7 +16,7 @@ import { ServicesProvider } from "../../src/ui/services";
 import { createAppServices } from "../../src/services/appServices";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
 import { bucketProbe, type BucketProbe } from "./bucketProbe";
-import { freshBucket } from "./minio";
+import { freshBucket } from "./storage";
 import { createNodeHost } from "./nodeHost";
 import type { Expect, ScenarioCtx } from "../scenarios/types";
 
@@ -68,7 +68,7 @@ export async function mountApp(
   const { connected = true, wrapFetch, arrange } = options;
 
   const bucket = await freshBucket();
-  const probe = bucketProbe(bucket.client, bucket.name);
+  const probe = bucketProbe(bucket.client, bucket.name, bucket.prefix);
   const { host, record, control, workdir } = await createNodeHost();
 
   if (wrapFetch) host.fetch = wrapFetch(host.fetch);
@@ -87,7 +87,7 @@ export async function mountApp(
         endpoint: bucket.connection.endpoint,
         bucket: bucket.name,
         region: bucket.connection.region,
-        lastPrefix: "",
+        lastPrefix: bucket.prefix,
         createdAt: Date.now(),
       },
       bucket.credentials,
@@ -102,6 +102,7 @@ export async function mountApp(
     services,
     bucket: probe,
     connectionId: CONNECTION_ID,
+    prefix: bucket.prefix,
     workdir,
     control,
     record,
@@ -124,6 +125,10 @@ export async function mountApp(
       // Stops the trash sweep's 24h timer and cancels anything still in flight,
       // so no straggler outlives the scenario that started it.
       await services.dispose();
+      // On MinIO the whole bucket is disposable and this is redundant. Against a
+      // real provider it's the difference between a test suite and a mess: the
+      // run's prefix is the only thing it may delete, and it deletes all of it.
+      if (bucket.prefix) await probe.clear();
     },
   };
 }

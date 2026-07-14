@@ -21,9 +21,17 @@ function bytes(size: number, seed = 1): Uint8Array {
   return out;
 }
 
-/** Waits for a transfer of `key` to reach a terminal state, and returns it. */
-async function settle(ctx: ScenarioCtx, key: string, timeoutMs = 60_000) {
-  const { services, connectionId } = ctx;
+/**
+ * Waits for the transfer of `name` to reach a terminal state, and returns it.
+ *
+ * `name` is the filename as the scenario thinks of it; the app's Transfer carries
+ * the full remote key, which is prefix + name. On MinIO the prefix is empty and
+ * the two coincide — which is exactly why this is easy to get wrong and only
+ * discover against a real provider.
+ */
+async function settle(ctx: ScenarioCtx, name: string, timeoutMs = 60_000) {
+  const { services, connectionId, prefix } = ctx;
+  const key = `${prefix}${name}`;
   return new Promise<{ kind: string }>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`transfer for ${key} never settled`)),

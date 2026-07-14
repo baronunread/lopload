@@ -9,7 +9,7 @@ import { MemoryTransferStore } from "../../src/lib/stores/memory";
 import type { Transfer } from "../../src/lib/types";
 import { createS3Client } from "../../src/lib/s3/client";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
-import { freshBucket, type Bucket } from "../support/minio";
+import { freshBucket, type Bucket } from "../support/storage";
 import { bucketProbe } from "../support/bucketProbe";
 import { localFileReader, localFileWriter } from "../support/localFiles";
 import { nativeFetch } from "../setup";
