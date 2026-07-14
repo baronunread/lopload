@@ -45,6 +45,10 @@ export interface ScenarioCtx {
   expect: Expect;
   /** Writes a real local file into workdir and returns its absolute path. */
   makeLocalFile(name: string, bytes: Uint8Array | string): Promise<string>;
+  /** Reads a real local file's bytes back off disk. Goes through the Host
+   * rather than `node:fs` directly, so scenarios stay import-clean for the
+   * in-app runner, which cannot bundle node builtins into the webview. */
+  readLocalFile(path: string): Promise<Uint8Array>;
   /** Waits until `check` stops throwing, or fails. Use for anything async. */
   waitFor(check: () => void | Promise<void>, timeoutMs?: number): Promise<void>;
 }

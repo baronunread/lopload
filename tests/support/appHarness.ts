@@ -8,7 +8,7 @@
 import { cleanup, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { AppShell } from "../../src/ui/AppShell";
@@ -113,6 +113,10 @@ export async function mountApp(
       const path = join(workdir, name);
       await writeFile(path, bytes);
       return path;
+    },
+
+    async readLocalFile(path) {
+      return new Uint8Array(await readFile(path));
     },
 
     async dispose() {

@@ -18,6 +18,7 @@
     "test": "bun test tests/unit src",
     "test:integration": "bun test tests/integration",
     "test:e2e": "bun --env-file=.env.e2e test tests/e2e",
+    "selftest": "bun run scripts/selftest.ts",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run test",
     "set-version": "bun run scripts/set-version.mjs"

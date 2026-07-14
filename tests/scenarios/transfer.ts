@@ -4,8 +4,6 @@
 // byte here makes a real round trip: the engine chunks it, the SDK signs it,
 // MinIO stores it, and the assertion reads it back out through a different
 // client than the one the app used.
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { screen } from "@testing-library/react";
 
 import { MULTIPART_THRESHOLD } from "../../src/lib/s3/multipart";
@@ -39,7 +37,7 @@ async function settle(ctx: ScenarioCtx, key: string, timeoutMs = 60_000) {
     const unsubscribe = services.engine.subscribe((event) => {
       if (event.type !== "transfer-updated" || event.transfer.key !== key) return;
       const { kind } = event.transfer.state;
-      if (kind === "uploaded" || kind === "downloaded" || kind === "failed" || kind === "cancelled") {
+      if (kind === "uploaded" || kind === "downloaded" || kind === "failed") {
         done(event.transfer.state);
       }
     });
@@ -48,15 +46,12 @@ async function settle(ctx: ScenarioCtx, key: string, timeoutMs = 60_000) {
       const match = list.find((t) => t.key === key);
       if (!match) return;
       const { kind } = match.state;
-      if (kind === "uploaded" || kind === "downloaded" || kind === "failed" || kind === "cancelled") {
+      if (kind === "uploaded" || kind === "downloaded" || kind === "failed") {
         done(match.state);
       }
     });
   });
 }
-
-/** Seeded in `arrange` (before the app lists), compared against in `run`. */
-const DOWNLOAD_PAYLOAD = bytes(128 * 1024, 3);
 
 export const transferScenarios: Scenario[] = [
   {
@@ -114,14 +109,12 @@ export const transferScenarios: Scenario[] = [
 
   {
     name: "downloading writes the real bytes to the chosen local path",
-    async arrange(bucket) {
-      await bucket.put("archive.bin", DOWNLOAD_PAYLOAD);
-    },
     async run(ctx) {
-      const { control, workdir, user, expect, waitFor } = ctx;
-      const payload = DOWNLOAD_PAYLOAD;
+      const { bucket, control, workdir, user, expect, waitFor, readLocalFile } = ctx;
+      const payload = bytes(128 * 1024, 3);
+      await bucket.put("archive.bin", payload);
 
-      const destination = join(workdir, "downloaded.bin");
+      const destination = `${workdir}/downloaded.bin`;
       control.saveDestination = destination;
 
       await waitFor(() => {
@@ -135,7 +128,7 @@ export const transferScenarios: Scenario[] = [
       expect(state.kind).toBe("downloaded");
 
       // Read it off the actual filesystem — not from any test double.
-      const written = new Uint8Array(await readFile(destination));
+      const written = await readLocalFile(destination);
       expect(written.byteLength).toBe(payload.byteLength);
       expect(Array.from(written.subarray(0, 256))).toEqual(Array.from(payload.subarray(0, 256)));
     },

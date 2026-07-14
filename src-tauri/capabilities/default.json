@@ -29,7 +29,8 @@
         { "path": "/mnt/**" },
         { "path": "/media/**" },
         { "path": "/tmp/**" },
-        { "path": "/private/**" }
+        { "path": "/private/**" },
+        { "path": "/var/folders/**" }
       ]
     },
     "dialog:default",
