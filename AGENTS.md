@@ -8,9 +8,11 @@ Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
 bun install
 bun run tauri dev       # desktop app with hot-reload
 bun run dev              # Vite only, browser tab — shows a "requires the desktop app" notice
-bun run check            # typecheck + unit tests
-bun run test:integration # MinIO via docker (skipped if docker absent)
+bun run check            # typecheck + the whole suite — CI gates on this
+bun run selftest         # the scenarios, inside the real Tauri binary
 ```
+
+Tests need Docker running (a real MinIO — see Testing below).
 
 Everything uses `bun` — never `npm`/`npx`/`node`.
 
@@ -74,7 +76,15 @@ bun tests, because the same file runs in two places:
 ```sh
 bun test                   # Node host → MinIO. Seconds. The inner loop.
 bun run selftest           # the REAL Tauri binary → real Rust IPC → MinIO.
+bun run test:remote        # the same scenarios → a real R2/S3 bucket.
 ```
+
+`test:remote` needs a `.env.remote` (see `.env.remote.example`) and runs nightly
+in CI. It exists because MinIO is an excellent S3 impersonator right up until it
+isn't — checksum middleware, ETag formats on multipart, redirects — and those
+bugs are invisible to a local-only suite. It confines itself to
+`lopload-test/<run>/` and deletes that prefix when it's done; it cannot touch a
+key outside it.
 
 Write a scenario once; both runners pick it up from `tests/scenarios/index.ts`.
 Assert on the **bucket**, not just the DOM — `bucketProbe` reads the bucket with
