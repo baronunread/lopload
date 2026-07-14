@@ -706,13 +706,48 @@ class RealServices implements AppServices {
     this.trashSweepTimer = setInterval(run, TRASH_SWEEP_INTERVAL_MS);
   }
 
-  /** Stops the background sweep. The app never calls this — it lives as long
-   * as the process — but a test that builds services per scenario would
-   * otherwise leak a 24h timer (and keep sweeping a bucket that's been torn
-   * down) into every subsequent test in the run. */
-  dispose(): void {
+  /**
+   * Stops everything this instance started. The app never calls it — it lives
+   * as long as the process — but anything that builds services per scenario
+   * must, or the leftovers outlive their scenario.
+   *
+   * Two things leak without it. The trash sweep keeps a 24h timer alive and
+   * goes on sweeping a bucket nobody cares about any more. And, more subtly, a
+   * transfer that's still in flight keeps running — and keeps writing rows to a
+   * store the next caller is about to reuse. In the app that's harmless (one
+   * instance, one process). In the in-app self-test it isn't: every scenario
+   * shares one real SQLite database, so a straggler's late save() lands *after*
+   * the next scenario has reset the tables, and that scenario's
+   * resumePending() then dutifully picks the zombie back up.
+   */
+  async dispose(): Promise<void> {
     if (this.trashSweepTimer !== null) clearInterval(this.trashSweepTimer);
     this.trashSweepTimer = null;
+
+    const engines = [...this.engines.values()];
+    this.engines.clear();
+    this.enginePromises.clear();
+    this.clients.clear();
+
+    await Promise.all(
+      engines.flatMap((engine) =>
+        engine
+          .listTransfers()
+          .filter(
+            (t) =>
+              t.state.kind === "queued" ||
+              t.state.kind === "sending" ||
+              t.state.kind === "checking",
+          )
+          // A cancel that fails has nothing left to tell us — we're tearing the
+          // whole instance down either way.
+          .map((t) => engine.cancel(t.id).catch(() => {})),
+      ),
+    );
+
+    this.engineSubscribers.clear();
+    this.moveSubscribers.clear();
+    this.transferSnapshots.clear();
   }
 
   private async sweepAllConnectionsTrash(): Promise<void> {
@@ -735,7 +770,7 @@ class RealServices implements AppServices {
 
 /** AppServices plus the teardown hook only a test caller needs. */
 export interface RealServicesHandle extends AppServices {
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 /** Builds the real AppServices implementation against a Host. The app passes

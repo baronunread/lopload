@@ -48,7 +48,7 @@ describe("Onboarding", () => {
       expect(done).not.toBeNull();
       expect((done as unknown as Connection).name).toBe("Videos");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 });

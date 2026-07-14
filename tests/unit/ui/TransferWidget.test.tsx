@@ -83,7 +83,7 @@ describe("TransferWidget", () => {
         await screen.findByText("Uploading 1 item…");
         expect(screen.getByText("vacation.mp4")).toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -110,8 +110,8 @@ describe("TransferWidget", () => {
 
         expect(container.textContent).toBe("");
       } finally {
-        harnessA.dispose();
-        harnessB.dispose();
+        await harnessA.dispose();
+        await harnessB.dispose();
       }
     });
 
@@ -137,7 +137,7 @@ describe("TransferWidget", () => {
 
         await waitFor(() => expect(container.textContent).toBe(""));
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -157,7 +157,7 @@ describe("TransferWidget", () => {
         await screen.findByText("Uploading 1 item…");
         await screen.findByText("1 upload complete", {}, { timeout: 15_000 });
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -181,7 +181,7 @@ describe("TransferWidget", () => {
 
         await screen.findByText("1 of 2 uploads complete", {}, { timeout: 15_000 });
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -211,7 +211,7 @@ describe("TransferWidget", () => {
         await user.click(screen.getByRole("button", { name: "Expand transfers" }));
         expect(screen.getByText("vacation.mp4")).toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -248,7 +248,7 @@ describe("TransferWidget", () => {
         );
         expect(await harness.services.engine.listTransfers(CONN)).toEqual([]);
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -279,7 +279,7 @@ describe("TransferWidget", () => {
         await waitFor(() => expect(container.textContent).toBe(""));
         expect(await harness.services.engine.listTransfers(CONN)).toEqual([]);
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -312,7 +312,7 @@ describe("TransferWidget", () => {
 
         expect(screen.getByText("1 upload complete")).toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -344,7 +344,7 @@ describe("TransferWidget", () => {
 
         expect(screen.getByText("0 of 1 uploads complete")).toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 
@@ -377,7 +377,7 @@ describe("TransferWidget", () => {
           body: "2 files uploaded, 1 file failed",
         });
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     });
 });

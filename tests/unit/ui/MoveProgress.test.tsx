@@ -77,7 +77,7 @@ describe("move progress in the transfer widget", () => {
         // summaries are — wait for them rather than assuming they landed together.
         await waitFor(() => expect(screen.getAllByText("13 items moved")).toHaveLength(2));
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     30_000,
@@ -110,7 +110,7 @@ describe("move progress in the transfer widget", () => {
         await movePromise;
         await screen.findByText("1 item moved");
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     15_000,
@@ -147,7 +147,7 @@ describe("move progress in the transfer widget", () => {
         expect(screen.queryByText(/1 of 2 items/)).not.toBeInTheDocument();
         expect(screen.getByText("50%")).toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     30_000,
@@ -176,7 +176,7 @@ describe("move progress in the transfer widget", () => {
         await screen.findByText("2 of 4 items");
         expect(screen.getByText("50%")).toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     15_000,
@@ -210,7 +210,7 @@ describe("move progress in the transfer widget", () => {
         await movePromise;
         await screen.findByText("1 item moved");
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     15_000,

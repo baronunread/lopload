@@ -29,7 +29,7 @@ describe("AddStorageDialog", () => {
       expect(close.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
       expect(dialog).toContainElement(screen.getByLabelText("Endpoint URL"));
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -49,7 +49,7 @@ describe("AddStorageDialog", () => {
       await user.click(await screen.findByRole("button", { name: "Close" }));
       expect(closed).toBe(true);
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 });

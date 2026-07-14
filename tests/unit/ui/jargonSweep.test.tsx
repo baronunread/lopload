@@ -138,7 +138,7 @@ describe("jargon sweep", () => {
           }
         }
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     20_000,

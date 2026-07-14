@@ -49,7 +49,7 @@ describe("SetupForm", () => {
       const saveButton = await screen.findByRole("button", { name: "Save connection" });
       expect(saveButton).toBeEnabled();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -88,7 +88,7 @@ describe("SetupForm", () => {
         expect(screen.getByRole("button", { name: "Test connection" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Save connection" })).not.toBeInTheDocument();
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
     15_000,
@@ -113,7 +113,7 @@ describe("SetupForm", () => {
       await user.type(screen.getByLabelText("Name"), "!");
       expect(screen.getByRole("button", { name: "Test connection" })).toBeInTheDocument();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -140,7 +140,7 @@ describe("SetupForm", () => {
       expect(list).toHaveLength(1);
       expect(list[0].name).toBe("Videos");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -162,7 +162,7 @@ describe("SetupForm", () => {
       await screen.findByText("Connected");
       await screen.findByText("Connection works.");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -192,7 +192,7 @@ describe("SetupForm", () => {
       // Once the floor elapses, it flips to Save connection.
       await screen.findByRole("button", { name: "Save connection" }, { timeout: 1000 });
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 });

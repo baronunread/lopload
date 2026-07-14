@@ -21,7 +21,7 @@ const test = (name: string, fn: () => Promise<void>) => bunTest(name, fn, 20_000
 interface TwoConnections {
   services: RealServicesHandle;
   workdir: string;
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 /** Two real, isolated connections — "videos" and "documents" — each backed
@@ -72,8 +72,8 @@ async function twoConnections(): Promise<TwoConnections> {
   return {
     services,
     workdir,
-    dispose() {
-      services.dispose();
+    async dispose() {
+      await services.dispose();
     },
   };
 }
@@ -124,7 +124,7 @@ describe("AppShell first run", () => {
       expect(screen.getByLabelText("Endpoint URL")).toBeInTheDocument();
       expect(screen.getByLabelText("Access key")).toBeInTheDocument();
     } finally {
-      services.dispose();
+      await services.dispose();
     }
   });
 });
@@ -159,7 +159,7 @@ describe("AppShell connection switcher", () => {
       expect(screen.queryByText("vacation.mp4")).not.toBeInTheDocument();
       expect(screen.queryByText("Uploading")).not.toBeInTheDocument();
     } finally {
-      setup.dispose();
+      await setup.dispose();
     }
   });
 });
@@ -191,7 +191,7 @@ describe("AppShell manage connections", () => {
       const remaining = await setup.services.connections.list();
       expect(remaining.map((c) => c.id)).toEqual(["documents"]);
     } finally {
-      setup.dispose();
+      await setup.dispose();
     }
   });
 
@@ -247,7 +247,7 @@ describe("AppShell manage connections", () => {
       expect(screen.queryByText(/Uploading \d+ item/)).not.toBeInTheDocument();
       expect(screen.queryByText(/uploads? complete/)).not.toBeInTheDocument();
     } finally {
-      setup.dispose();
+      await setup.dispose();
     }
   });
 
@@ -286,7 +286,7 @@ describe("AppShell manage connections", () => {
 
       await waitFor(() => expect(screen.getByText("Welcome to Lopload")).toBeInTheDocument());
     } finally {
-      services.dispose();
+      await services.dispose();
     }
   });
 });

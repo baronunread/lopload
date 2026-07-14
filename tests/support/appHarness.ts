@@ -121,9 +121,9 @@ export async function mountApp(
 
     async dispose() {
       cleanup();
-      // Without this the trash sweep keeps a 24h interval alive and goes on
-      // polling a bucket this scenario is about to stop caring about.
-      services.dispose();
+      // Stops the trash sweep's 24h timer and cancels anything still in flight,
+      // so no straggler outlives the scenario that started it.
+      await services.dispose();
     },
   };
 }

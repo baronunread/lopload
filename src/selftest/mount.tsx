@@ -377,7 +377,7 @@ async function runScenario(
     return { ok: false, error: message };
   } finally {
     cleanup();
-    services.dispose();
+    await services.dispose();
   }
 }
 

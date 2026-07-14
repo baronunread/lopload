@@ -34,7 +34,7 @@ export interface ServiceHarness {
   record: HostRecord;
   /** A real, empty directory on disk. */
   workdir: string;
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 export async function createServiceHarness(
@@ -55,8 +55,8 @@ export async function createServiceHarness(
     control,
     record,
     workdir,
-    dispose() {
-      services.dispose();
+    async dispose() {
+      await services.dispose();
     },
   };
 }

@@ -94,7 +94,7 @@ describe("RemoteBrowser", () => {
       await screen.findByText("readme.txt");
       await waitFor(async () => expect(await currentLastPrefix(harness)).toBe(""));
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -104,7 +104,7 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("This folder is empty");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -140,7 +140,7 @@ describe("RemoteBrowser", () => {
       await screen.findByText("readme.txt");
       expect(await harness.host.keychain.get(CONN)).toEqual(harness.credentials);
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -170,7 +170,7 @@ describe("RemoteBrowser", () => {
       ).not.toBeInTheDocument();
       expect(await harness.host.keychain.get(CONN)).toBeNull();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -192,7 +192,7 @@ describe("RemoteBrowser", () => {
       expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
       expect(screen.getByRole("menuitem", { name: "Move to Trash" })).toBeInTheDocument();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -213,7 +213,7 @@ describe("RemoteBrowser", () => {
 
       await screen.findByText("readme.txt", {}, { timeout: 15_000 });
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -241,7 +241,7 @@ describe("RemoteBrowser", () => {
       await screen.findByText("cat.png");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -262,7 +262,7 @@ describe("RemoteBrowser", () => {
       const dialog = await screen.findByRole("dialog");
       expect(within(dialog).getByText(/File info/)).toBeInTheDocument();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -287,7 +287,7 @@ describe("RemoteBrowser", () => {
         expect(await harness.bucket.has("readme.txt")).toBe(false);
       });
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -316,7 +316,7 @@ describe("RemoteBrowser", () => {
         expect(await harness.bucket.has("photos/c.txt")).toBe(true);
       });
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -347,7 +347,7 @@ describe("RemoteBrowser", () => {
       await waitFor(async () => expect(await harness.bucket.has("photos/a.txt")).toBe(true));
       expect(await harness.bucket.has("photos/b.txt")).toBe(false);
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -380,7 +380,7 @@ describe("RemoteBrowser", () => {
         expect(await harness.bucket.has("c.txt")).toBe(false);
       });
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -419,7 +419,7 @@ describe("RemoteBrowser", () => {
         { timeout: 15_000 },
       );
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -446,7 +446,7 @@ describe("RemoteBrowser", () => {
       const expected = `3 files, ${formatBytes(totalSize)}, last changed ${formatDate(Date.now())}`;
       await within(dialog).findByText(expected, undefined, { timeout: 15_000 });
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -467,7 +467,7 @@ describe("RemoteBrowser", () => {
       await screen.findByText(/Some of what you dropped couldn't be added/);
       await screen.findByText(/couldn't be read/);
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -503,7 +503,7 @@ describe("RemoteBrowser", () => {
         names.slice(1).findIndex((t) => t.includes("mid.bin")),
       );
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -554,7 +554,7 @@ describe("RemoteBrowser", () => {
       await waitFor(async () => expect(await harness.bucket.has("photos/c.txt")).toBe(true));
       expect(await harness.bucket.has("photos/b.txt")).toBe(false);
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -585,7 +585,7 @@ describe("RemoteBrowser", () => {
       await screen.findByText("readme.txt", {}, { timeout: 10_000 });
       await screen.findByText("Couldn't move to Trash");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -624,7 +624,7 @@ describe("RemoteBrowser", () => {
       expect(screen.queryByText("renamed.txt")).not.toBeInTheDocument();
       await screen.findByText("Couldn't rename");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -658,7 +658,7 @@ describe("RemoteBrowser", () => {
       });
       await screen.findByText("Couldn't create folder");
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -686,7 +686,7 @@ describe("RemoteBrowser", () => {
       await new Promise((resolve) => setTimeout(resolve, 700));
       expect(screen.getByText("This folder is empty")).toBeInTheDocument();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 
@@ -774,7 +774,7 @@ describe("RemoteBrowser", () => {
       expect(screen.queryByText("b.txt")).not.toBeInTheDocument();
       expect(screen.getByText("c.txt")).toBeInTheDocument();
     } finally {
-      harness.dispose();
+      await harness.dispose();
     }
   });
 });
