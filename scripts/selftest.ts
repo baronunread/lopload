@@ -23,6 +23,10 @@ import { ensureMinio, freshBucket } from "../tests/support/minio";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
+/** Not 14320 — that's normal `bun run tauri dev`, and Vite's strictPort makes a
+ * collision fatal. The self-test runs alongside an app you already have open. */
+const SELFTEST_PORT = 14330;
+
 /** Overall time budget: MinIO startup + app boot + all scenarios. Generous —
  * a cold `cargo build` inside `tauri dev` can itself take a couple of
  * minutes the first time. */
@@ -67,8 +71,13 @@ async function main(): Promise<number> {
   const bucket = await freshBucket();
   console.log(`selftest: bucket ${bucket.name} ready at ${bucket.connection.endpoint}`);
 
+  // Its own dev-server port, so running the self-test doesn't require you to
+  // shut down a `bun run tauri dev` you already have open. vite.config.ts reads
+  // LOPLOAD_VITE_PORT (strictPort would otherwise make the collision fatal), and
+  // Tauri needs its devUrl pointed at the same place.
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
+    LOPLOAD_VITE_PORT: String(SELFTEST_PORT),
     VITE_LOPLOAD_SELFTEST: "1",
     VITE_LOPLOAD_SELFTEST_ENDPOINT: bucket.connection.endpoint,
     VITE_LOPLOAD_SELFTEST_BUCKET: bucket.name,
@@ -77,9 +86,15 @@ async function main(): Promise<number> {
     VITE_LOPLOAD_SELFTEST_SECRET_KEY: bucket.credentials.secretKey,
   };
 
-  console.log("selftest: launching `bunx tauri dev`...");
+  console.log(`selftest: launching \`bunx tauri dev\` on port ${SELFTEST_PORT}...`);
   const proc = Bun.spawn({
-    cmd: ["bunx", "tauri", "dev"],
+    cmd: [
+      "bunx",
+      "tauri",
+      "dev",
+      "--config",
+      JSON.stringify({ build: { devUrl: `http://localhost:${SELFTEST_PORT}` } }),
+    ],
     cwd: REPO_ROOT,
     env,
     stdout: "pipe",

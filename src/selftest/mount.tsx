@@ -281,6 +281,27 @@ async function makeWorkdir(host: Host): Promise<string> {
   return dir;
 }
 
+/**
+ * Empties the connection and transfer tables between scenarios.
+ *
+ * Runner A gets this for free — each test builds a fresh nodeHost with fresh
+ * in-memory stores. Here the stores are the app's real SQLite database, and it
+ * lives as long as the process, so without this every scenario inherits the last
+ * one's transfers. A new TransferEngine calls resumePending() on construction
+ * and would faithfully pick those back up, re-running uploads whose local files
+ * and bucket objects are already gone.
+ */
+async function resetStores(host: Host): Promise<void> {
+  const connections = await host.stores.connections();
+  const transfers = await host.stores.transfers();
+  for (const conn of await connections.list()) {
+    for (const transfer of await transfers.list(conn.id)) {
+      await transfers.delete(transfer.id);
+    }
+    await connections.delete(conn.id);
+  }
+}
+
 async function runScenario(
   scenario: Scenario,
   host: Host,
@@ -297,6 +318,7 @@ async function runScenario(
   control.availableUpdate = null;
   resetRecord(record);
   await probe.clear();
+  await resetStores(host);
 
   const workdir = await makeWorkdir(host);
   const services = createRealServices(host);
@@ -314,6 +336,11 @@ async function runScenario(
     { accessKey: env.accessKey, secretKey: env.secretKey },
   );
   await host.settings.setLastConnectionId(CONNECTION_ID);
+
+  // Seed before render: the app lists the current folder once on mount and never
+  // polls, so anything arranged after this point would race that listing and
+  // might never appear. Same ordering Runner A uses — see Scenario.arrange.
+  await scenario.arrange?.(probe);
 
   render(
     <ServicesProvider value={services}>
