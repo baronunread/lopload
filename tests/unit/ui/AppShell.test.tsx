@@ -7,7 +7,7 @@ import { writeFile } from "node:fs/promises";
 
 import { AppShell } from "../../../src/ui/AppShell";
 import { ServicesProvider } from "../../../src/ui/services";
-import { createRealServices, type RealServicesHandle } from "../../../src/services/real";
+import { createAppServices, type Services } from "../../../src/services/appServices";
 import { bucketProbe } from "../../support/bucketProbe";
 import { faultyFetch, type Fault } from "../../support/faultyFetch";
 import { freshBucket } from "../../support/minio";
@@ -19,13 +19,13 @@ afterEach(cleanup);
 const test = (name: string, fn: () => Promise<void>) => bunTest(name, fn, 20_000);
 
 interface TwoConnections {
-  services: RealServicesHandle;
+  services: Services;
   workdir: string;
   dispose(): Promise<void>;
 }
 
 /** Two real, isolated connections — "videos" and "documents" — each backed
- * by its own fresh bucket, sharing one Host/RealServices instance (as the
+ * by its own fresh bucket, sharing one Host/LoploadServices instance (as the
  * app does). Seeds the content and transfers each AppShell test needs. */
 async function twoConnections(): Promise<TwoConnections> {
   const bucketA = await freshBucket(); // videos
@@ -39,7 +39,7 @@ async function twoConnections(): Promise<TwoConnections> {
   ];
   const { host, workdir } = await createNodeHost();
   host.fetch = faultyFetch(host.fetch, faults);
-  const services = createRealServices(host);
+  const services = createAppServices(host);
 
   await services.connections.save(
     {
@@ -112,7 +112,7 @@ async function seedTransfers(setup: TwoConnections): Promise<void> {
 describe("AppShell first run", () => {
   test("zero connections shows the onboarding with the connection form", async () => {
     const { host } = await createNodeHost();
-    const services = createRealServices(host);
+    const services = createAppServices(host);
     try {
       render(
         <ServicesProvider value={services}>
@@ -254,7 +254,7 @@ describe("AppShell manage connections", () => {
   test("removing the last connection returns to the onboarding", async () => {
     const bucket = await freshBucket();
     const { host } = await createNodeHost();
-    const services = createRealServices(host);
+    const services = createAppServices(host);
     try {
       await services.connections.save(
         {

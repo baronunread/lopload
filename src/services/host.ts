@@ -4,7 +4,7 @@
 // Everything below this line (src/lib: the engine, the S3 client, the stores)
 // already takes its dependencies as arguments, and everything above it
 // (src/ui) reaches the world only through AppServices. `Host` closes the last
-// gap: it lets src/services/real.ts — the wiring layer — be constructed
+// gap: it lets src/services/appServices.ts — the wiring layer — be constructed
 // against something other than the webview.
 //
 // Two implementations exist, both real:
@@ -12,7 +12,7 @@
 //   - createNodeHost()   (tests/support/nodeHost.ts)   — bun test
 //
 // Keep this interface narrow. Anything with logic in it belongs in
-// RealServices or src/lib, where it can be tested through both hosts. A
+// LoploadServices or src/lib, where it can be tested through both hosts. A
 // method earns its place here only if it must talk to the OS or the webview.
 import type { FetchFn } from "../lib/s3/http-handler";
 import type { LocalFileWriter } from "../lib/s3/download";
@@ -36,7 +36,7 @@ export interface HostKeychain {
 }
 
 /** Persistence for connections and transfers. Both stores are resolved lazily
- * and memoized by the host, so RealServices can await them freely. */
+ * and memoized by the host, so LoploadServices can await them freely. */
 export interface HostStores {
   connections(): Promise<ConnectionStore>;
   transfers(): Promise<TransferStore>;
@@ -55,7 +55,7 @@ export interface HostFiles {
 }
 
 /** Native file pickers. These return raw paths — turning them into PickedFiles
- * (stat'ing for size, deriving the display name) is RealServices' job, so that
+ * (stat'ing for size, deriving the display name) is LoploadServices' job, so that
  * logic stays testable. */
 export interface HostDialogs {
   /** Multi-select file picker. Empty array when the user cancels. */
@@ -113,7 +113,7 @@ export interface Host {
   updates: HostUpdates;
   notify(title: string, body: string): Promise<void>;
   /** Native drag-and-drop. Emits the raw dropped paths; expanding folders into
-   * files is RealServices' job (see expandDroppedPaths). */
+   * files is LoploadServices' job (see expandDroppedPaths). */
   onFileDrop(cb: (paths: string[]) => void): () => void;
   /** Starts mirroring logs to disk. No-op outside the app. */
   initLogSink(): Promise<void>;

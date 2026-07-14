@@ -1,7 +1,7 @@
 // The test Host: real HTTP, a real temp directory, real bytes on disk.
 //
 // This is the *entire* substitution surface of the test suite. Everything above
-// it — RealServices, the TransferEngine, the S3 client, SigV4 signing, the
+// it — LoploadServices, the TransferEngine, the S3 client, SigV4 signing, the
 // React UI — is the same code the shipped app runs. Nothing here simulates
 // storage or transfers; MinIO does the former and the real engine does the
 // latter.

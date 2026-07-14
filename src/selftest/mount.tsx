@@ -36,7 +36,7 @@ import userEvent from "@testing-library/user-event";
 import { createS3Client } from "../lib/s3/client";
 import { createTauriHost } from "../services/host.tauri";
 import type { Host, TrayStatus, TrayUploadTarget } from "../services/host";
-import { createRealServices } from "../services/real";
+import { createAppServices } from "../services/appServices";
 import { AppShell } from "../ui/AppShell";
 import { ServicesProvider } from "../ui/services";
 import { bucketProbe, type BucketProbe } from "../../tests/support/bucketProbe";
@@ -321,7 +321,7 @@ async function runScenario(
   await resetStores(host);
 
   const workdir = await makeWorkdir(host);
-  const services = createRealServices(host);
+  const services = createAppServices(host);
 
   await services.connections.save(
     {

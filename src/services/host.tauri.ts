@@ -3,7 +3,7 @@
 // This is the only file in the app that imports @tauri-apps/* alongside the
 // engine. It carries no logic — every member is a direct hand-off to a
 // src/tauri wrapper or a Tauri plugin. If you find yourself wanting to write
-// an `if` in here, it belongs in RealServices instead, where both hosts
+// an `if` in here, it belongs in LoploadServices instead, where both hosts
 // exercise it.
 import { invoke } from "@tauri-apps/api/core";
 import { join as joinPath, tempDir } from "@tauri-apps/api/path";
@@ -43,8 +43,15 @@ import type { Host } from "./host";
 
 const log = createLogger("host");
 
+/** True when running inside the Tauri webview (vs. a plain browser tab). Every
+ * member of the Host below needs that webview, so this is the guard that says
+ * whether createTauriHost() can be called at all. */
+export function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 export function createTauriHost(): Host {
-  // One database, resolved once. RealServices awaits these freely, so the
+  // One database, resolved once. LoploadServices awaits these freely, so the
   // memoization has to live here rather than at each call site.
   let dbPromise: ReturnType<typeof loadDatabase> | null = null;
   const getDb = () => (dbPromise ??= loadDatabase());

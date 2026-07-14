@@ -3,11 +3,11 @@
 // single component (SetupForm, Onboarding, TransferWidget, ...) rather than
 // the whole AppShell. See appHarness.ts for the full-app equivalent.
 //
-// Still no fakes: this is the same createRealServices(createNodeHost())
+// Still no fakes: this is the same createAppServices(createNodeHost())
 // construction appHarness.ts does, just without the render() call, so a test
 // can mount whatever piece of UI it actually needs against the same real
 // wiring.
-import { createRealServices, type RealServicesHandle } from "../../src/services/real";
+import { createAppServices, type Services } from "../../src/services/appServices";
 import type { Host } from "../../src/services/host";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
 import { bucketProbe, type BucketProbe } from "./bucketProbe";
@@ -20,9 +20,9 @@ export interface ServiceHarnessOptions {
 }
 
 export interface ServiceHarness {
-  services: RealServicesHandle;
+  services: Services;
   /** The underlying Host — for the rare test that needs to reach a layer
-   * RealServices doesn't expose directly (e.g. writing a connection row
+   * LoploadServices doesn't expose directly (e.g. writing a connection row
    * without a matching keychain entry, to reproduce a denied-prompt gap). */
   host: Host;
   bucket: BucketProbe;
@@ -44,7 +44,7 @@ export async function createServiceHarness(
   const { host, record, control, workdir } = await createNodeHost();
   if (options.wrapFetch) host.fetch = options.wrapFetch(host.fetch);
 
-  const services = createRealServices(host);
+  const services = createAppServices(host);
 
   return {
     services,

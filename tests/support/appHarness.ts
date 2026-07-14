@@ -2,7 +2,7 @@
 // down afterwards.
 //
 // "Real" is meant literally: the AppShell React tree the user sees, wired to
-// RealServices, wired to a TransferEngine, wired to an S3 client that signs
+// LoploadServices, wired to a TransferEngine, wired to an S3 client that signs
 // genuine SigV4 requests to a genuine MinIO. The only substitutions are the
 // Host's (see nodeHost.ts) — the OS surfaces a test can't have.
 import { cleanup, render } from "@testing-library/react";
@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { AppShell } from "../../src/ui/AppShell";
 import { ServicesProvider } from "../../src/ui/services";
-import { createRealServices } from "../../src/services/real";
+import { createAppServices } from "../../src/services/appServices";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
 import { bucketProbe, type BucketProbe } from "./bucketProbe";
 import { freshBucket } from "./minio";
@@ -77,7 +77,7 @@ export async function mountApp(
   // the app lists on mount and never polls.
   await arrange?.(probe);
 
-  const services = createRealServices(host);
+  const services = createAppServices(host);
 
   if (connected) {
     await services.connections.save(

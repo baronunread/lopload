@@ -12,7 +12,7 @@
 // through ctx.expect, which each runner supplies.
 import type { UserEvent } from "@testing-library/user-event";
 
-import type { RealServicesHandle } from "../../src/services/real";
+import type { Services } from "../../src/services/appServices";
 import type { BucketProbe } from "../support/bucketProbe";
 import type { HostControl, HostRecord } from "../support/nodeHost";
 
@@ -29,7 +29,7 @@ export interface Expect {
 
 export interface ScenarioCtx {
   /** The real AppServices — the same object App.tsx hands the UI. */
-  services: RealServicesHandle;
+  services: Services;
   /** Direct bucket access, for arranging state and checking what really landed. */
   bucket: BucketProbe;
   /** The connection the app has been set up with, already saved and selected. */

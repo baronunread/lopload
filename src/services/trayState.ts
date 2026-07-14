@@ -1,5 +1,5 @@
 // Pure logic backing the tray's "Upload files…" submenu (src/tauri/tray.ts +
-// src/services/real.ts glue): deriving its contents from the saved
+// src/services/appServices.ts glue): deriving its contents from the saved
 // connection list. No Tauri imports here so this can be unit tested without
 // a webview.
 import type { Connection } from "../lib/types";

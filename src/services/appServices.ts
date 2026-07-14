@@ -1,10 +1,13 @@
-// Real AppServices implementation, wiring the framework-free engine
-// (src/lib) into the shape the UI expects (src/ui/services.ts).
+// The app's wiring layer: it implements AppServices (src/ui/services.ts) on top
+// of the framework-free engine (src/lib). There is exactly one implementation —
+// this one. (It used to be called real.ts, back when a hand-written fake sat
+// beside it. The fake is gone, and with it the only reason the word "real"
+// meant anything here.)
 //
-// It reaches the outside world only through a Host (src/services/host.ts) —
-// the narrow platform boundary. That's what lets this file, the app's whole
-// wiring layer, run unchanged in `bun test` against a Node host and inside
-// the real webview against the Tauri host. It imports no @tauri-apps/*.
+// It reaches the outside world only through a Host (src/services/host.ts) — the
+// narrow platform boundary — which is what lets this file, the whole wiring
+// layer, run unchanged in `bun test` against a Node host and inside the real
+// webview against the Tauri host. It imports no @tauri-apps/*.
 //
 // Kept deliberately "boring": every UI-facing method is a thin adapter that
 // resolves a per-connection S3Client/TransferEngine (lazily, cached) and
@@ -70,11 +73,6 @@ const TRASH_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
  * to outlive a single render — no reason to hand out a long-lived link. */
 const THUMBNAIL_URL_EXPIRY_SECONDS = 60 * 60;
 
-/** True when running inside the Tauri webview (vs. a plain browser tab). */
-export function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
 /** Detects whether a remote key names a "folder" (trailing slash), per the
  * convention listEntries() uses when synthesizing folder entries. */
 function isFolderKey(key: string): boolean {
@@ -93,7 +91,7 @@ function renameKey(fromKey: string, newName: string): string {
   return folder ? `${parent}${newName}/` : `${parent}${newName}`;
 }
 
-class RealServices implements AppServices {
+class LoploadServices implements AppServices {
   constructor(private readonly host: Host) {}
 
   /** Cached per-connection S3 clients, invalidated on credential/connection changes. */
@@ -769,7 +767,7 @@ class RealServices implements AppServices {
 }
 
 /** AppServices plus the teardown hook only a test caller needs. */
-export interface RealServicesHandle extends AppServices {
+export interface Services extends AppServices {
   dispose(): Promise<void>;
 }
 
@@ -777,8 +775,8 @@ export interface RealServicesHandle extends AppServices {
  * createTauriHost() (and does so once — see src/App.tsx); tests pass
  * createNodeHost() and build a fresh one per scenario, calling dispose()
  * afterwards. */
-export function createRealServices(host: Host): RealServicesHandle {
-  const services = new RealServices(host);
+export function createAppServices(host: Host): Services {
+  const services = new LoploadServices(host);
   services.startTrashSweep();
   services.startTrayUploadListening();
   void host.initLogSink();
