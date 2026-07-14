@@ -1,116 +1,95 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mockClient } from "aws-sdk-client-mock";
-import {
-  GetObjectCommand,
-  HeadObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
+import { describe, expect, test, beforeAll } from "bun:test";
+import { stat } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { TransferEngine } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
-import { md5Hex } from "../../src/lib/md5";
 import type { LocalFileWriter } from "../../src/lib/s3/download";
-import type { LocalFileReader } from "../../src/lib/s3/multipart";
-import type { EngineEvent } from "../../src/lib/types";
+import type { EngineEvent, Transfer } from "../../src/lib/types";
 import { DEFAULT_TUNING } from "../../src/lib/tuning";
+import { createS3Client } from "../../src/lib/s3/client";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { freshBucket, type Bucket } from "../support/minio";
+import { bucketProbe } from "../support/bucketProbe";
+import { faultyFetch } from "../support/faultyFetch";
+import { localFileReader, localFileWriter } from "../support/localFiles";
+import { nativeFetch } from "../setup";
 
-const client = new S3Client({
-  region: "us-east-1",
-  credentials: { accessKeyId: "ak", secretAccessKey: "sk" },
+let bucket: Bucket;
+let workdir: string;
+
+beforeAll(async () => {
+  bucket = await freshBucket();
+  workdir = await mkdtemp(join(tmpdir(), "lopload-engine-download-test-"));
 });
-const s3Mock = mockClient(client);
 
-beforeEach(() => {
-  s3Mock.reset();
-});
-
-function q(hex: string): string {
-  return `"${hex}"`;
+function clientWith(fetchFn: FetchFn = nativeFetch) {
+  return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
-function makeReader(files: Record<string, Uint8Array>): LocalFileReader {
-  return {
-    async size(path) {
-      return files[path]?.length ?? 0;
-    },
-    async readChunk(path, offset, length) {
-      const bytes = files[path] ?? new Uint8Array(0);
-      return bytes.slice(offset, offset + length);
-    },
+function urlOf(input: Parameters<FetchFn>[0]): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+/** Wraps a FetchFn so requests matching `match` hang until the request's own
+ * AbortSignal fires, then reject the way a real aborted fetch does. This is
+ * the real-storage equivalent of the old mock's "hang, then reject on
+ * abort" pattern — there's no `Fault` for it (faultyFetch's faults either
+ * complete or fail immediately), so it lives here rather than in
+ * tests/support. `onStart` fires when a matching request begins, so tests
+ * can wait for the real request to actually be in flight before cancelling. */
+function hangUntilAborted(
+  inner: FetchFn,
+  match: (url: string, method: string) => boolean,
+  onStart?: () => void,
+): FetchFn {
+  return async (input, init) => {
+    const url = urlOf(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (!match(url, method)) return inner(input, init);
+    onStart?.();
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      const onAbort = () => {
+        const err = new Error("Request aborted");
+        err.name = "AbortError";
+        reject(err);
+      };
+      if (!signal) return; // no signal on this request: hangs for the test's duration
+      if (signal.aborted) return onAbort();
+      signal.addEventListener("abort", onAbort);
+    });
   };
 }
 
-/** In-memory fake writer, so download tests never touch a real filesystem. */
-function makeWriter() {
-  const committed = new Map<string, Uint8Array>();
+/** Wraps the real localFileWriter, recording every discard() call — so
+ * cancel/dismiss cleanup can be asserted on without a fake in-memory writer. */
+function instrumentedWriter(): { writer: LocalFileWriter; discarded: string[] } {
   const discarded: string[] = [];
-  const staging = new Map<string, Uint8Array[]>();
-
-  const allocated = new Map<string, Uint8Array>();
-
   const writer: LocalFileWriter = {
-    tempPathFor(finalPath) {
-      return `${finalPath}.tmp`;
-    },
-    async writeChunk(tempPath, chunk, isFirst) {
-      if (isFirst || !staging.has(tempPath)) staging.set(tempPath, []);
-      staging.get(tempPath)!.push(chunk);
-    },
-    async commit(tempPath, finalPath) {
-      const buffer = allocated.get(tempPath);
-      if (buffer) {
-        committed.set(finalPath, buffer);
-        allocated.delete(tempPath);
-        return;
-      }
-      const chunks = staging.get(tempPath) ?? [];
-      const total = chunks.reduce((n, c) => n + c.length, 0);
-      const out = new Uint8Array(total);
-      let offset = 0;
-      for (const c of chunks) {
-        out.set(c, offset);
-        offset += c.length;
-      }
-      committed.set(finalPath, out);
-      staging.delete(tempPath);
-    },
+    ...localFileWriter,
     async discard(tempPath) {
       discarded.push(tempPath);
-      staging.delete(tempPath);
-      allocated.delete(tempPath);
-    },
-    async allocate(tempPath, size) {
-      allocated.set(tempPath, new Uint8Array(size));
-      staging.delete(tempPath);
-    },
-    async writeAt(tempPath, offset, chunk) {
-      const buffer = allocated.get(tempPath);
-      if (!buffer) throw new Error(`writeAt before allocate: ${tempPath}`);
-      buffer.set(chunk, offset);
-    },
-    async sizeOf(tempPath) {
-      const buffer = allocated.get(tempPath);
-      if (buffer) return buffer.length;
-      const chunks = staging.get(tempPath);
-      if (!chunks) return null;
-      return chunks.reduce((n, c) => n + c.length, 0);
+      await localFileWriter.discard(tempPath);
     },
   };
-
-  return { writer, committed, discarded };
+  return { writer, discarded };
 }
 
-function bodyStreamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitUntil timed out");
@@ -121,32 +100,28 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<vo
 describe("TransferEngine — download state machine", () => {
   test("queued -> sending -> checking -> downloaded, verified and committed", async () => {
     const body = new TextEncoder().encode("remote file contents");
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q(await md5Hex(body)),
-      ContentLength: body.length,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("remote/a.txt", body);
 
     const store = new MemoryTransferStore();
-    const { writer, committed } = makeWriter();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
-      writer,
+      reader: localFileReader,
+      writer: localFileWriter,
       store,
     });
     engine.subscribe((e) => events.push(e));
 
+    const localPath = join(workdir, "a.txt");
     const [transfer] = await engine.enqueueDownloads([
-      { key: "remote/a.txt", localPath: "/local/a.txt", size: body.length },
+      { key: "remote/a.txt", localPath, size: body.length },
     ]);
 
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "downloaded");
 
-    expect(committed.get("/local/a.txt")).toEqual(body);
+    expect(new Uint8Array(await Bun.file(localPath).arrayBuffer())).toEqual(body);
     const persisted = await store.get(transfer.id);
     expect(persisted?.state).toEqual({ kind: "downloaded" });
     expect(persisted?.direction).toBe("download");
@@ -165,25 +140,26 @@ describe("TransferEngine — download state machine", () => {
 
   test("checksum mismatch -> failed with errorClass verification, sticky", async () => {
     const body = new TextEncoder().encode("remote file contents");
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q("f".repeat(32)),
-      ContentLength: body.length,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("remote/b.txt", body);
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        { urlContains: "remote/b.txt", method: "GET", action: { kind: "corruptEtag" } },
+      ]),
+    );
 
     const store = new MemoryTransferStore();
-    const { writer, committed } = makeWriter();
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
-      writer,
+      reader: localFileReader,
+      writer: localFileWriter,
       store,
     });
 
+    const localPath = join(workdir, "b.txt");
     const [transfer] = await engine.enqueueDownloads([
-      { key: "remote/b.txt", localPath: "/local/b.txt", size: body.length },
+      { key: "remote/b.txt", localPath, size: body.length },
     ]);
 
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
@@ -191,38 +167,32 @@ describe("TransferEngine — download state machine", () => {
       kind: "failed",
       errorClass: "verification",
     });
-    expect(committed.size).toBe(0);
+    expect(await fileExists(localPath)).toBe(false);
   });
 
   test("mixed upload+download batch reports both counts on batch-finished", async () => {
     const uploadBody = new TextEncoder().encode("upload me");
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(uploadBody)) });
+    await Bun.write(join(workdir, "up.txt"), uploadBody);
     const downloadBody = new TextEncoder().encode("download me");
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(downloadBody) as never,
-      ETag: q(await md5Hex(downloadBody)),
-      ContentLength: downloadBody.length,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("down.txt", downloadBody);
 
     const store = new MemoryTransferStore();
-    const { writer } = makeWriter();
-    const reader = makeReader({ "/local/up.txt": uploadBody });
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
-      writer,
+      reader: localFileReader,
+      writer: localFileWriter,
       store,
     });
     engine.subscribe((e) => events.push(e));
 
     const [upTransfer] = await engine.enqueue([
-      { localPath: "/local/up.txt", size: uploadBody.length, key: "up.txt" },
+      { localPath: join(workdir, "up.txt"), size: uploadBody.length, key: "up.txt" },
     ]);
     const [downTransfer] = await engine.enqueueDownloads([
-      { key: "down.txt", localPath: "/local/down.txt", size: downloadBody.length },
+      { key: "down.txt", localPath: join(workdir, "down.txt"), size: downloadBody.length },
     ]);
 
     await waitUntil(
@@ -240,22 +210,23 @@ describe("TransferEngine — cancel", () => {
   test("cancelling a queued (not-yet-started) transfer drops it without ever running it", async () => {
     // Concurrency 1 + a first upload that hangs forever keeps the second
     // transfer sitting in "queued" so cancel() can target it deterministically.
-    s3Mock.on(PutObjectCommand).callsFake(() => new Promise(() => {}));
+    const client = clientWith(hangUntilAborted(nativeFetch, (_url, m) => m === "PUT"));
+    await Bun.write(join(workdir, "1.txt"), new Uint8Array([1]));
+    await Bun.write(join(workdir, "2.txt"), new Uint8Array([2]));
 
     const store = new MemoryTransferStore();
-    const reader = makeReader({ "/local/1.txt": new Uint8Array([1]), "/local/2.txt": new Uint8Array([2]) });
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 1 }),
     });
 
     const [first, second] = await engine.enqueue([
-      { localPath: "/local/1.txt", size: 1, key: "1.txt" },
-      { localPath: "/local/2.txt", size: 1, key: "2.txt" },
+      { localPath: join(workdir, "1.txt"), size: 1, key: "1.txt" },
+      { localPath: join(workdir, "2.txt"), size: 1, key: "2.txt" },
     ]);
 
     await waitUntil(() => engine.getTransfer(first.id)?.state.kind === "sending");
@@ -269,42 +240,39 @@ describe("TransferEngine — cancel", () => {
   });
 
   test("cancelling an in-flight upload aborts it, drops it from the engine, and never persists a failed state", async () => {
-    let rejectPut!: (err: unknown) => void;
-    const hangingPut = new Promise<never>((_, reject) => {
-      rejectPut = reject;
-    });
-    // If the abort lands before the SDK consumes the promise, the rejection
-    // would otherwise surface as an unhandled error in this test.
-    hangingPut.catch(() => {});
-    s3Mock.on(PutObjectCommand).callsFake(() => hangingPut);
+    let started = 0;
+    const client = clientWith(
+      hangUntilAborted(
+        nativeFetch,
+        (url, m) => m === "PUT" && url.includes("slow.txt"),
+        () => started++,
+      ),
+    );
+    await Bun.write(join(workdir, "slow.txt"), new Uint8Array([1, 2, 3]));
 
     const store = new MemoryTransferStore();
-    const reader = makeReader({ "/local/slow.txt": new Uint8Array([1, 2, 3]) });
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
     });
     engine.subscribe((e) => events.push(e));
 
     const [transfer] = await engine.enqueue([
-      { localPath: "/local/slow.txt", size: 3, key: "slow.txt" },
+      { localPath: join(workdir, "slow.txt"), size: 3, key: "slow.txt" },
     ]);
     // "Sending" state now lands before the PUT is actually issued (hash
-    // setup is async) — wait for the request itself so the cancel really
-    // aborts an in-flight upload.
-    await waitUntil(() => s3Mock.commandCalls(PutObjectCommand).length > 0);
+    // setup is async) — wait for the real request itself so the cancel
+    // really aborts an in-flight upload.
+    await waitUntil(() => started > 0);
 
     await engine.cancel(transfer.id);
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
 
-    // Simulate the abort actually tearing down the in-flight request.
-    const abortErr = new Error("Request aborted");
-    abortErr.name = "AbortError";
-    rejectPut(abortErr);
+    // Give the real, now-aborted fetch a moment to actually reject.
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Still gone — never resurrected into a sticky "failed" transfer.
@@ -319,54 +287,55 @@ describe("TransferEngine — cancel", () => {
   });
 
   test("cancelling an in-flight download discards its temp file and never persists a failed state", async () => {
-    let rejectGet!: (err: unknown) => void;
-    const hangingGet = new Promise<never>((_, reject) => {
-      rejectGet = reject;
-    });
-    s3Mock.on(GetObjectCommand).callsFake(() => hangingGet);
+    let started = 0;
+    await bucketProbe(bucket.client, bucket.name).put("slow.bin", new Uint8Array(100));
+    const client = clientWith(
+      hangUntilAborted(
+        nativeFetch,
+        (url, m) => m === "GET" && url.includes("slow.bin"),
+        () => started++,
+      ),
+    );
 
     const store = new MemoryTransferStore();
-    const { writer, discarded } = makeWriter();
+    const { writer, discarded } = instrumentedWriter();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       writer,
       store,
     });
     engine.subscribe((e) => events.push(e));
 
+    const localPath = join(workdir, "slow.bin");
     const [transfer] = await engine.enqueueDownloads([
-      { key: "slow.bin", localPath: "/local/slow.bin", size: 100 },
+      { key: "slow.bin", localPath, size: 100 },
     ]);
-    await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "sending");
+    await waitUntil(() => started > 0);
 
     await engine.cancel(transfer.id);
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
 
-    const abortErr = new Error("Request aborted");
-    abortErr.name = "AbortError";
-    rejectGet(abortErr);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitUntil(() => discarded.length > 0);
 
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
     expect(events.some((e) => e.type === "transfer-updated" && e.transfer.state.kind === "failed")).toBe(
       false,
     );
-    // Cancelling always asks the writer to clean up, even here where GetObject
-    // rejected before a byte was staged: the engine can't tell how far the
-    // download got, and cancelling deletes the transfer's row (and with it the
-    // part rows resume needs), so anything already on disk is unresumable
-    // litter. discard() is best-effort and no-ops on a file that was never
-    // created.
-    expect(discarded).toEqual(["/local/slow.bin.tmp"]);
+    // Cancelling always asks the writer to clean up, even here where the
+    // GET was still hanging when cancelled: the engine can't tell how far
+    // the download got, and cancelling deletes the transfer's row (and with
+    // it the part rows resume needs), so anything already on disk is
+    // unresumable litter. discard() is best-effort and no-ops on a file that
+    // was never created.
+    expect(discarded).toEqual([writer.tempPathFor(localPath)]);
 
     const persisted = await store.get(transfer.id);
     expect(persisted).toBeNull();
   });
-
 });
 
 /**
@@ -381,61 +350,69 @@ describe("TransferEngine — download temp-file cleanup", () => {
   const MiB = 1024 * 1024;
 
   test("cancelling a ranged download removes the temp file it was resuming from", async () => {
-    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: 32 * MiB, ETag: q("etag-not-md5") });
-    let rejectGet!: (err: unknown) => void;
-    const hangingGet = new Promise<never>((_, reject) => {
-      rejectGet = reject;
-    });
-    s3Mock.on(GetObjectCommand).callsFake(() => hangingGet);
+    // Big enough (and enough connections, per DEFAULT_TUNING) to take the
+    // ranged path — the one that keeps its temp file on abort.
+    const body = new Uint8Array(32 * MiB);
+    await bucketProbe(bucket.client, bucket.name).put("big.bin", body);
+
+    let started = 0;
+    const client = clientWith(
+      hangUntilAborted(
+        nativeFetch,
+        (url, m) => m === "GET" && url.includes("big.bin"),
+        () => started++,
+      ),
+    );
 
     const store = new MemoryTransferStore();
-    const { writer, discarded } = makeWriter();
+    const { writer, discarded } = instrumentedWriter();
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       writer,
       store,
     });
 
-    // Big enough (and enough connections, per DEFAULT_TUNING) to take the
-    // ranged path — the one that keeps its temp file on abort.
+    const localPath = join(workdir, "big.bin");
     const [transfer] = await engine.enqueueDownloads([
-      { key: "big.bin", localPath: "/local/big.bin", size: 32 * MiB },
+      { key: "big.bin", localPath, size: body.length },
     ]);
 
-    // Wait for all four range workers to be parked on their GET, not just for
-    // the transfer to read "sending": the mocked client ignores abort signals,
-    // so a worker that hasn't issued its GET yet would exit on the aborted
-    // signal instead and leave nobody awaiting the hanging promise below.
-    await waitUntil(() => s3Mock.commandCalls(GetObjectCommand).length === 4);
+    // Wait for all four range workers (DEFAULT_TUNING.downloadConnections)
+    // to actually have their GET in flight before cancelling, so the abort
+    // really tears down in-flight requests rather than racing workers that
+    // hadn't started yet.
+    await waitUntil(() => started === DEFAULT_TUNING.downloadConnections);
 
     await engine.cancel(transfer.id);
-    const abortErr = new Error("Request aborted");
-    abortErr.name = "AbortError";
-    rejectGet(abortErr);
 
-    await waitUntil(() => discarded.includes("/local/big.bin.tmp"));
+    await waitUntil(() => discarded.includes(writer.tempPathFor(localPath)));
     expect(await store.get(transfer.id)).toBeNull();
   });
 
   test("dismissing a failed download removes the temp file it kept for a retry", async () => {
-    s3Mock.on(GetObjectCommand).rejects(new Error("network went away"));
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        { urlContains: "gone.bin", method: "GET", action: { kind: "networkError", message: "network went away" } },
+      ]),
+    );
 
     const store = new MemoryTransferStore();
-    const { writer, discarded } = makeWriter();
+    const { writer, discarded } = instrumentedWriter();
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       writer,
       store,
     });
 
+    const localPath = join(workdir, "gone.bin");
     const [transfer] = await engine.enqueueDownloads([
-      { key: "gone.bin", localPath: "/local/gone.bin", size: 100 },
+      { key: "gone.bin", localPath, size: 100 },
     ]);
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
 
@@ -447,13 +424,14 @@ describe("TransferEngine — download temp-file cleanup", () => {
 
     // Dismissing is the user saying they're done with it. The row goes, so the
     // bytes can never be resumed from and have to go too.
-    expect(discarded).toEqual(["/local/gone.bin.tmp"]);
+    expect(discarded).toEqual([writer.tempPathFor(localPath)]);
     expect(await store.get(transfer.id)).toBeNull();
   });
 
   test("a download interrupted by the app quitting doesn't leave its temp file behind", async () => {
     const store = new MemoryTransferStore();
-    const { writer, discarded } = makeWriter();
+    const { writer, discarded } = instrumentedWriter();
+    const localPath = join(workdir, "quit.bin");
 
     // A row still marked "sending" in the store is what a download that was
     // running when the app quit looks like on the next launch.
@@ -461,7 +439,7 @@ describe("TransferEngine — download temp-file cleanup", () => {
       id: "t-1",
       connectionId: "conn-1",
       key: "big.bin",
-      localPath: "/local/big.bin",
+      localPath,
       size: 32 * MiB,
       partSize: 8 * MiB,
       direction: "download",
@@ -471,10 +449,10 @@ describe("TransferEngine — download temp-file cleanup", () => {
     });
 
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       writer,
       store,
     });
@@ -484,17 +462,17 @@ describe("TransferEngine — download temp-file cleanup", () => {
     // which drops the part rows resume would need — so the half-written file
     // is dead weight rather than something to resume from.
     expect(await store.get("t-1")).toBeNull();
-    expect(discarded).toEqual(["/local/big.bin.tmp"]);
+    expect(discarded).toEqual([writer.tempPathFor(localPath)]);
   });
 
   test("leaves an upload's row alone — only downloads stage into a temp file", async () => {
     const store = new MemoryTransferStore();
-    const { writer, discarded } = makeWriter();
+    const { writer, discarded } = instrumentedWriter();
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       writer,
       store,
     });
@@ -503,7 +481,7 @@ describe("TransferEngine — download temp-file cleanup", () => {
       id: "u-1",
       connectionId: "conn-1",
       key: "up.bin",
-      localPath: "/local/up.bin",
+      localPath: join(workdir, "up.bin"),
       size: 10,
       partSize: 8 * MiB,
       direction: "upload",

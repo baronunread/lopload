@@ -1,39 +1,44 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mockClient } from "aws-sdk-client-mock";
-import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { describe, expect, test, beforeAll } from "bun:test";
+import { mkdtemp, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import {
-  downloadTransfer,
-  type LocalFileWriter,
-} from "../../src/lib/s3/download";
-import { md5Hex } from "../../src/lib/md5";
+import { downloadTransfer } from "../../src/lib/s3/download";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
-import type { LocalFileReader } from "../../src/lib/s3/multipart";
 import type { Transfer } from "../../src/lib/types";
+import { createS3Client } from "../../src/lib/s3/client";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { freshBucket, type Bucket } from "../support/minio";
+import { bucketProbe } from "../support/bucketProbe";
+import { faultyFetch } from "../support/faultyFetch";
+import { localFileReader, localFileWriter } from "../support/localFiles";
+import { nativeFetch } from "../setup";
 
-/** Streaming-path tests never touch the store or read the temp back; these
- * exist to satisfy DownloadDeps (used only by the ranged path). */
-function extraDeps() {
-  const reader: LocalFileReader = {
-    async size() {
-      return 0;
-    },
-    async readChunk() {
-      return new Uint8Array(0);
-    },
-  };
-  return { store: new MemoryTransferStore(), reader };
+let bucket: Bucket;
+let workdir: string;
+
+beforeAll(async () => {
+  bucket = await freshBucket();
+  workdir = await mkdtemp(join(tmpdir(), "lopload-download-test-"));
+});
+
+function clientWith(fetchFn: FetchFn = nativeFetch) {
+  return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
-const client = new S3Client({
-  region: "us-east-1",
-  credentials: { accessKeyId: "ak", secretAccessKey: "sk" },
-});
-const s3Mock = mockClient(client);
+let fileCounter = 0;
+function freshLocalPath(name: string): string {
+  return join(workdir, `${fileCounter++}-${name}`);
+}
 
-beforeEach(() => {
-  s3Mock.reset();
-});
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
   const now = Date.now();
@@ -41,7 +46,7 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
     id: overrides.id ?? "transfer-1",
     connectionId: "conn-1",
     key: "path/to/file.bin",
-    localPath: "/local/dest/file.bin",
+    localPath: freshLocalPath("file.bin"),
     size: 10,
     direction: "download",
     state: { kind: "sending", percent: 0 },
@@ -51,154 +56,109 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
   };
 }
 
-function q(hex: string): string {
-  return `"${hex}"`;
-}
-
-/** In-memory fake writer recording exactly what would land on disk, so tests
- * can assert on temp-file staging + commit/discard without touching the
- * filesystem. */
-function makeWriter() {
-  const committed = new Map<string, Uint8Array>();
+/** Instruments the real localFileWriter, recording discard() calls, so
+ * cleanup can be asserted on without an in-memory fake writer. */
+function trackedWriter() {
   const discarded: string[] = [];
-  const staging = new Map<string, Uint8Array[]>();
-
-  const allocated = new Map<string, Uint8Array>();
-
-  const writer: LocalFileWriter = {
-    tempPathFor(finalPath) {
-      return `${finalPath}.tmp`;
-    },
-    async writeChunk(tempPath, chunk, isFirst) {
-      if (isFirst || !staging.has(tempPath)) staging.set(tempPath, []);
-      staging.get(tempPath)!.push(chunk);
-    },
-    async commit(tempPath, finalPath) {
-      const buffer = allocated.get(tempPath);
-      if (buffer) {
-        committed.set(finalPath, buffer);
-        allocated.delete(tempPath);
-        return;
-      }
-      const chunks = staging.get(tempPath) ?? [];
-      const total = chunks.reduce((n, c) => n + c.length, 0);
-      const out = new Uint8Array(total);
-      let offset = 0;
-      for (const c of chunks) {
-        out.set(c, offset);
-        offset += c.length;
-      }
-      committed.set(finalPath, out);
-      staging.delete(tempPath);
-    },
-    async discard(tempPath) {
+  const writer = {
+    ...localFileWriter,
+    async discard(tempPath: string) {
       discarded.push(tempPath);
-      staging.delete(tempPath);
-      allocated.delete(tempPath);
-    },
-    async allocate(tempPath, size) {
-      allocated.set(tempPath, new Uint8Array(size));
-      staging.delete(tempPath);
-    },
-    async writeAt(tempPath, offset, chunk) {
-      const buffer = allocated.get(tempPath);
-      if (!buffer) throw new Error(`writeAt before allocate: ${tempPath}`);
-      buffer.set(chunk, offset);
-    },
-    async sizeOf(tempPath) {
-      const buffer = allocated.get(tempPath);
-      if (buffer) return buffer.length;
-      const chunks = staging.get(tempPath);
-      if (!chunks) return null;
-      return chunks.reduce((n, c) => n + c.length, 0);
+      await localFileWriter.discard(tempPath);
     },
   };
-
-  return { writer, committed, discarded };
-}
-
-function bodyStreamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
+  return { writer, discarded };
 }
 
 describe("downloadTransfer — single-GET path", () => {
   test("happy path: plain MD5 ETag matches downloaded bytes → resolves and commits", async () => {
     const body = new TextEncoder().encode("hello world");
-    const expectedMd5 = md5Hex(body);
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q(expectedMd5),
-      ContentLength: body.length,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("single/happy.txt", body);
 
-    const transfer = makeTransfer({ size: body.length });
-    const { writer, committed, discarded } = makeWriter();
+    const transfer = makeTransfer({ key: "single/happy.txt", size: body.length });
+    const { writer, discarded } = trackedWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() }),
+      downloadTransfer(transfer, {
+        client: clientWith(),
+        bucket: bucket.name,
+        writer,
+        reader: localFileReader,
+        store: new MemoryTransferStore(),
+      }),
     ).resolves.toBeUndefined();
 
-    expect(committed.get(transfer.localPath)).toEqual(body);
+    expect(new Uint8Array(await Bun.file(transfer.localPath).arrayBuffer())).toEqual(body);
     expect(discarded).toHaveLength(0);
   });
 
   test("ETag mismatch → VerificationError, temp file discarded, nothing committed", async () => {
     const body = new TextEncoder().encode("hello world");
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q("0".repeat(32)),
-      ContentLength: body.length,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("single/mismatch.txt", body);
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        { urlContains: "single/mismatch.txt", method: "GET", action: { kind: "corruptEtag" } },
+      ]),
+    );
 
-    const transfer = makeTransfer({ size: body.length });
-    const { writer, committed, discarded } = makeWriter();
+    const transfer = makeTransfer({ key: "single/mismatch.txt", size: body.length });
+    const { writer, discarded } = trackedWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() }),
+      downloadTransfer(transfer, {
+        client,
+        bucket: bucket.name,
+        writer,
+        reader: localFileReader,
+        store: new MemoryTransferStore(),
+      }),
     ).rejects.toThrow(/checksum/);
-    expect(committed.size).toBe(0);
-    expect(discarded).toEqual([`${transfer.localPath}.tmp`]);
+    expect(await fileExists(transfer.localPath)).toBe(false);
+    expect(discarded).toEqual([writer.tempPathFor(transfer.localPath)]);
   });
 
   test("size mismatch (truncated stream) → VerificationError", async () => {
     const body = new TextEncoder().encode("hello world");
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q("deadbeefdeadbeefdeadbeefdeadbeef"),
-      ContentLength: body.length + 5,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("single/truncated.txt", body);
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        {
+          urlContains: "single/truncated.txt",
+          method: "GET",
+          action: { kind: "truncateBody", bytes: body.length - 3 },
+        },
+      ]),
+    );
 
-    const transfer = makeTransfer({ size: body.length + 5 });
-    const { writer, committed } = makeWriter();
+    const transfer = makeTransfer({ key: "single/truncated.txt", size: body.length });
+    const { writer } = trackedWriter();
 
     await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() }),
+      downloadTransfer(transfer, {
+        client,
+        bucket: bucket.name,
+        writer,
+        reader: localFileReader,
+        store: new MemoryTransferStore(),
+      }),
     ).rejects.toThrow(/size/);
-    expect(committed.size).toBe(0);
+    expect(await fileExists(transfer.localPath)).toBe(false);
   });
 
   test("reports progress as bytes are received", async () => {
     const body = new Uint8Array(1000).fill(7);
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q(md5Hex(body)),
-      ContentLength: body.length,
-    });
+    await bucketProbe(bucket.client, bucket.name).put("single/progress.bin", body);
 
-    const transfer = makeTransfer({ size: body.length });
-    const { writer } = makeWriter();
+    const transfer = makeTransfer({ key: "single/progress.bin", size: body.length });
+    const { writer } = trackedWriter();
     const progressCalls: Array<[number, number]> = [];
 
     await downloadTransfer(transfer, {
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       writer,
-      ...extraDeps(),
+      reader: localFileReader,
+      store: new MemoryTransferStore(),
       onProgress: (received, total) => progressCalls.push([received, total]),
     });
 
@@ -208,37 +168,51 @@ describe("downloadTransfer — single-GET path", () => {
 
   test("zero-byte file still materializes and commits an empty file", async () => {
     const body = new Uint8Array(0);
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: bodyStreamOf(body) as never,
-      ETag: q(md5Hex(body)),
-      ContentLength: 0,
+    await bucketProbe(bucket.client, bucket.name).put("single/empty.bin", body);
+
+    const transfer = makeTransfer({ key: "single/empty.bin", size: 0 });
+    const { writer } = trackedWriter();
+
+    await downloadTransfer(transfer, {
+      client: clientWith(),
+      bucket: bucket.name,
+      writer,
+      reader: localFileReader,
+      store: new MemoryTransferStore(),
     });
-
-    const transfer = makeTransfer({ size: 0 });
-    const { writer, committed } = makeWriter();
-
-    await downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps() });
-    expect(committed.get(transfer.localPath)).toEqual(body);
+    expect(new Uint8Array(await Bun.file(transfer.localPath).arrayBuffer())).toEqual(body);
   });
 
   test("aborting via the signal rejects and discards the temp file", async () => {
+    await bucketProbe(bucket.client, bucket.name).put("single/abort.bin", new Uint8Array(10));
     const controller = new AbortController();
-    s3Mock.on(GetObjectCommand).callsFake(() => {
-      controller.abort();
-      const err = new Error("Request aborted");
-      err.name = "AbortError";
-      return Promise.reject(err);
+    // Stall long enough that abort() reliably lands before the real GET
+    // would otherwise complete over loopback.
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        { urlContains: "single/abort.bin", method: "GET", action: { kind: "stall", ms: 200 } },
+      ]),
+    );
+
+    const transfer = makeTransfer({ key: "single/abort.bin" });
+    const { writer, discarded } = trackedWriter();
+
+    const done = downloadTransfer(transfer, {
+      client,
+      bucket: bucket.name,
+      writer,
+      reader: localFileReader,
+      store: new MemoryTransferStore(),
+      signal: controller.signal,
     });
+    queueMicrotask(() => controller.abort());
 
-    const transfer = makeTransfer();
-    const { writer, committed, discarded } = makeWriter();
-
-    await expect(
-      downloadTransfer(transfer, { client, bucket: "b", writer, ...extraDeps(), signal: controller.signal }),
-    ).rejects.toThrow();
-    expect(committed.size).toBe(0);
-    // No bytes were ever staged in this case (GetObject itself rejected),
-    // so nothing needed to be removed — the writer must not have committed.
+    await expect(done).rejects.toThrow();
+    expect(await fileExists(transfer.localPath)).toBe(false);
+    // No bytes were ever staged in this case (GetObject itself rejected, a
+    // single client.send() the engine never gets past to the try/catch that
+    // calls discard()), so nothing needed to be removed — the writer must
+    // not have committed.
     expect(discarded).toEqual([]);
   });
 });

@@ -1,13 +1,4 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mockClient } from "aws-sdk-client-mock";
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  HeadObjectCommand,
-  ListObjectsV2Command,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
+import { describe, expect, test, beforeAll } from "bun:test";
 
 import {
   copyLink,
@@ -17,16 +8,39 @@ import {
   listEntries,
   testConnection,
 } from "../../src/lib/s3/client";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { freshBucket, type Bucket } from "../support/minio";
+import { bucketProbe } from "../support/bucketProbe";
+import { faultyFetch } from "../support/faultyFetch";
+import { nativeFetch } from "../setup";
 
-const client = new S3Client({
-  region: "us-east-1",
-  credentials: { accessKeyId: "test-access-key", secretAccessKey: "test-secret-key" },
-});
-const s3Mock = mockClient(client);
+let bucket: Bucket;
 
-beforeEach(() => {
-  s3Mock.reset();
+beforeAll(async () => {
+  bucket = await freshBucket();
 });
+
+function clientWith(fetchFn: FetchFn = nativeFetch) {
+  return createS3Client(bucket.connection, bucket.credentials, fetchFn);
+}
+
+/** Runs `fn` over `items` with at most `limit` in flight — used to create
+ * hundreds of real objects quickly without opening thousands of concurrent
+ * sockets against local MinIO. */
+async function mapPool<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+}
 
 describe("createS3Client", () => {
   test("uses forcePathStyle and the injected fetch", () => {
@@ -53,84 +67,85 @@ describe("createS3Client", () => {
 
 describe("listEntries", () => {
   test("synthesizes folders from CommonPrefixes with no trailing slash", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      CommonPrefixes: [{ Prefix: "videos/" }, { Prefix: "docs/" }],
-      Contents: [
-        { Key: "readme.txt", Size: 12, LastModified: new Date(1000) },
-        // The zero-byte folder marker for the prefix itself must not appear as a file.
-        { Key: "", Size: 0 },
-      ],
-      IsTruncated: false,
-    });
+    const probe = bucketProbe(bucket.client, bucket.name);
+    // "videos/" and "docs/" only become real CommonPrefixes once something
+    // real lives under them — a bare zero-byte marker at the prefix itself
+    // doesn't create a delimiter boundary the way a nested key does.
+    await probe.put("list1/readme.txt", new Uint8Array(12));
+    await probe.put("list1/videos/clip1.mov", new Uint8Array([1, 2, 3]));
+    await probe.put("list1/docs/readme.md", new Uint8Array([1, 2, 3]));
 
-    const entries = await listEntries(client, "my-bucket", "");
+    const entries = await listEntries(clientWith(), bucket.name, "list1/");
 
     const folders = entries.filter((e) => e.kind === "folder");
-    expect(folders.map((f) => f.name)).toEqual(["videos", "docs"]);
+    expect(folders.map((f) => f.name).sort()).toEqual(["docs", "videos"]);
     for (const f of folders) {
       expect(f.name.endsWith("/")).toBe(false);
       expect(f.key.endsWith("/")).toBe(true);
     }
 
     const files = entries.filter((e) => e.kind === "file");
-    expect(files).toEqual([
-      { kind: "file", name: "readme.txt", key: "readme.txt", size: 12, lastModified: 1000 },
-    ]);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({
+      kind: "file",
+      name: "readme.txt",
+      key: "list1/readme.txt",
+      size: 12,
+    });
+    // lastModified is whatever MinIO really stamped the object with — a real
+    // clock, not a value we can pin to an exact epoch the way the old mock did.
+    expect(typeof (files[0] as { lastModified?: number }).lastModified).toBe("number");
   });
 
   test("nested folder name strips full prefix path, not just trailing slash", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      CommonPrefixes: [{ Prefix: "videos/2024/" }],
-      Contents: [],
-      IsTruncated: false,
-    });
-    const entries = await listEntries(client, "my-bucket", "videos/");
-    expect(entries).toEqual([
-      { kind: "folder", name: "2024", key: "videos/2024/" },
-    ]);
+    const probe = bucketProbe(bucket.client, bucket.name);
+    await probe.put("list2/videos/2024/photo.jpg", new Uint8Array([1]));
+
+    const entries = await listEntries(clientWith(), bucket.name, "list2/videos/");
+    expect(entries).toEqual([{ kind: "folder", name: "2024", key: "list2/videos/2024/" }]);
   });
 
   test("paginates via ContinuationToken", async () => {
-    s3Mock
-      .on(ListObjectsV2Command)
-      .resolvesOnce({
-        Contents: [{ Key: "a.txt", Size: 1 }],
-        IsTruncated: true,
-        NextContinuationToken: "token-2",
-      })
-      .resolvesOnce({
-        Contents: [{ Key: "b.txt", Size: 2 }],
-        IsTruncated: false,
-      });
+    const probe = bucketProbe(bucket.client, bucket.name);
+    // Real ListObjectsV2 defaults to a 1000-key page — this forces a genuine
+    // second page rather than asserting against a scripted mock response.
+    const KEYS = 1200;
+    const prefix = "list3/";
+    await mapPool(
+      Array.from({ length: KEYS }, (_, i) => i),
+      100,
+      (i) => probe.put(`${prefix}f${String(i).padStart(5, "0")}.txt`, new Uint8Array(0)),
+    );
 
-    const entries = await listEntries(client, "my-bucket", "");
-    expect(entries.map((e) => e.name)).toEqual(["a.txt", "b.txt"]);
-  });
+    const entries = await listEntries(clientWith(), bucket.name, prefix);
+    expect(entries).toHaveLength(KEYS);
+    expect(entries.every((e) => e.kind === "file")).toBe(true);
+  }, 30_000);
 });
 
 describe("createFolder", () => {
   test("creates a zero-byte key ending in /", async () => {
-    s3Mock.on(PutObjectCommand).resolves({});
-    await createFolder(client, "my-bucket", "new-folder");
-    const calls = s3Mock.commandCalls(PutObjectCommand);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args[0].input.Key).toBe("new-folder/");
-    expect(calls[0].args[0].input.Body).toEqual(new Uint8Array(0));
+    await createFolder(clientWith(), bucket.name, "listing/new-folder");
+
+    const probe = bucketProbe(bucket.client, bucket.name);
+    expect(await probe.get("listing/new-folder/")).toEqual(new Uint8Array(0));
   });
 });
 
 describe("deleteFile", () => {
   test("issues a DeleteObjectCommand for the given key", async () => {
-    s3Mock.on(DeleteObjectCommand).resolves({});
-    await deleteFile(client, "my-bucket", "a/b.txt");
-    const calls = s3Mock.commandCalls(DeleteObjectCommand);
-    expect(calls[0].args[0].input).toEqual({ Bucket: "my-bucket", Key: "a/b.txt" });
+    const probe = bucketProbe(bucket.client, bucket.name);
+    await probe.put("listing/a/b.txt", new Uint8Array([1, 2, 3]));
+
+    await deleteFile(clientWith(), bucket.name, "listing/a/b.txt");
+
+    expect(await probe.has("listing/a/b.txt")).toBe(false);
   });
 });
 
 describe("copyLink", () => {
   test("returns a presigned GET URL with the requested expiry", async () => {
-    const url = await copyLink(client, "my-bucket", "a/b.txt", 3600);
+    const url = await copyLink(clientWith(), bucket.name, "a/b.txt", 3600);
     expect(url).toContain("a/b.txt");
     expect(url).toContain("X-Amz-Expires=");
     const expiresMatch = url.match(/X-Amz-Expires=(\d+)/);
@@ -138,7 +153,7 @@ describe("copyLink", () => {
   });
 
   test("caps the expiry at SigV4's 7-day hard maximum", async () => {
-    const url = await copyLink(client, "my-bucket", "a/b.txt", 30 * 24 * 60 * 60);
+    const url = await copyLink(clientWith(), bucket.name, "a/b.txt", 30 * 24 * 60 * 60);
     const expiresMatch = url.match(/X-Amz-Expires=(\d+)/);
     expect(expiresMatch?.[1]).toBe(String(7 * 24 * 60 * 60));
   });
@@ -146,21 +161,22 @@ describe("copyLink", () => {
 
 describe("testConnection", () => {
   test("small write + read + delete succeeds", async () => {
-    s3Mock.on(PutObjectCommand).resolves({});
-    s3Mock.on(HeadObjectCommand).resolves({});
-    s3Mock.on(DeleteObjectCommand).resolves({});
-
-    const result = await testConnection(client, "my-bucket");
+    const result = await testConnection(clientWith(), bucket.name);
     expect(result.ok).toBe(true);
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);
-    expect(s3Mock.commandCalls(DeleteObjectCommand)).toHaveLength(1);
   });
 
   test("failure returns a PlainError, never throws", async () => {
-    s3Mock.on(PutObjectCommand).rejects({ name: "AccessDenied" });
-    s3Mock.on(DeleteObjectCommand).resolves({});
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        {
+          urlContains: ".lopload-connection-test-",
+          method: "PUT",
+          action: { kind: "s3Error", status: 403, code: "AccessDenied", message: "Access Denied" },
+        },
+      ]),
+    );
 
-    const result = await testConnection(client, "my-bucket");
+    const result = await testConnection(client, bucket.name);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.errorClass).toBe("credentials");

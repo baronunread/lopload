@@ -1,11 +1,12 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mockClient } from "aws-sdk-client-mock";
+import { describe, expect, test, beforeAll } from "bun:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   HeadObjectCommand,
   ListPartsCommand,
-  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -14,25 +15,28 @@ import {
   PART_SIZE,
   VerificationError,
   uploadTransfer,
-  type LocalFileReader,
 } from "../../src/lib/s3/multipart";
-import { md5Hex, bytesToHex, compositeEtag } from "../../src/lib/md5";
+import { compositeEtag } from "../../src/lib/md5";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
 import type { Transfer } from "../../src/lib/types";
+import { createS3Client } from "../../src/lib/s3/client";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { freshBucket, type Bucket } from "../support/minio";
+import { faultyFetch } from "../support/faultyFetch";
+import { localFileReader } from "../support/localFiles";
+import { nativeFetch } from "../setup";
 
-const client = new S3Client({
-  region: "us-east-1",
-  credentials: { accessKeyId: "ak", secretAccessKey: "sk" },
+let bucket: Bucket;
+let workdir: string;
+
+beforeAll(async () => {
+  bucket = await freshBucket();
+  workdir = await mkdtemp(join(tmpdir(), "lopload-multipart-test-"));
 });
-const s3Mock = mockClient(client);
 
-function q(hex: string): string {
-  return `"${hex}"`;
+function clientWith(fetchFn: FetchFn = nativeFetch) {
+  return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
-
-beforeEach(() => {
-  s3Mock.reset();
-});
 
 function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
   const now = Date.now();
@@ -51,55 +55,58 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
   };
 }
 
-function makeReader(bytes: Uint8Array): LocalFileReader {
-  return {
-    async size() {
-      return bytes.length;
-    },
-    async readChunk(_path, offset, length) {
-      return bytes.slice(offset, offset + length);
-    },
-  };
+async function writeLocalFile(name: string, body: Uint8Array): Promise<string> {
+  const path = join(workdir, name);
+  await writeFile(path, body);
+  return path;
 }
 
 describe("uploadTransfer — single-part (ETag/MD5) verification", () => {
   test("happy path: ETag matches local MD5 → resolves", async () => {
     const body = new TextEncoder().encode("hello world");
-    const reader = makeReader(body);
-    const expectedMd5 = await md5Hex(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(expectedMd5) });
-
-    const transfer = makeTransfer({ size: body.length });
+    const path = await writeLocalFile("hello.txt", body);
+    const transfer = makeTransfer({ key: "single/hello.txt", localPath: path, size: body.length });
 
     await expect(
-      uploadTransfer(transfer, { client, bucket: "b", reader, store: new MemoryTransferStore() }),
+      uploadTransfer(transfer, {
+        client: clientWith(),
+        bucket: bucket.name,
+        reader: localFileReader,
+        store: new MemoryTransferStore(),
+      }),
     ).resolves.toBeUndefined();
   });
 
   test("ETag mismatch → VerificationError", async () => {
     const body = new TextEncoder().encode("hello world");
-    const reader = makeReader(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q("f".repeat(32)) });
-
-    const transfer = makeTransfer({ size: body.length });
+    const path = await writeLocalFile("mismatch.txt", body);
+    const transfer = makeTransfer({ key: "single/mismatch.txt", localPath: path, size: body.length });
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        { urlContains: "single/mismatch.txt", method: "PUT", action: { kind: "corruptEtag" } },
+      ]),
+    );
 
     await expect(
-      uploadTransfer(transfer, { client, bucket: "b", reader, store: new MemoryTransferStore() }),
+      uploadTransfer(transfer, {
+        client,
+        bucket: bucket.name,
+        reader: localFileReader,
+        store: new MemoryTransferStore(),
+      }),
     ).rejects.toBeInstanceOf(VerificationError);
   });
 
   test("reports progress while reading chunks", async () => {
     const body = new Uint8Array(1000).fill(7);
-    const reader = makeReader(body);
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
-
-    const transfer = makeTransfer({ size: body.length });
+    const path = await writeLocalFile("progress.bin", body);
+    const transfer = makeTransfer({ key: "single/progress.bin", localPath: path, size: body.length });
     const progressCalls: Array<[number, number]> = [];
 
     await uploadTransfer(transfer, {
-      client,
-      bucket: "b",
-      reader,
+      client: clientWith(),
+      bucket: bucket.name,
+      reader: localFileReader,
       store: new MemoryTransferStore(),
       onProgress: (sent, total) => progressCalls.push([sent, total]),
     });
@@ -111,31 +118,33 @@ describe("uploadTransfer — single-part (ETag/MD5) verification", () => {
 
 describe("uploadTransfer — multipart", () => {
   const partSize = 8 * 1024 * 1024;
-  const body = new Uint8Array(partSize * 2 + 1).fill(42); // 16MB+1 > MULTIPART_THRESHOLD
+  const bodySize = partSize * 2 + 1; // 16MB+1 > MULTIPART_THRESHOLD
+
+  function makeBigBody(): Uint8Array {
+    // Not all-zero: a real per-part MD5 must differ per part for the
+    // composite-ETag verification to be a meaningful check rather than one
+    // that would pass even if parts were silently swapped.
+    const body = new Uint8Array(bodySize);
+    for (let i = 0; i < body.length; i += 4096) body[i] = (i / 4096) % 256;
+    return body;
+  }
 
   test("creates upload, uploads parts, completes, and verifies composite ETag", async () => {
-    const partEtag = "d41d8cd98f00b204e9800998ecf8427e";
-    s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-123" });
-    s3Mock.on(ListPartsCommand).resolves({ Parts: [] });
-    s3Mock.on(UploadPartCommand).resolves({ ETag: q(partEtag) });
-    s3Mock.on(CompleteMultipartUploadCommand).resolves({});
-    const composite = await compositeEtag([partEtag, partEtag, partEtag]);
-    s3Mock.on(HeadObjectCommand).resolves({
-      ETag: q(composite),
-      ContentLength: body.length,
-    });
-
+    const body = makeBigBody();
+    const path = await writeLocalFile("multi-1.bin", body);
     const store = new MemoryTransferStore();
     const transfer = makeTransfer({
       id: "multi-1",
+      key: "multipart/multi-1.bin",
+      localPath: path,
       size: body.length,
       partSize,
     });
 
     await uploadTransfer(transfer, {
-      client,
-      bucket: "b",
-      reader: makeReader(body),
+      client: clientWith(),
+      bucket: bucket.name,
+      reader: localFileReader,
       store,
     });
 
@@ -144,29 +153,22 @@ describe("uploadTransfer — multipart", () => {
   });
 
   test("clears the persisted uploadId once CompleteMultipartUpload succeeds", async () => {
-    const partEtag = "d41d8cd98f00b204e9800998ecf8427e";
-    s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-789" });
-    s3Mock.on(ListPartsCommand).resolves({ Parts: [] });
-    s3Mock.on(UploadPartCommand).resolves({ ETag: q(partEtag) });
-    s3Mock.on(CompleteMultipartUploadCommand).resolves({});
-    const composite = await compositeEtag([partEtag, partEtag, partEtag]);
-    s3Mock.on(HeadObjectCommand).resolves({
-      ETag: q(composite),
-      ContentLength: body.length,
-    });
-
+    const body = makeBigBody();
+    const path = await writeLocalFile("multi-clear.bin", body);
     const store = new MemoryTransferStore();
     const transfer = makeTransfer({
       id: "multi-clear",
+      key: "multipart/multi-clear.bin",
+      localPath: path,
       size: body.length,
       partSize,
     });
 
     expect(transfer.uploadId).toBeUndefined();
     await uploadTransfer(transfer, {
-      client,
-      bucket: "b",
-      reader: makeReader(body),
+      client: clientWith(),
+      bucket: bucket.name,
+      reader: localFileReader,
       store,
     });
 
@@ -180,39 +182,67 @@ describe("uploadTransfer — multipart", () => {
   });
 
   test("skips already-uploaded parts (server truth)", async () => {
-    const serverEtag = "ab56b4d92b40713acc5af89985d4b786";
-    const newEtag = "d41d8cd98f00b204e9800998ecf8427e";
-    s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "upload-456" });
-    s3Mock.on(ListPartsCommand).resolves({
-      Parts: [
-        { PartNumber: 1, ETag: q(serverEtag), Size: partSize },
-      ],
+    const body = makeBigBody();
+    const path = await writeLocalFile("multi-skip.bin", body);
+    const key = "multipart/multi-skip.bin";
+
+    // Arrange a real, already-in-progress multipart upload with part 1
+    // already landed server-side — done directly against MinIO (not
+    // through uploadTransfer) so the app's own ListPartsCommand call sees
+    // genuine server truth to skip against, rather than a mocked response.
+    const raw = new S3Client({
+      endpoint: bucket.connection.endpoint,
+      region: bucket.connection.region,
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: bucket.credentials.accessKey,
+        secretAccessKey: bucket.credentials.secretKey,
+      },
     });
-    s3Mock.on(UploadPartCommand).resolves({ ETag: q(newEtag) });
-    const composite = await compositeEtag([serverEtag, newEtag, newEtag]);
-    s3Mock.on(HeadObjectCommand).resolves({
-      ETag: q(composite),
-      ContentLength: body.length,
-    });
+    const created = await raw.send(new CreateMultipartUploadCommand({ Bucket: bucket.name, Key: key }));
+    const uploadId = created.UploadId!;
+    await raw.send(
+      new UploadPartCommand({
+        Bucket: bucket.name,
+        Key: key,
+        UploadId: uploadId,
+        PartNumber: 1,
+        Body: body.slice(0, partSize),
+      }),
+    );
 
     const store = new MemoryTransferStore();
     const transfer = makeTransfer({
       id: "multi-skip",
+      key,
+      localPath: path,
       size: body.length,
       partSize,
+      uploadId,
     });
 
     await expect(
       uploadTransfer(transfer, {
-        client,
-        bucket: "b",
-        reader: makeReader(body),
+        client: clientWith(),
+        bucket: bucket.name,
+        reader: localFileReader,
         store,
       }),
     ).resolves.toBeUndefined();
+
+    const parts = await store.listParts("multi-skip");
+    expect(parts.map((p) => p.partNumber).sort()).toEqual([1, 2, 3]);
   });
 });
 
+// The "parallel multipart (partsInFlight)" suite below drives uploadTransfer
+// against a hand-rolled fake S3Client (not aws-sdk-client-mock, and not the
+// old fakeS3Bucket) to observe internal worker-pool concurrency and abort
+// wiring precisely — real concurrent requests against MinIO would complete
+// too fast over loopback to deterministically observe "exactly N in flight"
+// or "abort mid-flight" without reintroducing the same kind of fake this
+// migration removes elsewhere. It doesn't touch aws-sdk-client-mock, so it
+// needs no migration and is left exactly as it was.
 describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
   // Small sizes: setting uploadId forces the multipart path regardless of
   // MULTIPART_THRESHOLD, so tests stay fast and memory-light.
@@ -222,6 +252,17 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
 
   function partEtagHex(n: number): string {
     return n.toString(16).padStart(32, "0");
+  }
+
+  function makeReader(bytes: Uint8Array) {
+    return {
+      async size() {
+        return bytes.length;
+      },
+      async readChunk(_path: string, offset: number, length: number) {
+        return bytes.slice(offset, offset + length);
+      },
+    };
   }
 
   interface FakeSendOptions {
@@ -265,7 +306,7 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
 
   async function headFor(partNumbers: number[]) {
     return {
-      ETag: q(await compositeEtag(partNumbers.map(partEtagHex))),
+      ETag: `"${await compositeEtag(partNumbers.map(partEtagHex))}"`,
       ContentLength: body.length,
     };
   }
@@ -292,7 +333,7 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
         if (inFlight === 3) release();
         await allInFlight;
         inFlight -= 1;
-        return { ETag: q(partEtagHex(input.PartNumber ?? 0)) };
+        return { ETag: `"${partEtagHex(input.PartNumber ?? 0)}"` };
       },
       head: await headFor([1, 2, 3]),
     });
@@ -319,7 +360,7 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
         maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((r) => setTimeout(r, 1));
         inFlight -= 1;
-        return { ETag: q(partEtagHex(input.PartNumber ?? 0)) };
+        return { ETag: `"${partEtagHex(input.PartNumber ?? 0)}"` };
       },
       head: await headFor([1, 2, 3]),
     });
@@ -347,7 +388,7 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
         const n = input.PartNumber ?? 0;
         await new Promise((r) => setTimeout(r, delays[n]));
         completedOrder.push(n);
-        return { ETag: q(partEtagHex(n)) };
+        return { ETag: `"${partEtagHex(n)}"` };
       },
       onComplete: (input) => {
         completeParts = input.MultipartUpload?.Parts;
@@ -367,7 +408,7 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
     expect(completedOrder).toEqual([3, 2, 1]);
     expect(completeParts?.map((p) => p.PartNumber)).toEqual([1, 2, 3]);
     expect(completeParts?.map((p) => p.ETag)).toEqual(
-      [1, 2, 3].map((n) => q(partEtagHex(n))),
+      [1, 2, 3].map((n) => `"${partEtagHex(n)}"`),
     );
     // headFor([1, 2, 3]) resolving also proves compositeEtag used sorted order.
   });
@@ -442,9 +483,9 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
       onUploadPart: async (input) => {
         const n = input.PartNumber ?? 0;
         uploaded.push(n);
-        return { ETag: q(partEtagHex(n)) };
+        return { ETag: `"${partEtagHex(n)}"` };
       },
-      serverParts: [{ PartNumber: 1, ETag: q(partEtagHex(1)), Size: partSize }],
+      serverParts: [{ PartNumber: 1, ETag: `"${partEtagHex(1)}"`, Size: partSize }],
       head: await headFor([1, 2, 3]),
     });
 
