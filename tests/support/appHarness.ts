@@ -1,0 +1,116 @@
+// Assembles a running instance of the real app for one scenario, and tears it
+// down afterwards.
+//
+// "Real" is meant literally: the AppShell React tree the user sees, wired to
+// RealServices, wired to a TransferEngine, wired to an S3 client that signs
+// genuine SigV4 requests to a genuine MinIO. The only substitutions are the
+// Host's (see nodeHost.ts) — the OS surfaces a test can't have.
+import { cleanup, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { createElement } from "react";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import { AppShell } from "../../src/ui/AppShell";
+import { ServicesProvider } from "../../src/ui/services";
+import { createRealServices } from "../../src/services/real";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { bucketProbe } from "./bucketProbe";
+import { freshBucket } from "./minio";
+import { createNodeHost } from "./nodeHost";
+import type { Expect, ScenarioCtx } from "../scenarios/types";
+
+export interface HarnessOptions {
+  /** Save a connection and select it before mounting. Default true; onboarding
+   * scenarios want false so the app comes up on its first-run screen. */
+  connected?: boolean;
+  /** Wrap the host's fetch — used by fault-injection scenarios (see faultyFetch.ts). */
+  wrapFetch?: (inner: FetchFn) => FetchFn;
+}
+
+export interface Harness extends ScenarioCtx {
+  dispose(): Promise<void>;
+}
+
+const CONNECTION_ID = "test-connection";
+
+/**
+ * Waits until `check` stops throwing. Scenarios lean on this constantly:
+ * everything the app does now involves real I/O, so almost nothing is true
+ * on the next tick.
+ */
+export async function waitFor(
+  check: () => void | Promise<void>,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      await check();
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw lastError ?? new Error("waitFor timed out");
+}
+
+export async function mountApp(
+  expect: Expect,
+  options: HarnessOptions = {},
+): Promise<Harness> {
+  const { connected = true, wrapFetch } = options;
+
+  const bucket = await freshBucket();
+  const { host, record, control, workdir } = await createNodeHost();
+
+  if (wrapFetch) host.fetch = wrapFetch(host.fetch);
+
+  const services = createRealServices(host);
+
+  if (connected) {
+    await services.connections.save(
+      {
+        id: CONNECTION_ID,
+        name: "Test Storage",
+        endpoint: bucket.connection.endpoint,
+        bucket: bucket.name,
+        region: bucket.connection.region,
+        lastPrefix: "",
+        createdAt: Date.now(),
+      },
+      bucket.credentials,
+    );
+  }
+
+  render(
+    createElement(ServicesProvider, { value: services }, createElement(AppShell)),
+  );
+
+  return {
+    services,
+    bucket: bucketProbe(bucket.client, bucket.name),
+    connectionId: CONNECTION_ID,
+    workdir,
+    control,
+    record,
+    user: userEvent.setup(),
+    expect,
+    waitFor,
+
+    async makeLocalFile(name, bytes) {
+      const path = join(workdir, name);
+      await writeFile(path, bytes);
+      return path;
+    },
+
+    async dispose() {
+      cleanup();
+      // Without this the trash sweep keeps a 24h interval alive and goes on
+      // polling a bucket this scenario is about to stop caring about.
+      services.dispose();
+    },
+  };
+}

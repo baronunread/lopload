@@ -1,7 +1,17 @@
 import "./App.css";
 import { AppShell } from "./ui/AppShell";
 import { ServicesProvider } from "./ui/services";
-import { createRealServices, isTauriRuntime } from "./services/real";
+import { createTauriHost } from "./services/host.tauri";
+import { createRealServices, isTauriRuntime, type RealServicesHandle } from "./services/real";
+
+// Built at most once for the life of the process: RealServices caches S3
+// clients and TransferEngines, and starts the trash sweep — a second instance
+// would resume the same pending transfers on its own engine. Lazily, because
+// createTauriHost() only works inside the webview.
+let services: RealServicesHandle | null = null;
+function getServices(): RealServicesHandle {
+  return (services ??= createRealServices(createTauriHost()));
+}
 
 function App() {
   // Real services (SQLite + keychain + S3 + TransferEngine) only work inside
@@ -20,7 +30,7 @@ function App() {
   }
 
   return (
-    <ServicesProvider value={createRealServices()}>
+    <ServicesProvider value={getServices()}>
       <AppShell />
     </ServicesProvider>
   );

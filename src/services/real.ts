@@ -1,20 +1,18 @@
 // Real AppServices implementation, wiring the framework-free engine
-// (src/lib) and the thin Tauri wrappers (src/tauri) into the shape the UI
-// expects (src/ui/services.ts). This is the only file that should know
-// about *both* the engine internals and the Tauri APIs at once.
+// (src/lib) into the shape the UI expects (src/ui/services.ts).
+//
+// It reaches the outside world only through a Host (src/services/host.ts) —
+// the narrow platform boundary. That's what lets this file, the app's whole
+// wiring layer, run unchanged in `bun test` against a Node host and inside
+// the real webview against the Tauri host. It imports no @tauri-apps/*.
 //
 // Kept deliberately "boring": every UI-facing method is a thin adapter that
 // resolves a per-connection S3Client/TransferEngine (lazily, cached) and
 // calls straight into src/lib. Anything with real logic (folder-drop
 // expansion) is factored out into a pure, separately-unit-tested module.
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { readDir, size as fileSize, stat } from "@tauri-apps/plugin-fs";
-import { join as joinPath, tempDir } from "@tauri-apps/api/path";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { S3Client } from "@aws-sdk/client-s3";
 
+import type { Host } from "./host";
 import type {
   Connection,
   ConnectionStore,
@@ -48,32 +46,8 @@ import {
 } from "../lib/s3/client";
 import { sweepTrash } from "../lib/s3/trashSweep";
 import { abortStaleUploads } from "../lib/s3/orphanSweep";
-import {
-  loadDatabase,
-  SqliteConnectionStore,
-  SqliteTransferStore,
-} from "../lib/stores/sqlite";
-import { keychainDelete, keychainGet, keychainSet } from "../tauri/keychain";
-import { tauriFetch } from "../tauri/http";
-import { initFileLogSink } from "../tauri/logSink";
-import { tauriFileReader, tauriFileWriter } from "../tauri/fs";
-import {
-  onUploadFilesRequested,
-  setTrayConnections,
-  setTrayStatus,
-} from "../tauri/tray";
 import { deriveTrayUploadTargets } from "./trayState";
-import { checkForUpdate, downloadUpdate, relaunchApp } from "../tauri/updater";
-import {
-  isAutoUpdateEnabled as settingsIsAutoUpdateEnabled,
-  setAutoUpdateEnabled as settingsSetAutoUpdateEnabled,
-  getDefaultDownloadDir as settingsGetDefaultDownloadDir,
-  setDefaultDownloadDir as settingsSetDefaultDownloadDir,
-  getTransferTuning as settingsGetTransferTuning,
-  setTransferTuning as settingsSetTransferTuning,
-  getLastConnectionId as settingsGetLastConnectionId,
-  setLastConnectionId as settingsSetLastConnectionId,
-} from "../tauri/settings";
+
 import { isImageName, isVideoName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
 import type {
@@ -120,9 +94,7 @@ function renameKey(fromKey: string, newName: string): string {
 }
 
 class RealServices implements AppServices {
-  private dbPromise: ReturnType<typeof loadDatabase> | null = null;
-  private connectionStorePromise: Promise<ConnectionStore> | null = null;
-  private transferStorePromise: Promise<TransferStore> | null = null;
+  constructor(private readonly host: Host) {}
 
   /** Cached per-connection S3 clients, invalidated on credential/connection changes. */
   private clients = new Map<string, S3Client>();
@@ -142,6 +114,7 @@ class RealServices implements AppServices {
   private activeMoves = new Map<string, MoveProgress>();
 
   private trashSweepStarted = false;
+  private trashSweepTimer: ReturnType<typeof setInterval> | null = null;
   private trayUploadListening = false;
 
   /** In-memory copy of the persisted transfer tuning, lazily loaded on
@@ -155,7 +128,7 @@ class RealServices implements AppServices {
   private async ensureTuningLoaded(): Promise<void> {
     if (this.tuningLoaded) return;
     if (!this.tuningLoadPromise) {
-      this.tuningLoadPromise = settingsGetTransferTuning().then((t) => {
+      this.tuningLoadPromise = this.host.settings.getTransferTuning().then((t) => {
         this.tuning = t;
         this.tuningLoaded = true;
       });
@@ -163,27 +136,12 @@ class RealServices implements AppServices {
     await this.tuningLoadPromise;
   }
 
-  private async getDb() {
-    if (!this.dbPromise) this.dbPromise = loadDatabase();
-    return this.dbPromise;
+  private getConnectionStore(): Promise<ConnectionStore> {
+    return this.host.stores.connections();
   }
 
-  private async getConnectionStore(): Promise<ConnectionStore> {
-    if (!this.connectionStorePromise) {
-      this.connectionStorePromise = this.getDb().then(
-        (db) => new SqliteConnectionStore(db),
-      );
-    }
-    return this.connectionStorePromise;
-  }
-
-  private async getTransferStore(): Promise<TransferStore> {
-    if (!this.transferStorePromise) {
-      this.transferStorePromise = this.getDb().then(
-        (db) => new SqliteTransferStore(db),
-      );
-    }
-    return this.transferStorePromise;
+  private getTransferStore(): Promise<TransferStore> {
+    return this.host.stores.transfers();
   }
 
   private async getClient(connectionId: string): Promise<{ client: S3Client; conn: Connection }> {
@@ -192,9 +150,9 @@ class RealServices implements AppServices {
     if (!conn) throw new Error(`Unknown connection: ${connectionId}`);
     let client = this.clients.get(connectionId);
     if (!client) {
-      const credentials = await keychainGet(connectionId);
+      const credentials = await this.host.keychain.get(connectionId);
       if (!credentials) throw new CredentialsUnreadableError(connectionId);
-      client = createS3Client(conn, credentials, tauriFetch);
+      client = createS3Client(conn, credentials, this.host.fetch);
       this.clients.set(connectionId, client);
     }
     return { client, conn };
@@ -228,8 +186,8 @@ class RealServices implements AppServices {
       client,
       bucket: conn.bucket,
       connectionId,
-      reader: tauriFileReader,
-      writer: tauriFileWriter,
+      reader: this.host.files.reader,
+      writer: this.host.files.writer,
       store,
       tuning: () => this.tuning,
     });
@@ -289,7 +247,7 @@ class RealServices implements AppServices {
   private updateTrayProgress(): void {
     const { uploading, totalBytes, doneBytes } = this.computeTrayAggregate();
     const fraction = uploading > 0 && totalBytes > 0 ? doneBytes / totalBytes : null;
-    void invoke("tray_set_progress", { fraction }).catch(() => {});
+    this.host.tray.setProgress(fraction);
   }
 
   /** Pushes the tray menu's status line, "Retry failed" count, and
@@ -297,7 +255,7 @@ class RealServices implements AppServices {
   private updateTrayStatus(): void {
     const { uploading, totalBytes, doneBytes, failed } = this.computeTrayAggregate();
     const percent = uploading > 0 && totalBytes > 0 ? (doneBytes / totalBytes) * 100 : 0;
-    setTrayStatus({ uploading, percent, failed });
+    this.host.tray.setStatus({ uploading, percent, failed });
   }
 
   private findEngineFor(transferId: string): TransferEngine | undefined {
@@ -312,7 +270,7 @@ class RealServices implements AppServices {
   private async refreshTrayConnections(): Promise<void> {
     const store = await this.getConnectionStore();
     const list = await store.list();
-    setTrayConnections(deriveTrayUploadTargets(list));
+    this.host.tray.setConnections(deriveTrayUploadTargets(list));
   }
 
   /** Listens once for a per-connection "Upload files…" tray click: opens the
@@ -322,7 +280,7 @@ class RealServices implements AppServices {
   startTrayUploadListening(): void {
     if (this.trayUploadListening) return;
     this.trayUploadListening = true;
-    onUploadFilesRequested((connectionId) => {
+    this.host.tray.onUploadFilesRequested((connectionId) => {
       void this.handleTrayUpload(connectionId);
     });
   }
@@ -341,13 +299,13 @@ class RealServices implements AppServices {
     list: async (): Promise<Connection[]> => {
       const store = await this.getConnectionStore();
       const list = await store.list();
-      setTrayConnections(deriveTrayUploadTargets(list));
+      this.host.tray.setConnections(deriveTrayUploadTargets(list));
       return list;
     },
     save: async (conn: Connection, credentials: Credentials): Promise<void> => {
       const store = await this.getConnectionStore();
       await store.save(conn);
-      await keychainSet(conn.id, credentials);
+      await this.host.keychain.set(conn.id, credentials);
       this.invalidateConnection(conn.id);
       await this.refreshTrayConnections();
     },
@@ -356,7 +314,7 @@ class RealServices implements AppServices {
       await store.delete(id);
       // A missing/broken keychain entry must never make a connection
       // undeletable — the row is already gone, so finish the cleanup.
-      await keychainDelete(id).catch(() => {});
+      await this.host.keychain.delete(id).catch(() => {});
       this.invalidateConnection(id);
       await this.refreshTrayConnections();
     },
@@ -584,7 +542,7 @@ class RealServices implements AppServices {
         const client = createS3Client(
           { endpoint: draft.endpoint, region: draft.region },
           { accessKey: draft.accessKey, secretKey: draft.secretKey },
-          tauriFetch,
+          this.host.fetch,
         );
         const result = await s3TestConnection(client, draft.bucket);
         if (result.ok) {
@@ -600,62 +558,57 @@ class RealServices implements AppServices {
 
   // ---- UpdatesService ----
   updates = {
-    checkForUpdate: (): Promise<string | null> => checkForUpdate(),
-    downloadUpdate: (onProgress: (percent: number) => void): Promise<void> =>
-      downloadUpdate(onProgress),
-    relaunchApp: (): Promise<void> => relaunchApp(),
-    isAutoUpdateEnabled: (): Promise<boolean> => settingsIsAutoUpdateEnabled(),
-    setAutoUpdateEnabled: (enabled: boolean): Promise<void> => settingsSetAutoUpdateEnabled(enabled),
+    checkForUpdate: (): Promise<string | null> => this.host.updates.checkForUpdate(),
+    installAndRelaunch: (): Promise<void> => this.host.updates.installAndRelaunch(),
+    isAutoUpdateEnabled: (): Promise<boolean> => this.host.settings.isAutoUpdateEnabled(),
+    setAutoUpdateEnabled: (enabled: boolean): Promise<void> =>
+      this.host.settings.setAutoUpdateEnabled(enabled),
   };
 
   // ---- SettingsService ----
   settings = {
-    getDefaultDownloadDir: (): Promise<string | null> => settingsGetDefaultDownloadDir(),
-    setDefaultDownloadDir: (path: string | null): Promise<void> => settingsSetDefaultDownloadDir(path),
-    getTransferTuning: (): Promise<TransferTuning> => settingsGetTransferTuning(),
+    getDefaultDownloadDir: (): Promise<string | null> =>
+      this.host.settings.getDefaultDownloadDir(),
+    setDefaultDownloadDir: (path: string | null): Promise<void> =>
+      this.host.settings.setDefaultDownloadDir(path),
+    getTransferTuning: (): Promise<TransferTuning> => this.host.settings.getTransferTuning(),
     setTransferTuning: async (tuning: TransferTuning): Promise<void> => {
-      await settingsSetTransferTuning(tuning);
+      await this.host.settings.setTransferTuning(tuning);
       this.tuning = tuning;
       this.tuningLoaded = true;
     },
-    getLastConnectionId: (): Promise<string | null> => settingsGetLastConnectionId(),
-    setLastConnectionId: (id: string): Promise<void> => settingsSetLastConnectionId(id),
+    getLastConnectionId: (): Promise<string | null> => this.host.settings.getLastConnectionId(),
+    setLastConnectionId: (id: string): Promise<void> =>
+      this.host.settings.setLastConnectionId(id),
   };
 
   // ---- misc AppServices members ----
 
   async pickFiles(): Promise<PickedFile[]> {
-    const selection = await openDialog({ multiple: true, directory: false });
-    if (!selection) return [];
-    const paths = Array.isArray(selection) ? selection : [selection];
+    const paths = await this.host.dialogs.pickFiles();
     const files: PickedFile[] = [];
     for (const path of paths) {
-      const size = await fileSize(path);
+      const size = await this.host.files.size(path);
       files.push({ path, name: path.split(/[/\\]/).pop() ?? path, size });
     }
     return files;
   }
 
   async pickSaveDestination(defaultName: string): Promise<string | null> {
-    const downloadDir = await settingsGetDefaultDownloadDir();
-    const defaultPath = downloadDir ? await joinPath(downloadDir, defaultName) : defaultName;
-    const destination = await saveDialog({ defaultPath });
-    return destination ?? null;
+    const downloadDir = await this.host.settings.getDefaultDownloadDir();
+    const defaultPath = downloadDir
+      ? await this.host.files.join(downloadDir, defaultName)
+      : defaultName;
+    return this.host.dialogs.pickSaveDestination(defaultPath);
   }
 
   async pickDownloadDirectory(): Promise<string | null> {
-    const downloadDir = await settingsGetDefaultDownloadDir();
-    const selection = await openDialog({
-      multiple: false,
-      directory: true,
-      defaultPath: downloadDir ?? undefined,
-    });
-    if (!selection) return null;
-    return Array.isArray(selection) ? (selection[0] ?? null) : selection;
+    const downloadDir = await this.host.settings.getDefaultDownloadDir();
+    return this.host.dialogs.pickDirectory(downloadDir ?? undefined);
   }
 
   async openFile(connectionId: string, key: string, name: string): Promise<void> {
-    const dir = await tempDir();
+    const dir = await this.host.files.tempDir();
     const localPath = `${dir}/lopload-open-${crypto.randomUUID()}-${name}`;
     const engine = await this.getEngine(connectionId);
     const [transfer] = await engine.enqueueDownloads([{ key, localPath, size: 0 }]);
@@ -665,7 +618,7 @@ class RealServices implements AppServices {
         if (event.transfer.state.kind === "downloaded") {
           unsubscribe();
           resolve();
-          void openPath(localPath);
+          void this.host.shell.openPath(localPath);
         } else if (event.transfer.state.kind === "failed") {
           unsubscribe();
           resolve();
@@ -675,41 +628,27 @@ class RealServices implements AppServices {
   }
 
   async revealInFinder(path: string): Promise<void> {
-    await revealItemInDir(path);
+    await this.host.shell.revealItemInDir(path);
   }
 
   onFileDrop(
     cb: (files: PickedFile[]) => void,
     onError?: (message: string) => void,
   ): () => void {
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type !== "drop") return;
-        this.expandAndEmit(event.payload.paths, cb, onError).catch((err) => {
-          // A dropped folder that can't be walked (e.g. an unreadable
-          // subdirectory, or a path outside what the OS lets this app
-          // enumerate) must not silently do nothing — surface it so the
-          // user knows the drop didn't queue anything.
-          log.error("Failed to expand dropped paths:", err);
-          this.notify(
-            "Lopload",
-            "Couldn't read one or more of the dropped items - nothing was added.",
-          );
-          onError?.(String(err));
-        });
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
+    return this.host.onFileDrop((paths) => {
+      this.expandAndEmit(paths, cb, onError).catch((err) => {
+        // A dropped folder that can't be walked (e.g. an unreadable
+        // subdirectory, or a path outside what the OS lets this app
+        // enumerate) must not silently do nothing — surface it so the
+        // user knows the drop didn't queue anything.
+        log.error("Failed to expand dropped paths:", err);
+        this.notify(
+          "Lopload",
+          "Couldn't read one or more of the dropped items - nothing was added.",
+        );
+        onError?.(String(err));
       });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    });
   }
 
   private async expandAndEmit(
@@ -717,18 +656,15 @@ class RealServices implements AppServices {
     cb: (files: PickedFile[]) => void,
     onError?: (message: string) => void,
   ): Promise<void> {
-    const isDirectory = async (path: string): Promise<boolean> => {
-      const info = await stat(path);
-      return info.isDirectory;
-    };
-    const { files, skipped } = await expandDroppedPaths(paths, isDirectory, {
-      readDir: async (path: string): Promise<DropDirEntry[]> => {
-        const entries = await readDir(path);
-        return entries.map((e) => ({ name: e.name, isDirectory: e.isDirectory }));
+    const { files, skipped } = await expandDroppedPaths(
+      paths,
+      (path: string) => this.host.files.isDirectory(path),
+      {
+        readDir: (path: string): Promise<DropDirEntry[]> => this.host.files.readDir(path),
+        size: (path: string) => this.host.files.size(path),
+        joinPath: (dirPath: string, childName: string) => `${dirPath}/${childName}`,
       },
-      size: (path: string) => fileSize(path),
-      joinPath: (dirPath: string, childName: string) => `${dirPath}/${childName}`,
-    });
+    );
     if (skipped.length > 0) {
       log.warn("Skipped unreadable dropped items:", skipped);
       onError?.(
@@ -753,24 +689,12 @@ class RealServices implements AppServices {
   }
 
   setBadgeCount(count: number): void {
-    void invoke("set_badge_count", { count: count > 0 ? count : null }).catch(() => {});
+    // A zero badge must clear the dock indicator, not render a "0" on it.
+    this.host.tray.setBadgeCount(count > 0 ? count : null);
   }
 
   notify(title: string, body: string): void {
-    import("../tauri/notify").then(() => {
-      // notifyBatchFinished is shaped for the batch-summary case; for the
-      // general notify() contract, send directly via the notification plugin.
-    });
-    void this.sendNotification(title, body);
-  }
-
-  private async sendNotification(title: string, body: string): Promise<void> {
-    const { isPermissionGranted, requestPermission, sendNotification } = await import(
-      "@tauri-apps/plugin-notification"
-    );
-    const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
-    if (!granted) return;
-    sendNotification({ title, body });
+    void this.host.notify(title, body).catch((err) => log.warn("notify failed", err));
   }
 
   /** Runs the silent trash purge sweep now, and every 24h thereafter. Call once at startup. */
@@ -779,7 +703,16 @@ class RealServices implements AppServices {
     this.trashSweepStarted = true;
     const run = () => void this.sweepAllConnectionsTrash();
     run();
-    setInterval(run, TRASH_SWEEP_INTERVAL_MS);
+    this.trashSweepTimer = setInterval(run, TRASH_SWEEP_INTERVAL_MS);
+  }
+
+  /** Stops the background sweep. The app never calls this — it lives as long
+   * as the process — but a test that builds services per scenario would
+   * otherwise leak a 24h timer (and keep sweeping a bucket that's been torn
+   * down) into every subsequent test in the run. */
+  dispose(): void {
+    if (this.trashSweepTimer !== null) clearInterval(this.trashSweepTimer);
+    this.trashSweepTimer = null;
   }
 
   private async sweepAllConnectionsTrash(): Promise<void> {
@@ -800,16 +733,19 @@ class RealServices implements AppServices {
   }
 }
 
-let singleton: RealServices | null = null;
+/** AppServices plus the teardown hook only a test caller needs. */
+export interface RealServicesHandle extends AppServices {
+  dispose(): void;
+}
 
-/** Builds (once) the real AppServices implementation. Only valid inside the
- * Tauri webview — see isTauriRuntime(). */
-export function createRealServices(): AppServices {
-  if (!singleton) {
-    singleton = new RealServices();
-    singleton.startTrashSweep();
-    singleton.startTrayUploadListening();
-    void initFileLogSink();
-  }
-  return singleton;
+/** Builds the real AppServices implementation against a Host. The app passes
+ * createTauriHost() (and does so once — see src/App.tsx); tests pass
+ * createNodeHost() and build a fresh one per scenario, calling dispose()
+ * afterwards. */
+export function createRealServices(host: Host): RealServicesHandle {
+  const services = new RealServices(host);
+  services.startTrashSweep();
+  services.startTrayUploadListening();
+  void host.initLogSink();
+  return services;
 }
