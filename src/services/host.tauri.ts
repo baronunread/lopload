@@ -38,7 +38,12 @@ import {
   setTrayConnections,
   setTrayStatus,
 } from "../tauri/tray";
-import { checkForUpdate, installAndRelaunch } from "../tauri/updater";
+import {
+  checkForUpdate,
+  downloadUpdate,
+  installAndRelaunch,
+  relaunchApp,
+} from "../tauri/updater";
 import type { Host } from "./host";
 
 const log = createLogger("host");
@@ -142,6 +147,8 @@ export function createTauriHost(): Host {
 
     updates: {
       checkForUpdate,
+      downloadUpdate,
+      relaunchApp,
       installAndRelaunch,
     },
 

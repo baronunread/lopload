@@ -557,7 +557,9 @@ class LoploadServices implements AppServices {
   // ---- UpdatesService ----
   updates = {
     checkForUpdate: (): Promise<string | null> => this.host.updates.checkForUpdate(),
-    installAndRelaunch: (): Promise<void> => this.host.updates.installAndRelaunch(),
+    downloadUpdate: (onProgress: (percent: number) => void): Promise<void> =>
+      this.host.updates.downloadUpdate(onProgress),
+    relaunchApp: (): Promise<void> => this.host.updates.relaunchApp(),
     isAutoUpdateEnabled: (): Promise<boolean> => this.host.settings.isAutoUpdateEnabled(),
     setAutoUpdateEnabled: (enabled: boolean): Promise<void> =>
       this.host.settings.setAutoUpdateEnabled(enabled),

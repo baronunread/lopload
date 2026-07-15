@@ -163,7 +163,11 @@ export async function createNodeHost(): Promise<NodeHost> {
 
     updates: {
       checkForUpdate: async () => control.availableUpdate,
-      installAndRelaunch: async () => void record.installAndRelaunchCalls.push(Date.now()),
+      downloadUpdate: async (_onProgress: (percent: number) => void) => {},
+      relaunchApp: async () => void record.installAndRelaunchCalls.push(Date.now()),
+      installAndRelaunch: async () => {
+        record.installAndRelaunchCalls.push(Date.now());
+      },
     },
 
     notify: async (title, body) => void record.notifications.push({ title, body }),

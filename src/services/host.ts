@@ -96,6 +96,11 @@ export interface HostSettings {
 export interface HostUpdates {
   /** Resolves to the available version, or null when already up to date. */
   checkForUpdate(): Promise<string | null>;
+  /** Downloads and stages the update, reporting progress (0–100). */
+  downloadUpdate(onProgress: (percent: number) => void): Promise<void>;
+  /** Relaunches the app so the staged update takes effect. */
+  relaunchApp(): Promise<void>;
+  /** Downloads + stages + relaunches in one call (convenience for tests). */
   installAndRelaunch(): Promise<void>;
 }
 

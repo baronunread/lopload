@@ -49,3 +49,9 @@ export async function downloadUpdate(onProgress: (percent: number) => void): Pro
 export async function relaunchApp(): Promise<void> {
   await relaunch();
 }
+
+/** Downloads + stages + relaunches in one shot. */
+export async function installAndRelaunch(): Promise<void> {
+  await downloadUpdate(() => {});
+  await relaunchApp();
+}

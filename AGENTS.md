@@ -49,7 +49,7 @@ tracked in the improvement plan.
 ```
 src/lib/            framework-free TS engine (S3, stores, state machine)
 src/tauri/          thin wrappers around Tauri plugins (keychain, fs, HTTP, notifications)
-src/services/       host.ts (the platform boundary) + real.ts (wires engine → AppServices)
+src/services/       host.ts (the platform boundary) + appServices.ts (wires engine → AppServices)
 src/ui/             React components on Kumo, pastel palette
 src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs + fasthttp (zero-copy file writes / request bodies over IPC)
 tests/scenarios/    what the app does, driven through the real UI
@@ -67,7 +67,7 @@ The one substitution boundary is `Host` (`src/services/host.ts`) — the ~12 thi
 that genuinely cannot run outside a webview (OS keychain, native dialogs, tray,
 notifications, local fs, the Rust fetch path). It has two real implementations:
 `createTauriHost()` for the app, `createNodeHost()` for tests. Everything above
-it — `real.ts`, the engine, the S3 client, the React tree — is the same code in
+it — `appServices.ts`, the engine, the S3 client, the React tree — is the same code in
 both.
 
 **Scenarios** (`tests/scenarios/`) are plain functions over a `ScenarioCtx`, not

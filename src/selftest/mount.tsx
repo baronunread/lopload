@@ -169,6 +169,7 @@ function emptyRecord(): HostRecord {
     notifications: [],
     opened: [],
     revealed: [],
+    installAndRelaunchCalls: [],
   };
 }
 
@@ -265,6 +266,8 @@ function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
     // the network on every self-test run would be slow and beside the point.
     updates: {
       checkForUpdate: async () => control.availableUpdate,
+      downloadUpdate: async (_onProgress: (percent: number) => void) => {},
+      relaunchApp: base.updates.relaunchApp,
       installAndRelaunch: base.updates.installAndRelaunch,
     },
   };
