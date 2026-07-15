@@ -74,7 +74,7 @@ Download from the [releases page](https://github.com/baronunread/lopload/release
 
 ### Auto updates
 
-Lopload checks GitHub Releases for a new version on startup (and at most every 24h while it stays open), and offers a "restart to update" prompt — never a forced/silent update. Updates are signed with a minisign keypair and verified before install — the public key ships in `src-tauri/tauri.conf.json`; there's no paid code-signing certificate involved.
+Lopload checks GitHub Releases for a new version on startup (and at most every 24h while it stays open). When one is found, a non-intrusive banner lets you download it in the background — with a progress bar, without interrupting your work — and restart when you choose. Never a forced or silent update. Updates are signed with a minisign keypair and verified before install — the public key ships in `src-tauri/tauri.conf.json`; there's no paid code-signing certificate involved.
 
 <details>
 <summary><strong>Running a fork?</strong> One-time signing setup</summary>

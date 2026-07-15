@@ -36,10 +36,11 @@ const targets = [
   { path: "package.json", re: /("version":\s*)"[^"]*"/ },
   // Anchored to the [package] table so dependency versions further down the
   // manifest are never touched.
-  { path: "src-tauri/Cargo.toml", re: /(\[package\][\s\S]*?\nversion = )"[^"]*"/ },
+  { path: "src-tauri/Cargo.toml", re: /(\[package\][\s\S]*?\r?\nversion = )"[^"]*"/ },
   // The workspace's own entry in the lockfile, matched by package name so the
-  // hundreds of dependency entries are left alone.
-  { path: "src-tauri/Cargo.lock", re: /(name = "lopload"\nversion = )"[^"]*"/ },
+  // hundreds of dependency entries are left alone. `\r?\n` because Windows CI
+  // checks out with CRLF line endings.
+  { path: "src-tauri/Cargo.lock", re: /(name = "lopload"\r?\nversion = )"[^"]*"/ },
 ];
 
 for (const { path, re } of targets) {
