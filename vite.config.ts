@@ -5,6 +5,14 @@ import tailwindcss from "@tailwindcss/vite";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+// The self-test (`bun run selftest`) launches a second Tauri dev server, and
+// would collide with a `bun run tauri dev` you already have open — strictPort
+// makes that a hard failure. So it runs on its own port (scripts/selftest.ts
+// sets LOPLOAD_VITE_PORT and a matching devUrl override). Normal dev is
+// unaffected and stays on 1420.
+// @ts-expect-error process is a nodejs global
+const port = Number(process.env.LOPLOAD_VITE_PORT || 1420);
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
@@ -15,7 +23,7 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    port,
     strictPort: true,
     host: host || false,
     hmr: host

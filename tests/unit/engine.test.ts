@@ -1,10 +1,7 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mockClient } from "aws-sdk-client-mock";
-import {
-  GetObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
+import { describe, expect, test, beforeAll } from "bun:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   STATE_TRANSITIONS,
@@ -12,36 +9,57 @@ import {
   canTransition,
 } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
-import { md5Hex } from "../../src/lib/md5";
 import type { EngineEvent, Transfer, TransferState, TransferTuning } from "../../src/lib/types";
 import { DEFAULT_TUNING } from "../../src/lib/tuning";
-import type { LocalFileReader } from "../../src/lib/s3/multipart";
-import type { LocalFileWriter } from "../../src/lib/s3/download";
+import { createS3Client } from "../../src/lib/s3/client";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { freshBucket, type Bucket } from "../support/storage";
+import { bucketProbe } from "../support/bucketProbe";
+import { faultyFetch } from "../support/faultyFetch";
+import { localFileReader, localFileWriter } from "../support/localFiles";
+import { nativeFetch } from "../setup";
 
-const client = new S3Client({
-  region: "us-east-1",
-  credentials: { accessKeyId: "ak", secretAccessKey: "sk" },
+// A real, fresh bucket for the whole file — buckets (not container restarts)
+// are the isolation unit, so every test in this file gets its own keys but
+// shares one bucket and one warm MinIO.
+let bucket: Bucket;
+let workdir: string;
+
+beforeAll(async () => {
+  bucket = await freshBucket();
+  workdir = await mkdtemp(join(tmpdir(), "lopload-engine-test-"));
 });
-const s3Mock = mockClient(client);
 
-function q(hex: string): string {
-  return `"${hex}"`;
+function clientWith(fetchFn: FetchFn = nativeFetch) {
+  return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
-beforeEach(() => {
-  s3Mock.reset();
-});
+function urlOf(input: Parameters<FetchFn>[0]): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
 
-function makeReader(files: Record<string, Uint8Array>): LocalFileReader {
-  return {
-    async size(path) {
-      return files[path]?.length ?? 0;
-    },
-    async readChunk(path, offset, length) {
-      const bytes = files[path] ?? new Uint8Array(0);
-      return bytes.slice(offset, offset + length);
-    },
+/** Wraps a FetchFn so requests matching a key (and method) never resolve —
+ * the real-storage equivalent of the old mock's `() => new Promise(() => {})`,
+ * for tests that need a transfer parked mid-flight indefinitely. There's no
+ * `Fault` for this (faultyFetch's `stall` always eventually completes), so
+ * it's implemented locally rather than in tests/support. */
+function hangOn(inner: FetchFn, keys: string[], method = "PUT"): FetchFn {
+  return async (input, init) => {
+    const url = urlOf(input);
+    const m = (init?.method ?? "GET").toUpperCase();
+    if (m === method.toUpperCase() && keys.some((k) => url.includes(k))) {
+      return new Promise<Response>(() => {});
+    }
+    return inner(input, init);
   };
+}
+
+async function writeLocalFile(name: string, body: Uint8Array): Promise<string> {
+  const path = join(workdir, name);
+  await writeFile(path, body);
+  return path;
 }
 
 const ALL_STATES: TransferState["kind"][] = [
@@ -116,22 +134,22 @@ describe("state machine transition table", () => {
 describe("TransferEngine — single-part upload", () => {
   test("queued -> sending -> checking -> uploaded, persisted at every step", async () => {
     const body = new TextEncoder().encode("small file");
-    const reader = makeReader({ "/local/a.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q(await md5Hex(body)) });
+    const path = await writeLocalFile("a.txt", body);
+    const client = clientWith();
 
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
     });
     engine.subscribe((e) => events.push(e));
 
     const [transfer] = await engine.enqueue([
-      { localPath: "/local/a.txt", size: body.length, key: "a.txt" },
+      { localPath: path, size: body.length, key: "a.txt" },
     ]);
 
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "uploaded");
@@ -152,24 +170,31 @@ describe("TransferEngine — single-part upload", () => {
 
     const batchEvent = events.find((e) => e.type === "batch-finished");
     expect(batchEvent).toEqual({ type: "batch-finished", uploaded: 1, downloaded: 0, failed: 0 });
+
+    const probe = bucketProbe(bucket.client, bucket.name);
+    expect(await probe.get("a.txt")).toEqual(body);
   });
 
   test("ETag mismatch -> failed with errorClass verification, sticky", async () => {
     const body = new TextEncoder().encode("mismatched");
-    const reader = makeReader({ "/local/b.txt": body });
-    s3Mock.on(PutObjectCommand).resolves({ ETag: q("f".repeat(32)) });
+    const path = await writeLocalFile("b.txt", body);
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        { urlContains: "b.txt", method: "PUT", action: { kind: "corruptEtag" } },
+      ]),
+    );
 
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
     });
 
     const [transfer] = await engine.enqueue([
-      { localPath: "/local/b.txt", size: body.length, key: "b.txt" },
+      { localPath: path, size: body.length, key: "b.txt" },
     ]);
 
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
@@ -182,23 +207,28 @@ describe("TransferEngine — single-part upload", () => {
 
   test("credentials error (403) maps through to errorClass credentials", async () => {
     const body = new TextEncoder().encode("x");
-    const reader = makeReader({ "/local/c.txt": body });
-    s3Mock.on(PutObjectCommand).rejects({
-      name: "AccessDenied",
-      $metadata: { httpStatusCode: 403 },
-    });
+    const path = await writeLocalFile("c.txt", body);
+    const client = clientWith(
+      faultyFetch(nativeFetch, [
+        {
+          urlContains: "c.txt",
+          method: "PUT",
+          action: { kind: "s3Error", status: 403, code: "AccessDenied", message: "Access Denied" },
+        },
+      ]),
+    );
 
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
     });
 
     const [transfer] = await engine.enqueue([
-      { localPath: "/local/c.txt", size: body.length, key: "c.txt" },
+      { localPath: path, size: body.length, key: "c.txt" },
     ]);
 
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "failed");
@@ -211,27 +241,22 @@ describe("TransferEngine — single-part upload", () => {
 
 describe("TransferEngine — concurrency and batching", () => {
   test("processes an enqueued batch and emits one batch-finished with correct counts", async () => {
-    const files: Record<string, Uint8Array> = {};
-    const specs = [1, 2, 3, 4, 5].map((n) => {
-      const path = `/local/f${n}.txt`;
-      const body = new TextEncoder().encode(`file-${n}`);
-      files[path] = body;
-      return { localPath: path, size: body.length, key: `f${n}.txt` };
-    });
-    const reader = makeReader(files);
+    const specs = await Promise.all(
+      [1, 2, 3, 4, 5].map(async (n) => {
+        const body = new TextEncoder().encode(`file-${n}`);
+        const path = await writeLocalFile(`f${n}.txt`, body);
+        return { localPath: path, size: body.length, key: `f${n}.txt` };
+      }),
+    );
 
-    s3Mock.on(PutObjectCommand).callsFake(async (input) => {
-      const bodyBytes = input.Body instanceof Uint8Array ? input.Body : new Uint8Array(0);
-      return { ETag: q(await md5Hex(bodyBytes)) };
-    });
-
+    const client = clientWith();
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 3 }),
     });
@@ -249,28 +274,26 @@ describe("TransferEngine — concurrency and batching", () => {
 
 describe("TransferEngine — live tuning", () => {
   test("raising concurrentFiles mid-batch admits more transfers on the next pump", async () => {
-    s3Mock.on(PutObjectCommand).callsFake(() => new Promise(() => {})); // hangs forever
-    const reader = makeReader({
-      "/local/1.txt": new Uint8Array([1]),
-      "/local/2.txt": new Uint8Array([2]),
-      "/local/3.txt": new Uint8Array([3]),
-      "/local/4.txt": new Uint8Array([4]),
-    });
+    const keys = ["1.txt", "2.txt", "3.txt", "4.txt"];
+    const client = clientWith(hangOn(nativeFetch, keys)); // every PUT hangs forever
+    const paths = await Promise.all(
+      keys.map((k, i) => writeLocalFile(k, new Uint8Array([i + 1]))),
+    );
     const store = new MemoryTransferStore();
     let currentTuning: TransferTuning = { ...DEFAULT_TUNING, concurrentFiles: 1 };
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
       tuning: () => currentTuning,
     });
 
     await engine.enqueue([
-      { localPath: "/local/1.txt", size: 1, key: "1.txt" },
-      { localPath: "/local/2.txt", size: 1, key: "2.txt" },
-      { localPath: "/local/3.txt", size: 1, key: "3.txt" },
+      { localPath: paths[0], size: 1, key: keys[0] },
+      { localPath: paths[1], size: 1, key: keys[1] },
+      { localPath: paths[2], size: 1, key: keys[2] },
     ]);
 
     await waitUntil(() => engine["active"].size === 1);
@@ -279,26 +302,27 @@ describe("TransferEngine — live tuning", () => {
     // Raising the live tuning alone doesn't retrigger a pump — the next
     // enqueue does, which is exactly the "no restart needed" contract.
     currentTuning = { ...currentTuning, concurrentFiles: 3 };
-    await engine.enqueue([{ localPath: "/local/4.txt", size: 1, key: "4.txt" }]);
+    await engine.enqueue([{ localPath: paths[3], size: 1, key: keys[3] }]);
 
     await waitUntil(() => engine["active"].size === 3);
     expect(engine["queue"].length).toBe(1);
   });
 
   test("enqueue captures partSize from tuning's partSizeMiB at enqueue time", async () => {
-    const reader = makeReader({});
+    const path = await writeLocalFile("x.bin", new Uint8Array(0));
+    const client = clientWith();
     const store = new MemoryTransferStore();
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, partSizeMiB: 32 }),
     });
 
     const [transfer] = await engine.enqueue([
-      { localPath: "/local/x.bin", size: 0, key: "x.bin" },
+      { localPath: path, size: 0, key: "x.bin" },
     ]);
 
     expect(transfer.partSize).toBe(32 * 1024 * 1024);
@@ -350,10 +374,10 @@ describe("TransferEngine — resumePending", () => {
     await store.save(doneTransfer);
 
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
     });
 
@@ -392,10 +416,10 @@ describe("TransferEngine — resumePending", () => {
     // concurrentFiles: 0 keeps pump() from immediately dequeuing the item
     // into "sending" so the re-queue itself is observable.
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
     });
@@ -436,10 +460,10 @@ describe("TransferEngine — resumePending", () => {
     await store.save(noUploadId);
 
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
     });
@@ -469,10 +493,10 @@ describe("TransferEngine — resumePending", () => {
     await store.save(download);
 
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
     });
@@ -505,10 +529,10 @@ describe("TransferEngine — resumePending", () => {
     // concurrentFiles: 0 keeps pump() from dequeuing the item so we can
     // observe the queue contents directly.
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
     });
@@ -540,10 +564,10 @@ describe("TransferEngine — resumePending", () => {
     await store.save(resumable);
 
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
       tuning: () => ({ ...DEFAULT_TUNING, concurrentFiles: 0 }),
     });
@@ -571,10 +595,10 @@ class CountingTransferStore extends MemoryTransferStore {
 
 describe("TransferEngine — progress throttling (updateProgress vs persistState)", () => {
   test("500 progress ticks trigger no additional store.save calls beyond the real state transitions", async () => {
-    // PutObjectCommand hangs forever so the transfer stays parked in
-    // "sending" — we can then hammer the progress path directly without
-    // racing the real upload to completion.
-    s3Mock.on(PutObjectCommand).callsFake(() => new Promise(() => {}));
+    // Every PUT hangs forever so the transfer stays parked in "sending" —
+    // we can then hammer the progress path directly without racing the
+    // real upload to completion.
+    const client = clientWith(hangOn(nativeFetch, ["big-upload.bin"]));
 
     let saveCount = 0;
     class CountingStore extends MemoryTransferStore {
@@ -584,17 +608,17 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
       }
     }
     const store = new CountingStore();
-    const reader = makeReader({ "/local/big.bin": new Uint8Array(10) });
+    const path = await writeLocalFile("big-upload.bin", new Uint8Array(10));
     const engine = new TransferEngine({
       client,
-      bucket: "b",
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader,
+      reader: localFileReader,
       store,
     });
 
     const [transfer] = await engine.enqueue([
-      { localPath: "/local/big.bin", size: 10, key: "big.bin" },
+      { localPath: path, size: 10, key: "big-upload.bin" },
     ]);
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "sending");
 
@@ -626,10 +650,10 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
       now: () => fakeNow,
     });
@@ -684,10 +708,10 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
     const store = new MemoryTransferStore();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
+      reader: localFileReader,
       store,
     });
     engine.subscribe((e) => events.push(e));
@@ -724,71 +748,10 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
 });
 
 describe("TransferEngine — progress wiring end-to-end", () => {
-  function chunkedBodyStreamOf(bytes: Uint8Array, chunkSize: number): ReadableStream<Uint8Array> {
-    return new ReadableStream({
-      start(controller) {
-        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-          controller.enqueue(bytes.slice(offset, offset + chunkSize));
-        }
-        controller.close();
-      },
-    });
-  }
-
-  function makeDownloadWriter(): LocalFileWriter {
-    const staging = new Map<string, Uint8Array[]>();
-    const allocated = new Map<string, Uint8Array>();
-    const committed = new Map<string, Uint8Array>();
-    return {
-      tempPathFor(finalPath) {
-        return `${finalPath}.tmp`;
-      },
-      async writeChunk(tempPath, chunk, isFirst) {
-        if (isFirst || !staging.has(tempPath)) staging.set(tempPath, []);
-        staging.get(tempPath)!.push(chunk);
-      },
-      async commit(tempPath, finalPath) {
-        const chunks = staging.get(tempPath) ?? [];
-        const total = chunks.reduce((n, c) => n + c.length, 0);
-        const out = new Uint8Array(total);
-        let offset = 0;
-        for (const c of chunks) {
-          out.set(c, offset);
-          offset += c.length;
-        }
-        committed.set(finalPath, out);
-        staging.delete(tempPath);
-      },
-      async discard(tempPath) {
-        staging.delete(tempPath);
-        allocated.delete(tempPath);
-      },
-      async allocate(tempPath, size) {
-        allocated.set(tempPath, new Uint8Array(size));
-        staging.delete(tempPath);
-      },
-      async writeAt(tempPath, offset, chunk) {
-        const buffer = allocated.get(tempPath);
-        if (!buffer) throw new Error(`writeAt before allocate: ${tempPath}`);
-        buffer.set(chunk, offset);
-      },
-      async sizeOf(tempPath) {
-        const buffer = allocated.get(tempPath);
-        if (buffer) return buffer.length;
-        const chunks = staging.get(tempPath);
-        if (!chunks) return null;
-        return chunks.reduce((n, c) => n + c.length, 0);
-      },
-    };
-  }
-
   test("a download that ticks onProgress hundreds of times still ends with few store.save calls and a bounded number of emits", async () => {
     const body = new Uint8Array(500).map((_, i) => i % 256);
-    s3Mock.on(GetObjectCommand).resolves({
-      Body: chunkedBodyStreamOf(body, 1) as never,
-      ETag: q(await md5Hex(body)),
-      ContentLength: body.length,
-    });
+    const probe = bucketProbe(bucket.client, bucket.name);
+    await probe.put("big-download.bin", body);
 
     let saveCount = 0;
     class CountingStore extends MemoryTransferStore {
@@ -798,20 +761,20 @@ describe("TransferEngine — progress wiring end-to-end", () => {
       }
     }
     const store = new CountingStore();
-    const writer = makeDownloadWriter();
     const events: EngineEvent[] = [];
     const engine = new TransferEngine({
-      client,
-      bucket: "b",
+      client: clientWith(),
+      bucket: bucket.name,
       connectionId: "conn-1",
-      reader: makeReader({}),
-      writer,
+      reader: localFileReader,
+      writer: localFileWriter,
       store,
     });
     engine.subscribe((e) => events.push(e));
 
+    const localPath = join(workdir, "big-download.bin");
     const [transfer] = await engine.enqueueDownloads([
-      { key: "big.bin", localPath: "/local/big.bin", size: body.length },
+      { key: "big-download.bin", localPath, size: body.length },
     ]);
 
     await waitUntil(() => engine.getTransfer(transfer.id)?.state.kind === "downloaded");
@@ -819,17 +782,20 @@ describe("TransferEngine — progress wiring end-to-end", () => {
     const progressEmits = events.filter(
       (e) => e.type === "transfer-updated" && e.transfer.state.kind === "sending",
     );
-    // 500 one-byte chunks would be 500 store writes under the old
-    // `void this.setState(...)` behavior; the throttle means real time
-    // (test runs in well under 200ms) collapses almost all of them.
+    // A real streamed response doesn't dribble in one byte at a time the way
+    // the old mock did, so this is a looser bound than "under 500" — the
+    // throttle contract under test is the ceiling, not the exact chunking.
     expect(progressEmits.length).toBeLessThan(500);
     // save() is only ever called for real transitions (queued->sending,
     // sending->checking, checking->downloaded), never per progress tick.
     expect(saveCount).toBeLessThanOrEqual(5);
+
+    const committed = await Bun.file(localPath).arrayBuffer();
+    expect(new Uint8Array(committed)).toEqual(body);
   });
 });
 
-async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start > timeoutMs) {

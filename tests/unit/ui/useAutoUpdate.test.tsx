@@ -1,10 +1,14 @@
+import "../../support/noActEnv";
+
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { writeFile } from "node:fs/promises";
+
 import { ServicesProvider } from "../../../src/ui/services";
 import { useAutoUpdate } from "../../../src/ui/useAutoUpdate";
-import { createFakeServices } from "./fakeServices";
-import type { Transfer } from "../../../src/lib/types";
+import { faultyFetch } from "../../support/faultyFetch";
+import { createServiceHarness, type ServiceHarness } from "../../support/serviceHarness";
 
 afterEach(cleanup);
 
@@ -27,80 +31,101 @@ function Harness() {
   );
 }
 
-function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
-  return {
-    id: "t1",
-    connectionId: "conn-1",
-    key: "clip.mp4",
-    localPath: "/tmp/clip.mp4",
-    size: 100,
-    direction: "upload",
-    state: { kind: "sending", percent: 10 },
-    createdAt: 0,
-    updatedAt: 0,
-    ...overrides,
-  };
+/** Saves a connection so a real upload can be started against it. */
+async function saveConnection(harness: ServiceHarness, id = "conn-1"): Promise<void> {
+  await harness.services.connections.save(
+    {
+      id,
+      name: "Test",
+      endpoint: harness.bucketConnection.endpoint,
+      bucket: harness.bucketConnection.bucket,
+      region: harness.bucketConnection.region,
+      lastPrefix: "",
+      createdAt: Date.now(),
+    },
+    harness.credentials,
+  );
 }
 
-function renderHarness(services: ReturnType<typeof createFakeServices>) {
+/** Renders an update with version 9.9.9, clicks Update, then waits for phase to become "ready". */
+async function advanceToReady(harness: ServiceHarness) {
   render(
-    <ServicesProvider value={services}>
+    <ServicesProvider value={harness.services}>
       <Harness />
     </ServicesProvider>,
   );
+  const update = await screen.findByRole("button", { name: "Update" });
+  await userEvent.click(update);
+  // downloading → ready (Node host's downloadUpdate resolves instantly)
+  await screen.findByText("Restart to finish updating.");
 }
 
 describe("useAutoUpdate", () => {
   test("shows nothing when checkForUpdate finds nothing new", async () => {
-    const services = createFakeServices({ updateVersion: null });
-    renderHarness(services);
-    await waitFor(() => expect(services.checkForUpdateCalls.length).toBe(1));
-    expect(screen.getByText("no banner")).toBeInTheDocument();
+    const harness = await createServiceHarness();
+    try {
+      render(
+        <ServicesProvider value={harness.services}>
+          <Harness />
+        </ServicesProvider>,
+      );
+      await screen.findByText("no banner");
+    } finally {
+      await harness.dispose();
+    }
   });
 
-  test("surfaces an Update action in the available phase when a version is found", async () => {
-    const services = createFakeServices({ updateVersion: "9.9.9" });
-    renderHarness(services);
-    await screen.findByText("Version 9.9.9 is available");
-    expect(screen.getByRole("button", { name: "Update" })).toBeInTheDocument();
+  test("shows the plain restart notice when no transfers are in flight", async () => {
+    const harness = await createServiceHarness();
+    harness.control.availableUpdate = "9.9.9";
+    try {
+      await advanceToReady(harness);
+    } finally {
+      await harness.dispose();
+    }
   });
 
-  test("Update downloads, then offers Restart now, which relaunches", async () => {
-    const services = createFakeServices({ updateVersion: "9.9.9", updateDownloadSteps: [100] });
-    renderHarness(services);
-
-    const update = await screen.findByRole("button", { name: "Update" });
-    await userEvent.click(update);
-
-    // Download ran and the flow advanced to the ready phase.
-    expect(services.downloadUpdateCalls.length).toBe(1);
-    const restart = await screen.findByRole("button", { name: "Restart now" });
-
-    await userEvent.click(restart);
-    expect(services.relaunchAppCalls.length).toBe(1);
-  });
-
-  test("ready-phase copy warns when a transfer is in flight, without hiding restart", async () => {
-    const services = createFakeServices({ updateVersion: "9.9.9", updateDownloadSteps: [100] });
-    renderHarness(services);
-
-    act(() => {
-      services.emit({ type: "transfer-updated", transfer: makeTransfer() });
+  test("warns about in-flight transfers being interrupted instead of hiding the restart action", async () => {
+    const harness = await createServiceHarness({
+      wrapFetch: (inner) =>
+        faultyFetch(inner, [{ urlContains: "stall.bin", method: "PUT", action: { kind: "stall", ms: 3000 } }]),
     });
+    harness.control.availableUpdate = "9.9.9";
+    try {
+      await saveConnection(harness);
+      const path = `${harness.workdir}/stall.bin`;
+      await writeFile(path, new Uint8Array([1, 2, 3, 4]));
 
-    const update = await screen.findByRole("button", { name: "Update" });
-    await userEvent.click(update);
+      await advanceToReady(harness);
 
-    await screen.findByRole("button", { name: "Restart now" });
-    expect(screen.getByText((t) => t.includes("interrupt"))).toBeInTheDocument();
+      // A real upload, held in "sending" by the stall fault.
+      await harness.services.engine.enqueueFiles("conn-1", "", [
+        { path, name: "stall.bin", size: 4 },
+      ]);
+
+      const button = await screen.findByRole("button", { name: "Restart now" });
+      expect(screen.getByText((text) => text.includes("will interrupt your transfers"))).toBeInTheDocument();
+      expect(button).toBeInTheDocument();
+    } finally {
+      await harness.dispose();
+    }
   });
 
-  test("dismiss hides the banner", async () => {
-    const services = createFakeServices({ updateVersion: "9.9.9" });
-    renderHarness(services);
+  test("relaunchApp is called when restart button is clicked", async () => {
+    const harness = await createServiceHarness();
+    harness.control.availableUpdate = "9.9.9";
+    try {
+      await advanceToReady(harness);
 
-    const dismiss = await screen.findByRole("button", { name: "Dismiss" });
-    await userEvent.click(dismiss);
-    await screen.findByText("no banner");
+      const restart = await screen.findByRole("button", { name: "Restart now" });
+      await userEvent.click(restart);
+      await waitFor(() => expect(harness.record.installAndRelaunchCalls.length).toBe(1));
+
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      await userEvent.click(dismiss);
+      await screen.findByText("no banner");
+    } finally {
+      await harness.dispose();
+    }
   });
 });
