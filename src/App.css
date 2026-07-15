@@ -91,3 +91,35 @@ p {
   transform-origin: top left;
   animation: lopload-pop-in 120ms ease-out;
 }
+
+/*
+ * Kumo Select dropdown: on Windows/Linux, overflow-y:auto shows the
+ * scrollbar track even when all items fit (macOS overlay scrollbars
+ * don't have this problem). Style the track/thumb to be invisible
+ * when idle instead of the default chunky scrollbar.
+ */
+[data-kumo-component="Select"] [role="listbox"] {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+[data-kumo-component="Select"] [role="listbox"]:hover {
+  scrollbar-color: var(--color-kumo-hairline) transparent;
+}
+
+[data-kumo-component="Select"] [role="listbox"]::-webkit-scrollbar {
+  width: 4px;
+}
+
+[data-kumo-component="Select"] [role="listbox"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-kumo-component="Select"] [role="listbox"]::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+
+[data-kumo-component="Select"] [role="listbox"]:hover::-webkit-scrollbar-thumb {
+  background: var(--color-kumo-hairline);
+}
