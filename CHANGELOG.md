@@ -2,6 +2,14 @@
 
 All notable changes to Lopload are documented here. Release binaries and full notes live on the [releases page](https://github.com/baronunread/lopload/releases).
 
+## [0.1.3] — 2026-07-15
+
+- Fixed: storage connection dropdown no longer shows unnecessary scrollbars on Windows and Linux.
+- Rewrote the entire test suite to run against real MinIO instead of in-memory fakes. The same scenarios also run against real S3/R2 (`bun run test:remote`). All test doubles — 2,700 lines of fakes, stubs, and conformance checks — are gone.
+- In-app self-test (`bun run selftest`) now runs the same scenarios inside the real Tauri binary, exercising Rust IPC, fasthttp, and the webview — not just the Node host.
+- Services and engine: `dispose()` now fully stops all work; `real.ts` renamed to `appServices.ts`.
+- Dependencies: Vite 7→8, TypeScript 5→7, `@vitejs/plugin-react` 4→6, `actions/checkout` 5→7.
+
 ## [0.1.2] — 2026-07-15
 
 - Auto-updates now use a non-intrusive banner with a two-step flow: when a new version is found, download it in the background — with a progress bar and without interrupting your work — then restart on your own schedule. Previously it was a single "restart and update" prompt that did both at once.
