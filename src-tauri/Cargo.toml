@@ -1,6 +1,6 @@
 [package]
 name = "lopload"
-version = "0.1.0"
+version = "0.1.1"
 description = "A desktop file manager for S3-compatible storage"
 authors = ["Andrea Bruno"]
 edition = "2021"

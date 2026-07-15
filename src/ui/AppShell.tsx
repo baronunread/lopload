@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Toasty } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
+import { AutoUpdateProvider } from "./AutoUpdateContext";
 import { UpdateBanner } from "./UpdateBanner";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { AddStorageDialog } from "./AddStorageDialog";
@@ -144,7 +145,9 @@ function AppShellInner() {
 export function AppShell() {
   return (
     <Toasty>
-      <AppShellInner />
+      <AutoUpdateProvider>
+        <AppShellInner />
+      </AutoUpdateProvider>
     </Toasty>
   );
 }

@@ -1,13 +1,13 @@
 import { Button, Meter } from "@cloudflare/kumo";
 import { XIcon } from "@phosphor-icons/react";
-import { useAutoUpdate } from "./useAutoUpdate";
+import { useAutoUpdateContext } from "./AutoUpdateContext";
 
 /** Non-intrusive bar pinned to the top of the app once an update is found.
  * Drives the two-click flow: "Update" starts the download (progress shown in
  * place), then "Restart now" relaunches into the staged build. Renders
  * nothing until there's something to show. */
 export function UpdateBanner() {
-  const { banner, phase, percent, startDownload, relaunch, dismiss } = useAutoUpdate();
+  const { banner, phase, percent, startDownload, relaunch, dismiss } = useAutoUpdateContext();
   if (!banner) return null;
 
   return (
