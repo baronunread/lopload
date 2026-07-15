@@ -31,7 +31,6 @@ src-tauri/gen/
 .claude/worktrees/
 
 # Local secrets (loaded via `bun --env-file=.env`, see package.json's tauri script)
-.env
-.env.local
-.env.e2e
 notes/
+.env
+.env.remote

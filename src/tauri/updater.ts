@@ -45,7 +45,11 @@ export async function downloadUpdate(onProgress: (percent: number) => void): Pro
   });
 }
 
-/** Relaunches the app so the freshly-staged update takes effect. */
 export async function relaunchApp(): Promise<void> {
   await relaunch();
+}
+
+export async function installAndRelaunch(): Promise<void> {
+  await downloadUpdate(() => {});
+  await relaunchApp();
 }

@@ -1,0 +1,55 @@
+name: Nightly (real provider)
+
+# The same scenarios CI already runs against MinIO, run once a night against a
+# real bucket instead.
+#
+# MinIO is an excellent S3 impersonator right up until it isn't. The bugs that
+# live in the gap are provider-shaped — checksum middleware, ETag formats on
+# multipart, redirect and retry behaviour — and a local-only suite is
+# structurally incapable of seeing them. This is the job that does.
+#
+# Nightly rather than per-PR on purpose: it costs real requests, it needs the
+# network, and two concurrent runs would be fighting over one bucket.
+
+on:
+  schedule:
+    # 04:00 UTC.
+    - cron: "0 4 * * *"
+  # So you can prove it before a release rather than hoping.
+  workflow_dispatch:
+
+concurrency:
+  # One at a time. They share a bucket, and the prefix cleanup of one run should
+  # never race the setup of another.
+  group: nightly-remote
+  cancel-in-progress: false
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Scenarios against the real bucket
+        env:
+          # Everything the run touches lives under lopload-test/<run-id>/, and
+          # that prefix is the only thing it can delete — see
+          # tests/support/bucketProbe.ts. The REMOTE flag is a deliberate gate:
+          # credentials alone must never redirect a routine run at real storage.
+          LOPLOAD_TEST_REMOTE: "1"
+          LOPLOAD_TEST_ENDPOINT: ${{ secrets.LOPLOAD_TEST_ENDPOINT }}
+          LOPLOAD_TEST_BUCKET: ${{ secrets.LOPLOAD_TEST_BUCKET }}
+          LOPLOAD_TEST_ACCESS_KEY: ${{ secrets.LOPLOAD_TEST_ACCESS_KEY }}
+          LOPLOAD_TEST_SECRET_KEY: ${{ secrets.LOPLOAD_TEST_SECRET_KEY }}
+          LOPLOAD_TEST_REGION: ${{ secrets.LOPLOAD_TEST_REGION }}
+        run: bun test tests/app.test.ts

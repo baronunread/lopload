@@ -2,6 +2,8 @@
 mod fastfs;
 mod fasthttp;
 mod keychain;
+#[cfg(debug_assertions)]
+mod selftest;
 mod tray;
 
 #[tauri::command]
@@ -37,6 +39,10 @@ pub fn run() {
             tray::tray_set_status,
             tray::tray_set_connections,
             tray::set_badge_count,
+            #[cfg(debug_assertions)]
+            selftest::selftest_log,
+            #[cfg(debug_assertions)]
+            selftest::selftest_exit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
