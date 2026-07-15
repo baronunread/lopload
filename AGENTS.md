@@ -49,7 +49,7 @@ src/lib/            framework-free TS engine (S3, stores, state machine)
 src/tauri/          thin wrappers around Tauri plugins (keychain, fs, HTTP, notifications)
 src/services/       wires engine + Tauri into the AppServices contract
 src/ui/             React components on Kumo, pastel palette
-src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs (positional file writes over IPC)
+src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs + fasthttp (zero-copy file writes / request bodies over IPC)
 tests/unit/         bun test + happy-dom (no I/O)
 tests/integration/  real MinIO via docker
 tests/e2e/          real bucket (R2/S3/etc.), opt-in via env vars
@@ -80,6 +80,8 @@ bun run tauri build
 Credentials are always stored in the OS-native secure storage — no env vars, no build flags.
 
 Set `signingIdentity` in `src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity` for macOS code signing.
+
+Bump the version with `bun run set-version <x.y.z>`. `package.json` is the single source of truth (`tauri.conf.json` points at it) and the Rust crate is kept in lockstep. CI runs it with no argument, reading the version from the pushed git tag.
 
 On Windows, `tauri build` produces:
 - `.msi` — WiX installer

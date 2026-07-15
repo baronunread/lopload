@@ -2,6 +2,11 @@
 
 All notable changes to Lopload are documented here. Release binaries and full notes live on the [releases page](https://github.com/baronunread/lopload/releases).
 
+## [0.1.2] — 2026-07-15
+
+- Auto-updates now use a non-intrusive banner with a two-step flow: when a new version is found, download it in the background — with a progress bar and without interrupting your work — then restart on your own schedule. Previously it was a single "restart and update" prompt that did both at once.
+- Uploads no longer slow the app to a crawl. Request bodies now take a fast native path instead of being serialized across the UI thread, mirroring the download speed-up from 0.1.1.
+
 ## [0.1.1] — 2026-07-14
 
 - Moving a folder now runs in the background with progress in the transfer widget, instead of freezing the "Move here" dialog on a spinner. Large files copy part by part, so a multi-gigabyte move advances steadily rather than snapping 0% → 100%, and moves are no longer capped at 5 GB per file.
