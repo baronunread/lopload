@@ -12,6 +12,7 @@ import {
   type UpdateBanner,
   type UpdatePhase,
 } from "../lib/updatePolicy";
+import { isPortable } from "../tauri/isPortable";
 import { useServices } from "./services";
 
 const IN_FLIGHT_STATES: TransferState["kind"][] = ["queued", "sending", "checking"];
@@ -40,9 +41,14 @@ export function useAutoUpdate(): AutoUpdateState {
   const [percent, setPercent] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [hasTransfersInFlight, setHasTransfersInFlight] = useState(false);
+  const [portable, setPortable] = useState(false);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
   const inFlightIds = useRef(new Set<string>());
   const lastCheckedAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    void isPortable().then(setPortable);
+  }, []);
 
   useEffect(() => {
     void services.updates.isAutoUpdateEnabled().then(setAutoUpdateEnabled);
@@ -64,7 +70,7 @@ export function useAutoUpdate(): AutoUpdateState {
     let cancelled = false;
 
     async function runCheck() {
-      if (!autoUpdateEnabled) return;
+      if (!autoUpdateEnabled || portable) return;
       const now = Date.now();
       if (!shouldCheckForUpdate(now, lastCheckedAt.current)) return;
       lastCheckedAt.current = now;
@@ -78,7 +84,7 @@ export function useAutoUpdate(): AutoUpdateState {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [services, autoUpdateEnabled]);
+  }, [services, autoUpdateEnabled, portable]);
 
   function startDownload() {
     if (phase !== "available") return;
@@ -108,6 +114,7 @@ export function useAutoUpdate(): AutoUpdateState {
     relaunch: () => void services.updates.relaunchApp(),
     dismiss: () => setDismissed(true),
     checkNow: async (): Promise<string | null> => {
+      if (portable) return null;
       const found = await services.updates.checkForUpdate();
       if (found) {
         setVersion(found);

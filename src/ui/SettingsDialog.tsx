@@ -3,6 +3,7 @@ import { Button, Dialog, Select, Switch } from "@cloudflare/kumo";
 import { XIcon } from "@phosphor-icons/react";
 import { useServices } from "./services";
 import { useAutoUpdateContext } from "./AutoUpdateContext";
+import { isPortable } from "../tauri/isPortable";
 import type { TransferPreset, TransferTuning } from "../lib/types";
 import { DEFAULT_TUNING, PRESETS, presetMatching } from "./settings/presets";
 
@@ -37,10 +38,12 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
   const [checking, setChecking] = useState(false);
   const [downloadDir, setDownloadDir] = useState<string | null>(null);
   const [tuning, setTuningState] = useState<TransferTuning>(DEFAULT_TUNING);
+  const [portable, setPortable] = useState(false);
   const [abortingStale, setAbortingStale] = useState(false);
   const [abortStaleResult, setAbortStaleResult] = useState<string | null>(null);
 
   useEffect(() => {
+    void isPortable().then(setPortable);
     void services.updates.isAutoUpdateEnabled().then(setAutoUpdateEnabledState);
     void services.settings.getDefaultDownloadDir().then(setDownloadDir);
     void services.settings.getTransferTuning().then(setTuningState);
@@ -266,23 +269,32 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
 
           <section>
             <h2 className="mb-3 text-sm font-semibold text-kumo-strong">Updates</h2>
-            <Switch
-              label="Check for updates automatically"
-              checked={autoUpdateEnabled}
-              onCheckedChange={handleToggleAutoUpdate}
-              controlFirst={false}
-            />
-            <p className="mt-1 text-xs text-kumo-subtle">
-              Manual check always works regardless of this setting.
-            </p>
-            <div className="mt-4 flex items-center gap-3">
-              <Button variant="secondary" onClick={handleCheckNow} disabled={checking}>
-                {checking ? "Checking…" : "Check for updates now"}
-              </Button>
-              {checkResult && (
-                <span className="text-sm text-kumo-subtle tabular-nums">{checkResult}</span>
-              )}
-            </div>
+            {portable ? (
+              <p className="text-xs text-kumo-subtle">
+                Automatic updates aren't available for the portable version.
+                Download new releases from the GitHub releases page.
+              </p>
+            ) : (
+              <>
+                <Switch
+                  label="Check for updates automatically"
+                  checked={autoUpdateEnabled}
+                  onCheckedChange={handleToggleAutoUpdate}
+                  controlFirst={false}
+                />
+                <p className="mt-1 text-xs text-kumo-subtle">
+                  Manual check always works regardless of this setting.
+                </p>
+                <div className="mt-4 flex items-center gap-3">
+                  <Button variant="secondary" onClick={handleCheckNow} disabled={checking}>
+                    {checking ? "Checking…" : "Check for updates now"}
+                  </Button>
+                  {checkResult && (
+                    <span className="text-sm text-kumo-subtle tabular-nums">{checkResult}</span>
+                  )}
+                </div>
+              </>
+            )}
           </section>
 
           {connectionId && (

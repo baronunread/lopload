@@ -7,6 +7,15 @@ mod selftest;
 mod tray;
 
 #[tauri::command]
+fn is_portable_app() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+        .map(|name| name.contains("portable"))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -29,6 +38,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            is_portable_app,
             fastfs::write_at,
             fasthttp::http_send,
             fasthttp::http_cancel,
