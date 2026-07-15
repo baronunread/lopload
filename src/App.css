@@ -93,33 +93,21 @@ p {
 }
 
 /*
- * Kumo Select dropdown: on Windows/Linux, overflow-y:auto shows the
- * scrollbar track even when all items fit (macOS overlay scrollbars
- * don't have this problem). Style the track/thumb to be invisible
- * when idle instead of the default chunky scrollbar.
+ * Kumo Select / Autocomplete / Combobox: the dropdown scrollable div
+ * gets overflow-x:auto from the browser (when one axis is auto the
+ * other defaults to auto too), causing a horizontal scrollbar on
+ * Windows whenever option text is wider than the dropdown. Truncate
+ * option text so it never overflows horizontally.
  */
-[data-kumo-component="Select"] [role="listbox"] {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+[data-kumo-component="Select"] [data-kumo-part="option"],
+[data-kumo-component="Autocomplete"] [data-kumo-part="option"],
+[data-kumo-component="Combobox"] [data-kumo-part="option"] {
+  min-width: 0;
 }
-
-[data-kumo-component="Select"] [role="listbox"]:hover {
-  scrollbar-color: var(--color-kumo-hairline) transparent;
-}
-
-[data-kumo-component="Select"] [role="listbox"]::-webkit-scrollbar {
-  width: 4px;
-}
-
-[data-kumo-component="Select"] [role="listbox"]::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-[data-kumo-component="Select"] [role="listbox"]::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 2px;
-}
-
-[data-kumo-component="Select"] [role="listbox"]:hover::-webkit-scrollbar-thumb {
-  background: var(--color-kumo-hairline);
+[data-kumo-component="Select"] [data-kumo-part="option"] > :first-child,
+[data-kumo-component="Autocomplete"] [data-kumo-part="option"] > :first-child,
+[data-kumo-component="Combobox"] [data-kumo-part="option"] > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
