@@ -41,7 +41,8 @@ export async function createServiceHarness(
   options: ServiceHarnessOptions = {},
 ): Promise<ServiceHarness> {
   const bucket = await freshBucket();
-  const { host, record, control, workdir } = await createNodeHost();
+  const nodeHost = await createNodeHost();
+  const { host, record, control, workdir } = nodeHost;
   if (options.wrapFetch) host.fetch = options.wrapFetch(host.fetch);
 
   const services = createAppServices(host);
@@ -57,6 +58,7 @@ export async function createServiceHarness(
     workdir,
     async dispose() {
       await services.dispose();
+      await nodeHost.cleanup();
     },
   };
 }

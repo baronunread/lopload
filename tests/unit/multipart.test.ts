@@ -121,11 +121,10 @@ describe("uploadTransfer — multipart", () => {
   const bodySize = partSize * 2 + 1; // 16MB+1 > MULTIPART_THRESHOLD
 
   function makeBigBody(): Uint8Array {
-    // Not all-zero: a real per-part MD5 must differ per part for the
-    // composite-ETag verification to be a meaningful check rather than one
-    // that would pass even if parts were silently swapped.
+    // Each byte varies by position so every part has distinct content,
+    // ensuring composite-ETag verification detects swapped parts.
     const body = new Uint8Array(bodySize);
-    for (let i = 0; i < body.length; i += 4096) body[i] = (i / 4096) % 256;
+    for (let i = 0; i < body.length; i++) body[i] = i % 251;
     return body;
   }
 

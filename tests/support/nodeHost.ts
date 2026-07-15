@@ -18,7 +18,7 @@
 //   dialogs   - a native picker can't be clicked by a test, so tests script it.
 //   tray/shell/notify - OS surfaces with nothing to assert against; these
 //               record their calls so tests can assert on them instead.
-import { mkdtemp, readdir, stat } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,6 +65,8 @@ export interface NodeHost {
   control: HostControl;
   /** A real, empty directory on disk. Uploads read from here; downloads land here. */
   workdir: string;
+  /** Removes the workdir from disk. Call when the host is no longer needed. */
+  cleanup(): Promise<void>;
 }
 
 export async function createNodeHost(): Promise<NodeHost> {
@@ -180,5 +182,13 @@ export async function createNodeHost(): Promise<NodeHost> {
     initLogSink: async () => {},
   };
 
-  return { host, record, control, workdir };
+  return {
+    host,
+    record,
+    control,
+    workdir,
+    async cleanup() {
+      await rm(workdir, { recursive: true, force: true });
+    },
+  };
 }

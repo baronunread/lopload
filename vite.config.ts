@@ -11,7 +11,7 @@ const host = process.env.TAURI_DEV_HOST;
 // sets LOPLOAD_VITE_PORT and a matching devUrl override). Normal dev is
 // unaffected and stays on 1420.
 // @ts-expect-error process is a nodejs global
-const port = Number(process.env.LOPLOAD_VITE_PORT ?? 1420);
+const port = Number(process.env.LOPLOAD_VITE_PORT || 1420);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({

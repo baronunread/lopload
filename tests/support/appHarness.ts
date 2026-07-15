@@ -69,7 +69,8 @@ export async function mountApp(
 
   const bucket = await freshBucket();
   const probe = bucketProbe(bucket.client, bucket.name, bucket.prefix);
-  const { host, record, control, workdir } = await createNodeHost();
+  const nodeHost = await createNodeHost();
+  const { host, record, control, workdir } = nodeHost;
 
   if (wrapFetch) host.fetch = wrapFetch(host.fetch);
 
@@ -129,6 +130,7 @@ export async function mountApp(
       // real provider it's the difference between a test suite and a mess: the
       // run's prefix is the only thing it may delete, and it deletes all of it.
       if (bucket.prefix) await probe.clear();
+      await nodeHost.cleanup();
     },
   };
 }

@@ -112,11 +112,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function healthy(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await nativeFetch(`${MINIO_ENDPOINT}/minio/health/live`);
+    const res = await nativeFetch(`${MINIO_ENDPOINT}/minio/health/live`, { signal: controller.signal });
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -143,38 +147,43 @@ let ensured: Promise<void> | null = null;
  */
 export function ensureMinio(): Promise<void> {
   return (ensured ??= (async () => {
-    if (await healthy()) return;
+    try {
+      if (await healthy()) return;
 
-    if (docker("version").status !== 0) {
-      throw new Error(
-        "Docker isn't running, and the test suite needs a real S3 backend.\n" +
-          "Start Docker Desktop, then re-run. (The MinIO container is reused " +
-          "across runs, so you only pay this once.)",
+      if (docker("version").status !== 0) {
+        throw new Error(
+          "Docker isn't running, and the test suite needs a real S3 backend.\n" +
+            "Start Docker Desktop, then re-run. (The MinIO container is reused " +
+            "across runs, so you only pay this once.)",
+        );
+      }
+
+      // A container may exist but be stopped/unhealthy — clear it out rather
+      // than fighting a half-dead one.
+      docker("rm", "-f", CONTAINER_NAME);
+
+      const run = docker(
+        "run",
+        "-d",
+        "--name",
+        CONTAINER_NAME,
+        "-p",
+        `${MINIO_PORT}:9000`,
+        "-e",
+        `MINIO_ROOT_USER=${MINIO_CREDENTIALS.accessKey}`,
+        "-e",
+        `MINIO_ROOT_PASSWORD=${MINIO_CREDENTIALS.secretKey}`,
+        "minio/minio",
+        "server",
+        "/data",
       );
+      if (run.status !== 0) throw new Error(`Failed to start MinIO: ${run.stderr}`);
+
+      await waitForHealth();
+    } catch (err) {
+      ensured = null;
+      throw err;
     }
-
-    // A container may exist but be stopped/unhealthy — clear it out rather
-    // than fighting a half-dead one.
-    docker("rm", "-f", CONTAINER_NAME);
-
-    const run = docker(
-      "run",
-      "-d",
-      "--name",
-      CONTAINER_NAME,
-      "-p",
-      `${MINIO_PORT}:9000`,
-      "-e",
-      `MINIO_ROOT_USER=${MINIO_CREDENTIALS.accessKey}`,
-      "-e",
-      `MINIO_ROOT_PASSWORD=${MINIO_CREDENTIALS.secretKey}`,
-      "minio/minio",
-      "server",
-      "/data",
-    );
-    if (run.status !== 0) throw new Error(`Failed to start MinIO: ${run.stderr}`);
-
-    await waitForHealth();
   })());
 }
 

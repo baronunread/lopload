@@ -35,3 +35,5 @@ src-tauri/gen/
 .env.local
 notes/
 .env.remote
+.env.e2e
+.env.e2e.local

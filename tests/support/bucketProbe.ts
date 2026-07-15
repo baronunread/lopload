@@ -8,6 +8,7 @@
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
@@ -67,7 +68,12 @@ export function bucketProbe(client: S3Client, bucket: string, scope = ""): Bucke
     },
 
     async has(key) {
-      return (await probe.get(key)) !== null;
+      try {
+        await client.send(new HeadObjectCommand({ Bucket: bucket, Key: scoped(key) }));
+        return true;
+      } catch {
+        return false;
+      }
     },
 
     async keys(prefix = "") {
@@ -96,12 +102,16 @@ export function bucketProbe(client: S3Client, bucket: string, scope = ""): Bucke
       // Deliberately re-scoped rather than deleting the raw keys listed above:
       // against a real provider this is the call that could do real damage, and
       // it must be structurally incapable of naming an object outside `scope`.
-      await client.send(
-        new DeleteObjectsCommand({
-          Bucket: bucket,
-          Delete: { Objects: keys.map((key) => ({ Key: scoped(key) })) },
-        }),
-      );
+      const objects = keys.map((key) => ({ Key: scoped(key) }));
+      // DeleteObjectsCommand accepts at most 1000 keys per request.
+      for (let i = 0; i < objects.length; i += 1000) {
+        await client.send(
+          new DeleteObjectsCommand({
+            Bucket: bucket,
+            Delete: { Objects: objects.slice(i, i + 1000) },
+          }),
+        );
+      }
     },
   };
 

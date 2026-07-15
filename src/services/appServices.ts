@@ -114,6 +114,7 @@ class LoploadServices implements AppServices {
   private trashSweepStarted = false;
   private trashSweepTimer: ReturnType<typeof setInterval> | null = null;
   private trayUploadListening = false;
+  private trayUploadUnsubscribe: (() => void) | null = null;
 
   /** In-memory copy of the persisted transfer tuning, lazily loaded on
    * first engine use and shared by every connection's engine via a live
@@ -278,7 +279,7 @@ class LoploadServices implements AppServices {
   startTrayUploadListening(): void {
     if (this.trayUploadListening) return;
     this.trayUploadListening = true;
-    this.host.tray.onUploadFilesRequested((connectionId) => {
+    this.trayUploadUnsubscribe = this.host.tray.onUploadFilesRequested((connectionId) => {
       void this.handleTrayUpload(connectionId);
     });
   }
@@ -723,6 +724,12 @@ class LoploadServices implements AppServices {
   async dispose(): Promise<void> {
     if (this.trashSweepTimer !== null) clearInterval(this.trashSweepTimer);
     this.trashSweepTimer = null;
+
+    if (this.trayUploadUnsubscribe) {
+      this.trayUploadUnsubscribe();
+      this.trayUploadUnsubscribe = null;
+    }
+    this.trayUploadListening = false;
 
     const engines = [...this.engines.values()];
     this.engines.clear();
