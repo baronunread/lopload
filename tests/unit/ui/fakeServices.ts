@@ -30,6 +30,9 @@ export interface FakeServicesOptions {
   trashItems?: TrashItem[];
   credentialsUnreadableFor?: Set<string>;
   updateVersion?: string | null;
+  /** Progress values (0–100) the fake downloadUpdate emits before resolving.
+   * Defaults to [100], one step straight to done. */
+  updateDownloadSteps?: number[];
   transferTuning?: TransferTuning;
 }
 
@@ -54,7 +57,8 @@ export interface FakeServices extends AppServices {
   emptyTrashCalls: string[];
   triggerFileDropError(message: string): void;
   checkForUpdateCalls: number[];
-  installAndRelaunchCalls: number[];
+  downloadUpdateCalls: number[];
+  relaunchAppCalls: number[];
   setTransferTuningCalls: TransferTuning[];
   abortStaleUploadsCalls: string[];
 }
@@ -83,7 +87,8 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
   const credentialsUnreadableFor = new Set(options.credentialsUnreadableFor ?? []);
   let fileDropErrorHandler: ((message: string) => void) | null = null;
   const checkForUpdateCalls: number[] = [];
-  const installAndRelaunchCalls: number[] = [];
+  const downloadUpdateCalls: number[] = [];
+  const relaunchAppCalls: number[] = [];
   const setTransferTuningCalls: TransferTuning[] = [];
   const abortStaleUploadsCalls: string[] = [];
   let transferTuning: TransferTuning = options.transferTuning ?? DEFAULT_TUNING;
@@ -189,8 +194,14 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
         checkForUpdateCalls.push(Date.now());
         return options.updateVersion ?? null;
       },
-      async installAndRelaunch() {
-        installAndRelaunchCalls.push(Date.now());
+      async downloadUpdate(onProgress: (percent: number) => void) {
+        downloadUpdateCalls.push(Date.now());
+        for (const step of options.updateDownloadSteps ?? [100]) {
+          onProgress(step);
+        }
+      },
+      async relaunchApp() {
+        relaunchAppCalls.push(Date.now());
       },
       async isAutoUpdateEnabled() {
         return true;
@@ -265,7 +276,8 @@ export function createFakeServices(options: FakeServicesOptions = {}): FakeServi
     deleteNowCalls,
     emptyTrashCalls,
     checkForUpdateCalls,
-    installAndRelaunchCalls,
+    downloadUpdateCalls,
+    relaunchAppCalls,
     setTransferTuningCalls,
     abortStaleUploadsCalls,
   };

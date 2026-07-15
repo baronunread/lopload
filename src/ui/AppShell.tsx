@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { Toasty, useKumoToastManager } from "@cloudflare/kumo";
+import { Toasty } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
-import { useAutoUpdate } from "./useAutoUpdate";
+import { UpdateBanner } from "./UpdateBanner";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { AddStorageDialog } from "./AddStorageDialog";
 import { TransferWidget } from "./TransferWidget";
@@ -14,29 +14,6 @@ import { MoveProgressProvider } from "./browser/MoveProgressContext";
 
 const Onboarding = lazy(() => import("./Onboarding").then((m) => ({ default: m.Onboarding })));
 const RemoteBrowser = lazy(() => import("./RemoteBrowser").then((m) => ({ default: m.RemoteBrowser })));
-
-/** Shows the "restart to update" toast once an update is found, and keeps
- * it in sync as transfer activity changes the notice's wording. Doesn't
- * render anything itself — it only drives the toast manager. */
-function UpdateNoticeToast() {
-  const { notice, installAndRelaunch, dismiss } = useAutoUpdate();
-  const toasts = useKumoToastManager();
-
-  useEffect(() => {
-    if (!notice) return;
-    const id = toasts.add({
-      title: notice.title,
-      description: notice.body,
-      timeout: 0,
-      actions: [{ children: notice.actionLabel, onClick: installAndRelaunch }],
-      onClose: dismiss,
-    });
-    return () => toasts.close(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notice]);
-
-  return null;
-}
 
 function AppShellInner() {
   const services = useServices();
@@ -110,6 +87,7 @@ function AppShellInner() {
 
   return (
     <div className="flex h-screen flex-col bg-kumo-canvas">
+      <UpdateBanner />
       <header className="flex items-center justify-between gap-3 border-b border-kumo-line bg-kumo-base px-4 py-3">
         <h1 className="lopload-heading shrink-0 text-xl font-semibold">Lopload</h1>
         <div className="flex min-w-0 items-center gap-2">
@@ -166,7 +144,6 @@ function AppShellInner() {
 export function AppShell() {
   return (
     <Toasty>
-      <UpdateNoticeToast />
       <AppShellInner />
     </Toasty>
   );
