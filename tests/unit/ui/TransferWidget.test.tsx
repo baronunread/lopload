@@ -142,7 +142,9 @@ describe("TransferWidget", () => {
     });
 
     test("title switches from 'Uploading…' to a completion summary once everything finishes", async () => {
-      const harness = await harnessWithConnection();
+      const harness = await harnessWithConnection([
+        { urlContains: "vacation.mp4", method: "PUT", action: { kind: "stall", ms: 5000 } },
+      ]);
       try {
         render(
           <ServicesProvider value={harness.services}>
