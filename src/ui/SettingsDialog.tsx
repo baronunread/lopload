@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Dialog, Select, Switch } from "@cloudflare/kumo";
 import { XIcon } from "@phosphor-icons/react";
 import { useServices } from "./services";
+import { useAutoUpdateContext } from "./AutoUpdateContext";
 import type { TransferPreset, TransferTuning } from "../lib/types";
 import { DEFAULT_TUNING, PRESETS, presetMatching } from "./settings/presets";
 
@@ -30,6 +31,7 @@ export interface SettingsDialogProps {
 
 export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
   const services = useServices();
+  const { checkNow } = useAutoUpdateContext();
   const [autoUpdateEnabled, setAutoUpdateEnabledState] = useState<boolean>(true);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -53,7 +55,10 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
     setChecking(true);
     setCheckResult(null);
     try {
-      const found = await services.updates.checkForUpdate();
+      // Goes through the shared auto-update state so a found version surfaces
+      // the same banner (Update → download → Restart) the automatic check
+      // would, rather than dead-ending at this inline text.
+      const found = await checkNow();
       if (found) {
         setCheckResult(`Version ${found} is available.`);
       } else {

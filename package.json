@@ -1,7 +1,7 @@
 {
   "name": "lopload",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A desktop file manager for S3-compatible storage",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,8 @@
     "test:integration": "bun test tests/integration",
     "test:e2e": "bun --env-file=.env.e2e test tests/e2e",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun run test"
+    "check": "bun run typecheck && bun run test",
+    "set-version": "bun run scripts/set-version.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",

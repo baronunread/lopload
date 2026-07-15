@@ -63,9 +63,13 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Derive version from git tag
+      # Bake the tag's version into package.json (tauri.conf.json reads it from
+      # there via "version": "../package.json"). Must match the version
+      # build-latest-json.mjs derives from the same tag, or the updater loops
+      # forever offering the release it's already on.
+      - name: Set version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: echo "TAURI_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: bun run scripts/set-version.mjs
 
       - name: Build application
         # Only tag builds (real releases) sign updater artifacts — everyday

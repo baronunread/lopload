@@ -9,12 +9,19 @@ import type { Transfer } from "../../../src/lib/types";
 afterEach(cleanup);
 
 function Harness() {
-  const { notice, installAndRelaunch, dismiss } = useAutoUpdate();
-  if (!notice) return <div>no notice</div>;
+  const { banner, phase, percent, startDownload, relaunch, dismiss } = useAutoUpdate();
+  if (!banner) return <div>no banner</div>;
   return (
     <div>
-      <div>{notice.body}</div>
-      <button onClick={installAndRelaunch}>{notice.actionLabel}</button>
+      <div>{banner.title}</div>
+      <div>{banner.body}</div>
+      <div>phase: {phase}</div>
+      <div>percent: {percent}</div>
+      {banner.actionLabel && (
+        <button onClick={phase === "ready" ? relaunch : startDownload}>
+          {banner.actionLabel}
+        </button>
+      )}
       <button onClick={dismiss}>Dismiss</button>
     </div>
   );
@@ -35,60 +42,65 @@ function makeTransfer(overrides: Partial<Transfer> = {}): Transfer {
   };
 }
 
+function renderHarness(services: ReturnType<typeof createFakeServices>) {
+  render(
+    <ServicesProvider value={services}>
+      <Harness />
+    </ServicesProvider>,
+  );
+}
+
 describe("useAutoUpdate", () => {
   test("shows nothing when checkForUpdate finds nothing new", async () => {
     const services = createFakeServices({ updateVersion: null });
-    render(
-      <ServicesProvider value={services}>
-        <Harness />
-      </ServicesProvider>,
-    );
+    renderHarness(services);
     await waitFor(() => expect(services.checkForUpdateCalls.length).toBe(1));
-    expect(screen.getByText("no notice")).toBeInTheDocument();
+    expect(screen.getByText("no banner")).toBeInTheDocument();
   });
 
-  test("shows the plain restart notice when no transfers are in flight", async () => {
+  test("surfaces an Update action in the available phase when a version is found", async () => {
     const services = createFakeServices({ updateVersion: "9.9.9" });
-    render(
-      <ServicesProvider value={services}>
-        <Harness />
-      </ServicesProvider>,
-    );
-    await screen.findByText("Restart to update.");
+    renderHarness(services);
+    await screen.findByText("Version 9.9.9 is available");
+    expect(screen.getByRole("button", { name: "Update" })).toBeInTheDocument();
   });
 
-  test("warns about in-flight transfers being interrupted instead of hiding the restart action", async () => {
-    const services = createFakeServices({ updateVersion: "9.9.9" });
-    render(
-      <ServicesProvider value={services}>
-        <Harness />
-      </ServicesProvider>,
-    );
-    await screen.findByText("Restart to update.");
+  test("Update downloads, then offers Restart now, which relaunches", async () => {
+    const services = createFakeServices({ updateVersion: "9.9.9", updateDownloadSteps: [100] });
+    renderHarness(services);
+
+    const update = await screen.findByRole("button", { name: "Update" });
+    await userEvent.click(update);
+
+    // Download ran and the flow advanced to the ready phase.
+    expect(services.downloadUpdateCalls.length).toBe(1);
+    const restart = await screen.findByRole("button", { name: "Restart now" });
+
+    await userEvent.click(restart);
+    expect(services.relaunchAppCalls.length).toBe(1);
+  });
+
+  test("ready-phase copy warns when a transfer is in flight, without hiding restart", async () => {
+    const services = createFakeServices({ updateVersion: "9.9.9", updateDownloadSteps: [100] });
+    renderHarness(services);
 
     act(() => {
       services.emit({ type: "transfer-updated", transfer: makeTransfer() });
     });
 
-    const button = await screen.findByRole("button", { name: "Restart and update" });
-    expect(screen.getByText((text) => text.includes("will be interrupted"))).toBeInTheDocument();
-    expect(button).toBeInTheDocument();
+    const update = await screen.findByRole("button", { name: "Update" });
+    await userEvent.click(update);
+
+    await screen.findByRole("button", { name: "Restart now" });
+    expect(screen.getByText((t) => t.includes("interrupt"))).toBeInTheDocument();
   });
 
-  test("installAndRelaunch and dismiss both work from the notice", async () => {
+  test("dismiss hides the banner", async () => {
     const services = createFakeServices({ updateVersion: "9.9.9" });
-    render(
-      <ServicesProvider value={services}>
-        <Harness />
-      </ServicesProvider>,
-    );
+    renderHarness(services);
 
-    const install = await screen.findByRole("button", { name: "Restart and update" });
-    await userEvent.click(install);
-    expect(services.installAndRelaunchCalls.length).toBe(1);
-
-    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    const dismiss = await screen.findByRole("button", { name: "Dismiss" });
     await userEvent.click(dismiss);
-    await screen.findByText("no notice");
+    await screen.findByText("no banner");
   });
 });

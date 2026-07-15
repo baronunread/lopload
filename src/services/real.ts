@@ -63,7 +63,7 @@ import {
   setTrayStatus,
 } from "../tauri/tray";
 import { deriveTrayUploadTargets } from "./trayState";
-import { checkForUpdate, installAndRelaunch } from "../tauri/updater";
+import { checkForUpdate, downloadUpdate, relaunchApp } from "../tauri/updater";
 import {
   isAutoUpdateEnabled as settingsIsAutoUpdateEnabled,
   setAutoUpdateEnabled as settingsSetAutoUpdateEnabled,
@@ -601,7 +601,9 @@ class RealServices implements AppServices {
   // ---- UpdatesService ----
   updates = {
     checkForUpdate: (): Promise<string | null> => checkForUpdate(),
-    installAndRelaunch: (): Promise<void> => installAndRelaunch(),
+    downloadUpdate: (onProgress: (percent: number) => void): Promise<void> =>
+      downloadUpdate(onProgress),
+    relaunchApp: (): Promise<void> => relaunchApp(),
     isAutoUpdateEnabled: (): Promise<boolean> => settingsIsAutoUpdateEnabled(),
     setAutoUpdateEnabled: (enabled: boolean): Promise<void> => settingsSetAutoUpdateEnabled(enabled),
   };

@@ -200,9 +200,12 @@ export interface UpdatesService {
   /** Checks for a new release now. Resolves with its version string if one
    * is available, otherwise null. */
   checkForUpdate(): Promise<string | null>;
-  /** Downloads and installs the update found by the last checkForUpdate()
-   * call that found one, then relaunches the app. */
-  installAndRelaunch(): Promise<void>;
+  /** Downloads and stages the update found by the last checkForUpdate() call
+   * that found one, reporting progress (0–100) via onProgress. Does not
+   * relaunch; call relaunchApp() once the user chooses to restart. */
+  downloadUpdate(onProgress: (percent: number) => void): Promise<void>;
+  /** Relaunches the app so the freshly-staged update takes effect. */
+  relaunchApp(): Promise<void>;
   /** Whether periodic auto-update checks are enabled (default true). */
   isAutoUpdateEnabled(): Promise<boolean>;
   /** Toggle periodic auto-update checks on/off. Manual check always works. */
