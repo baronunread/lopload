@@ -18,9 +18,14 @@ Everything uses `bun` — never `npm`/`npx`/`node`.
 ## Before opening a PR
 
 ```sh
-bun run check            # typecheck + unit tests — must pass, CI gates on this
-bun run test:integration # real MinIO via docker (skipped if docker is absent)
+bun run check     # typecheck + the whole suite — must pass, CI gates on this
+bun run selftest  # the same scenarios, inside the real Tauri binary
 ```
+
+Tests talk to a real MinIO, so Docker needs to be running. The container is
+reused between runs, so you pay its ~2s startup once. `bun run selftest` boots
+the actual app and drives it — that's the one that covers the Rust/IPC path, and
+it's worth running before anything that touches transfers.
 
 - Branch off `main`; PRs require passing CI and one approving review.
 - Keep PRs focused — one change per PR.

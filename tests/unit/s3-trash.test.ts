@@ -1,16 +1,7 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { mockClient } from "aws-sdk-client-mock";
-import {
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  DeleteObjectsCommand,
-  HeadObjectCommand,
-  ListObjectsV2Command,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
+import { describe, expect, test, beforeAll } from "bun:test";
 
 import {
+  createS3Client,
   deleteTrashItem,
   emptyTrash,
   listTrash,
@@ -19,201 +10,199 @@ import {
   restoreFileFromTrash,
   restoreFolderFromTrash,
 } from "../../src/lib/s3/client";
-import { trashKey } from "../../src/lib/s3/trash";
+import { TRASH_PREFIX, trashKey } from "../../src/lib/s3/trash";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
+import { freshBucket, type Bucket } from "../support/storage";
+import { bucketProbe } from "../support/bucketProbe";
+import { nativeFetch } from "../setup";
 
-const client = new S3Client({
-  region: "us-east-1",
-  credentials: { accessKeyId: "ak", secretAccessKey: "sk" },
-});
-const s3Mock = mockClient(client);
+let bucket: Bucket;
 
-beforeEach(() => {
-  s3Mock.reset();
+beforeAll(async () => {
+  bucket = await freshBucket();
 });
+
+function clientWith(fetchFn: FetchFn = nativeFetch) {
+  return createS3Client(bucket.connection, bucket.credentials, fetchFn);
+}
 
 describe("moveFileToTrash", () => {
   test("copies to the trash location, then deletes the original", async () => {
-    s3Mock.on(HeadObjectCommand).resolves({ ContentLength: 1024 });
-    s3Mock.on(CopyObjectCommand).resolves({});
-    s3Mock.on(DeleteObjectCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const key = "trash1/photos/sunset.jpg";
+    await probe.put(key, new Uint8Array(1024));
+    const deletedAt = Date.now();
 
-    await moveFileToTrash(client, "my-bucket", "photos/sunset.jpg", 1000);
+    await moveFileToTrash(clientWith(), bucket.name, key, deletedAt);
 
-    const copyCalls = s3Mock.commandCalls(CopyObjectCommand);
-    expect(copyCalls[0].args[0].input.Key).toBe(trashKey(1000, "photos/sunset.jpg"));
-    const deleteCalls = s3Mock.commandCalls(DeleteObjectCommand);
-    expect(deleteCalls[0].args[0].input.Key).toBe("photos/sunset.jpg");
+    expect(await probe.has(trashKey(deletedAt, key))).toBe(true);
+    expect(await probe.has(key)).toBe(false);
   });
 });
 
 describe("moveFolderToTrash", () => {
   test("copies + deletes every key under the folder, sharing one deletedAtMs", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      Contents: [{ Key: "Vacation/" }, { Key: "Vacation/a.jpg" }],
-      IsTruncated: false,
-    });
-    s3Mock.on(CopyObjectCommand).resolves({});
-    s3Mock.on(DeleteObjectsCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const prefix = "trash2/Vacation/";
+    await probe.put(prefix, new Uint8Array(0)); // the folder's own marker
+    await probe.put(`${prefix}a.jpg`, new Uint8Array([1, 2, 3]));
+    const deletedAt = Date.now();
 
-    await moveFolderToTrash(client, "my-bucket", "Vacation/", 2000);
+    await moveFolderToTrash(clientWith(), bucket.name, prefix, deletedAt);
 
-    const copyCalls = s3Mock.commandCalls(CopyObjectCommand);
-    expect(copyCalls.map((c) => c.args[0].input.Key).sort()).toEqual(
-      [trashKey(2000, "Vacation/"), trashKey(2000, "Vacation/a.jpg")].sort(),
+    expect(await probe.has(prefix)).toBe(false);
+    expect(await probe.has(`${prefix}a.jpg`)).toBe(false);
+
+    // The folder already had its own marker object, so restoring it must be
+    // the original (copied) bytes, not a freshly-synthesized one — and no
+    // extra trash object should exist beyond the two originals.
+    const trashed = await probe.keys(trashKey(deletedAt, ""));
+    expect(trashed.sort()).toEqual(
+      [trashKey(deletedAt, prefix), trashKey(deletedAt, `${prefix}a.jpg`)].sort(),
     );
-    // The folder already had its own marker object, so no synthetic one is needed.
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(0);
-
-    const deleteCalls = s3Mock.commandCalls(DeleteObjectsCommand);
-    expect(deleteCalls[0].args[0].input.Delete?.Objects?.map((o) => o.Key).sort()).toEqual(
-      ["Vacation/", "Vacation/a.jpg"].sort(),
-    );
+    expect(await probe.get(trashKey(deletedAt, prefix))).toEqual(new Uint8Array(0));
   });
 
   test("synthesizes a folder marker at the trash location when the source folder never had one", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      Contents: [{ Key: "Vacation/a.jpg" }],
-      IsTruncated: false,
-    });
-    s3Mock.on(CopyObjectCommand).resolves({});
-    s3Mock.on(PutObjectCommand).resolves({});
-    s3Mock.on(DeleteObjectsCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const prefix = "trash3/Vacation/";
+    await probe.put(`${prefix}a.jpg`, new Uint8Array([1])); // no marker for the folder itself
+    const deletedAt = Date.now();
 
-    await moveFolderToTrash(client, "my-bucket", "Vacation/", 3000);
+    await moveFolderToTrash(clientWith(), bucket.name, prefix, deletedAt);
 
-    const putCalls = s3Mock.commandCalls(PutObjectCommand);
-    expect(putCalls).toHaveLength(1);
-    expect(putCalls[0].args[0].input.Key).toBe(trashKey(3000, "Vacation/"));
-    expect(putCalls[0].args[0].input.Body).toEqual(new Uint8Array(0));
+    expect(await probe.get(trashKey(deletedAt, prefix))).toEqual(new Uint8Array(0));
+    expect(await probe.has(trashKey(deletedAt, `${prefix}a.jpg`))).toBe(true);
   });
 
   test("an empty folder with no marker still leaves a trash record and deletes nothing", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({ Contents: [], IsTruncated: false });
-    s3Mock.on(PutObjectCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const prefix = "trash4/Empty/";
+    const deletedAt = Date.now();
 
-    await moveFolderToTrash(client, "my-bucket", "Empty/", 4000);
+    await moveFolderToTrash(clientWith(), bucket.name, prefix, deletedAt);
 
-    expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(1);
-    expect(s3Mock.commandCalls(DeleteObjectsCommand)).toHaveLength(0);
+    expect(await probe.get(trashKey(deletedAt, prefix))).toEqual(new Uint8Array(0));
+    expect(await probe.keys(trashKey(deletedAt, prefix))).toEqual([trashKey(deletedAt, prefix)]);
   });
 });
 
 describe("restoreFileFromTrash", () => {
   test("throws and leaves the trashed copy untouched if something already exists at the original path", async () => {
-    s3Mock.on(HeadObjectCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const originalKey = "trash5/notes.txt";
+    await probe.put(originalKey, new Uint8Array([9])); // occupies the destination
+    const deletedAt = Date.now();
+    await probe.put(trashKey(deletedAt, originalKey), new Uint8Array([1, 2, 3]));
 
-    await expect(restoreFileFromTrash(client, "my-bucket", 1000, "notes.txt")).rejects.toThrow();
-    expect(s3Mock.commandCalls(CopyObjectCommand)).toHaveLength(0);
-    expect(s3Mock.commandCalls(DeleteObjectCommand)).toHaveLength(0);
+    await expect(
+      restoreFileFromTrash(clientWith(), bucket.name, deletedAt, originalKey),
+    ).rejects.toThrow();
+
+    expect(await probe.get(trashKey(deletedAt, originalKey))).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await probe.get(originalKey)).toEqual(new Uint8Array([9]));
   });
 
   test("copies back to the original path and deletes the trashed copy when nothing's in the way", async () => {
-    // Nothing at the destination (so the restore proceeds), but the trashed
-    // source is there — the copy heads it to size the transfer.
-    s3Mock.on(HeadObjectCommand, { Key: "notes.txt" }).rejects({ name: "NotFound" });
-    s3Mock
-      .on(HeadObjectCommand, { Key: trashKey(1000, "notes.txt") })
-      .resolves({ ContentLength: 1024 });
-    s3Mock.on(CopyObjectCommand).resolves({});
-    s3Mock.on(DeleteObjectCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const originalKey = "trash6/notes.txt";
+    const deletedAt = Date.now();
+    await probe.put(trashKey(deletedAt, originalKey), "restored content");
 
-    await restoreFileFromTrash(client, "my-bucket", 1000, "notes.txt");
+    await restoreFileFromTrash(clientWith(), bucket.name, deletedAt, originalKey);
 
-    expect(s3Mock.commandCalls(CopyObjectCommand)[0].args[0].input.Key).toBe("notes.txt");
-    expect(s3Mock.commandCalls(DeleteObjectCommand)[0].args[0].input.Key).toBe(
-      trashKey(1000, "notes.txt"),
-    );
+    expect(await probe.getText(originalKey)).toBe("restored content");
+    expect(await probe.has(trashKey(deletedAt, originalKey))).toBe(false);
   });
 });
 
 describe("restoreFolderFromTrash", () => {
   test("throws and leaves the trashed copies untouched if the original path is occupied", async () => {
-    s3Mock.on(ListObjectsV2Command).resolvesOnce({ Contents: [{ Key: "Vacation/x.jpg" }] });
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const prefix = "trash7/Vacation/";
+    const deletedAt = Date.now();
+    await probe.put(`${prefix}x.jpg`, new Uint8Array([1])); // occupies the original path
+    await probe.put(trashKey(deletedAt, prefix), new Uint8Array(0));
+    await probe.put(trashKey(deletedAt, `${prefix}a.jpg`), new Uint8Array([2]));
 
     await expect(
-      restoreFolderFromTrash(client, "my-bucket", 2000, "Vacation/"),
+      restoreFolderFromTrash(clientWith(), bucket.name, deletedAt, prefix),
     ).rejects.toThrow();
-    expect(s3Mock.commandCalls(CopyObjectCommand)).toHaveLength(0);
+
+    expect(await probe.has(trashKey(deletedAt, prefix))).toBe(true);
+    expect(await probe.has(trashKey(deletedAt, `${prefix}a.jpg`))).toBe(true);
   });
 
   test("restores every object back under the original path when it's free", async () => {
-    s3Mock
-      .on(ListObjectsV2Command)
-      .resolvesOnce({ Contents: [], IsTruncated: false }) // conflict check
-      .resolvesOnce({
-        Contents: [
-          { Key: trashKey(2000, "Vacation/") },
-          { Key: trashKey(2000, "Vacation/a.jpg") },
-        ],
-        IsTruncated: false,
-      });
-    s3Mock.on(CopyObjectCommand).resolves({});
-    s3Mock.on(DeleteObjectsCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const prefix = "trash8/Vacation/";
+    const deletedAt = Date.now();
+    await probe.put(trashKey(deletedAt, prefix), new Uint8Array(0));
+    await probe.put(trashKey(deletedAt, `${prefix}a.jpg`), new Uint8Array([3]));
 
-    await restoreFolderFromTrash(client, "my-bucket", 2000, "Vacation/");
+    await restoreFolderFromTrash(clientWith(), bucket.name, deletedAt, prefix);
 
-    const copyCalls = s3Mock.commandCalls(CopyObjectCommand);
-    expect(copyCalls.map((c) => c.args[0].input.Key).sort()).toEqual(
-      ["Vacation/", "Vacation/a.jpg"].sort(),
-    );
-    const deleteCalls = s3Mock.commandCalls(DeleteObjectsCommand);
-    expect(deleteCalls[0].args[0].input.Delete?.Objects?.map((o) => o.Key).sort()).toEqual(
-      [trashKey(2000, "Vacation/"), trashKey(2000, "Vacation/a.jpg")].sort(),
-    );
+    expect(await probe.has(prefix)).toBe(true);
+    expect(await probe.has(`${prefix}a.jpg`)).toBe(true);
+    expect(await probe.has(trashKey(deletedAt, prefix))).toBe(false);
+    expect(await probe.has(trashKey(deletedAt, `${prefix}a.jpg`))).toBe(false);
   });
 });
 
 describe("deleteTrashItem", () => {
   test("deletes a single trashed file", async () => {
-    s3Mock.on(DeleteObjectCommand).resolves({});
-    await deleteTrashItem(client, "my-bucket", 1000, "notes.txt", "file");
-    expect(s3Mock.commandCalls(DeleteObjectCommand)[0].args[0].input.Key).toBe(
-      trashKey(1000, "notes.txt"),
-    );
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const deletedAt = Date.now();
+    const originalKey = "trash9/notes.txt";
+    await probe.put(trashKey(deletedAt, originalKey), new Uint8Array([1]));
+
+    await deleteTrashItem(clientWith(), bucket.name, deletedAt, originalKey, "file");
+
+    expect(await probe.has(trashKey(deletedAt, originalKey))).toBe(false);
   });
 
   test("deletes every object under a trashed folder", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      Contents: [{ Key: trashKey(2000, "Vacation/") }, { Key: trashKey(2000, "Vacation/a.jpg") }],
-      IsTruncated: false,
-    });
-    s3Mock.on(DeleteObjectsCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const deletedAt = Date.now();
+    const prefix = "trash10/Vacation/";
+    await probe.put(trashKey(deletedAt, prefix), new Uint8Array(0));
+    await probe.put(trashKey(deletedAt, `${prefix}a.jpg`), new Uint8Array([1]));
 
-    await deleteTrashItem(client, "my-bucket", 2000, "Vacation/", "folder");
+    await deleteTrashItem(clientWith(), bucket.name, deletedAt, prefix, "folder");
 
-    const deleteCalls = s3Mock.commandCalls(DeleteObjectsCommand);
-    expect(deleteCalls[0].args[0].input.Delete?.Objects).toHaveLength(2);
+    expect(await probe.keys(trashKey(deletedAt, prefix))).toEqual([]);
   });
 });
 
 describe("listTrash / emptyTrash", () => {
   test("listTrash groups raw trash objects into rows", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      Contents: [
-        { Key: trashKey(1000, "notes.txt"), Size: 10 },
-        { Key: trashKey(2000, "Vacation/"), Size: 0 },
-        { Key: trashKey(2000, "Vacation/a.jpg"), Size: 100 },
-      ],
-      IsTruncated: false,
-    });
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const deletedAt1 = Date.now();
+    const deletedAt2 = deletedAt1 + 1;
+    await probe.put(trashKey(deletedAt1, "trash11/notes.txt"), new Uint8Array(10));
+    await probe.put(trashKey(deletedAt2, "trash11/Vacation/"), new Uint8Array(0));
+    await probe.put(trashKey(deletedAt2, "trash11/Vacation/a.jpg"), new Uint8Array(100));
 
-    const groups = await listTrash(client, "my-bucket");
-    expect(groups).toHaveLength(2);
+    // The bucket is shared across this whole file, so other tests' trash
+    // entries are present too — assert on the rows we planted, not the total
+    // count, the way the old isolated-mock test could.
+    const groups = await listTrash(clientWith(), bucket.name);
     const byKey = new Map(groups.map((g) => [g.originalKey, g]));
-    expect(byKey.get("notes.txt")).toMatchObject({ kind: "file", totalSize: 10 });
-    expect(byKey.get("Vacation/")).toMatchObject({ kind: "folder", totalSize: 100 });
+    expect(byKey.get("trash11/notes.txt")).toMatchObject({ kind: "file", totalSize: 10 });
+    expect(byKey.get("trash11/Vacation/")).toMatchObject({ kind: "folder", totalSize: 100 });
   });
 
   test("emptyTrash deletes everything under the trash location", async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      Contents: [{ Key: trashKey(1000, "a.txt") }, { Key: trashKey(2000, "b.txt") }],
-      IsTruncated: false,
-    });
-    s3Mock.on(DeleteObjectsCommand).resolves({});
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const deletedAt = Date.now();
+    await probe.put(trashKey(deletedAt, "trash12/a.txt"), new Uint8Array([1]));
+    await probe.put(trashKey(deletedAt + 1, "trash12/b.txt"), new Uint8Array([2]));
 
-    await emptyTrash(client, "my-bucket");
+    await emptyTrash(clientWith(), bucket.name);
 
-    const deleteCalls = s3Mock.commandCalls(DeleteObjectsCommand);
-    expect(deleteCalls[0].args[0].input.Delete?.Objects).toHaveLength(2);
+    // Genuinely everything — including leftovers from earlier tests in this
+    // file, which is a stronger proof of "empties the trash" than checking
+    // just the two keys we added here.
+    expect(await probe.keys(TRASH_PREFIX)).toEqual([]);
   });
 });

@@ -1,3 +1,16 @@
+// The one file that still mocks the SDK, deliberately.
+//
+// Every other suite talks to a real MinIO, because it can. This one is about
+// what renameFolder does to objects of 2 GB and 6 GB: how it splits them into
+// UploadPartCopy ranges, that it never sends a plain CopyObject (which S3
+// rejects above 5 GB), and that a failed part copy aborts the multipart upload
+// instead of leaving it to bill as storage forever.
+//
+// Those sizes cannot be materialized in a test, and shrinking them to something
+// MinIO could hold would test different code — the whole point is the behaviour
+// *at* the thresholds. So the plan here is the thing under test, and mocking the
+// client is the honest way to read it. Don't "finish the migration" by deleting
+// this; there's nothing to migrate it to.
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mockClient } from "aws-sdk-client-mock";
 import {
