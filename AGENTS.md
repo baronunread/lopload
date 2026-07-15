@@ -49,7 +49,7 @@ src/lib/            framework-free TS engine (S3, stores, state machine)
 src/tauri/          thin wrappers around Tauri plugins (keychain, fs, HTTP, notifications)
 src/services/       wires engine + Tauri into the AppServices contract
 src/ui/             React components on Kumo, pastel palette
-src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements
+src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs (positional file writes over IPC)
 tests/unit/         bun test + happy-dom (no I/O)
 tests/integration/  real MinIO via docker
 tests/e2e/          real bucket (R2/S3/etc.), opt-in via env vars
