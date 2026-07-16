@@ -9,9 +9,10 @@ import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "../dangerBut
 export interface TrashDialogProps {
   connectionId: string;
   onClose: () => void;
-  /** Called after a successful restore, so the browser can refresh in case
-   * the restored item's original path is currently in view. */
-  onRestored: () => void;
+  /** Called after a successful restore with the item's original path, so the
+   * browser can invalidate that path's cached listing/folder-stats and
+   * refresh in case it's currently in view. */
+  onRestored: (originalKey: string) => void;
 }
 
 type PendingAction = { kind: "delete-now"; item: TrashItem } | { kind: "empty" };
@@ -80,7 +81,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
     try {
       await services.trash.restore(connectionId, item, (p) => setItemProgress(item.id, p));
       setItems((prev) => prev.filter((i) => i.id !== item.id));
-      onRestored();
+      onRestored(item.originalKey);
     } catch (err) {
       toasts.add({
         variant: "error",

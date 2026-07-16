@@ -52,6 +52,7 @@ import { abortStaleUploads } from "../lib/s3/orphanSweep";
 import { deriveTrayUploadTargets } from "./trayState";
 
 import { isImageName } from "../ui/format";
+import { invalidateConnection as invalidateListingCacheForConnection } from "../ui/listingCache";
 import { CredentialsUnreadableError } from "../ui/services";
 import type {
   AppServices,
@@ -161,6 +162,10 @@ class LoploadServices implements AppServices {
     this.clients.delete(connectionId);
     this.engines.delete(connectionId);
     this.enginePromises.delete(connectionId);
+    // A saved/deleted connection's credentials, endpoint, or bucket may have
+    // changed — any cached listing/folder-stats for it now potentially
+    // describe a different bucket, so they can't be trusted going forward.
+    invalidateListingCacheForConnection(connectionId);
   }
 
   private async getEngine(connectionId: string): Promise<TransferEngine> {
