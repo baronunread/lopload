@@ -99,7 +99,56 @@ function makeUploadRefreshResilienceScenario(): Scenario {
   };
 }
 
+/** A real 1×1 PNG, so the webview can actually decode and render it. */
+const TINY_PNG = Uint8Array.from(
+  atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  ),
+  (c) => c.charCodeAt(0),
+);
+
 export const browseScenarios: Scenario[] = [
+  {
+    name: "image rows get a preview whose presigned URL is reused across visits",
+    async arrange(bucket) {
+      await bucket.put("pics/cat.png", TINY_PNG);
+      await bucket.put("pics/clip.mp4", "junk bytes, not a decodable video");
+    },
+    async run({ user, expect, waitFor }) {
+      await waitFor(() => {
+        expect(screen.queryByText("pics") !== null).toBe(true);
+      });
+      await user.dblClick(screen.getByText("pics"));
+
+      let firstSrc = "";
+      await waitFor(() => {
+        const img = screen.queryByAltText("Preview of cat.png") as HTMLImageElement | null;
+        expect(img !== null).toBe(true);
+        firstSrc = img!.src;
+      });
+      expect(firstSrc).toContain("cat.png");
+      expect(firstSrc).toContain("X-Amz-Signature");
+
+      // Videos never fetch a preview — they get a film-strip icon — and the
+      // row must render fine alongside the image previews.
+      expect(screen.queryByText("clip.mp4") !== null).toBe(true);
+
+      // Leave and come back: the presigned URL must come from the cache —
+      // the identical string lets the webview serve the image bytes from its
+      // HTTP cache instead of re-downloading on every visit.
+      await user.click(screen.getAllByRole("link", { name: "Home" })[0]);
+      await waitFor(() => {
+        expect(screen.queryByText("pics") !== null).toBe(true);
+      });
+      await user.dblClick(screen.getByText("pics"));
+      await waitFor(() => {
+        const img = screen.queryByAltText("Preview of cat.png") as HTMLImageElement | null;
+        expect(img !== null).toBe(true);
+        expect(img!.src).toBe(firstSrc);
+      });
+    },
+  },
+
   {
     name: "lists the files and folders that are actually in the bucket",
     async arrange(bucket) {

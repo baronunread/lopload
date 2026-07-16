@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { FileIcon, FolderIcon } from "@phosphor-icons/react";
+import { FileIcon, FilmStripIcon, FolderIcon, ImageIcon } from "@phosphor-icons/react";
 import { isImageName, isVideoName } from "./format";
 import { useServices } from "./services";
+import { fetchThumbnailUrl, peekThumbnailUrl } from "./thumbnailCache";
 
 export interface ThumbnailProps {
   connectionId: string;
@@ -10,21 +11,38 @@ export interface ThumbnailProps {
   kind: "file" | "folder";
 }
 
-/** Small preview cell for image/video files; a plain icon otherwise. */
+/** Small preview cell for image files; a type icon otherwise (videos get a
+ * film-strip icon — fetching video bytes for a frame isn't worth it, and
+ * frame 0 is usually black anyway).
+ *
+ * Always renders a fixed 32px box so rows never shift when a preview
+ * arrives: the icon shows immediately and the image cross-fades in on top
+ * of it once loaded. */
 export function Thumbnail({ connectionId, entryKey, name, kind }: ThumbnailProps) {
   const services = useServices();
-  const [url, setUrl] = useState<string | null>(null);
-  const previewable = kind === "file" && (isImageName(name) || isVideoName(name));
+  const isVideo = kind === "file" && isVideoName(name);
+  const previewable = kind === "file" && isImageName(name);
+  // Rows are keyed by entry key, so this component never sees entryKey
+  // change — reading the cache in the initializer is safe and lets
+  // remounted rows (virtualized scrolling) paint the image on first render.
+  const [url, setUrl] = useState<string | null>(() =>
+    previewable ? (peekThumbnailUrl(connectionId, entryKey) ?? null) : null,
+  );
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!previewable) {
-      setUrl(null);
-      return;
-    }
+    if (!previewable || peekThumbnailUrl(connectionId, entryKey) !== undefined) return;
     let cancelled = false;
-    services.browser.getThumbnailUrl(connectionId, entryKey).then((result) => {
-      if (!cancelled) setUrl(result);
-    });
+    fetchThumbnailUrl(connectionId, entryKey, () =>
+      services.browser.getThumbnailUrl(connectionId, entryKey),
+    )
+      .then((result) => {
+        if (!cancelled) setUrl(result);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -32,29 +50,41 @@ export function Thumbnail({ connectionId, entryKey, name, kind }: ThumbnailProps
   }, [connectionId, entryKey, previewable]);
 
   if (kind === "folder") {
-    return <FolderIcon size={20} weight="fill" className="text-kumo-brand" aria-hidden />;
-  }
-
-  if (previewable && url) {
-    if (isVideoName(name)) {
-      return (
-        <video
-          src={url}
-          preload="metadata"
-          muted
-          className="lopload-settle lopload-media-outline h-8 w-8 rounded object-cover"
-          aria-label={`Preview of ${name}`}
-        />
-      );
-    }
     return (
-      <img
-        src={url}
-        alt={`Preview of ${name}`}
-        className="lopload-settle lopload-media-outline h-8 w-8 rounded object-cover"
-      />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center">
+        <FolderIcon size={20} weight="fill" className="text-kumo-brand" aria-hidden />
+      </span>
     );
   }
 
-  return <FileIcon size={20} className="text-kumo-subtle" aria-hidden />;
+  const showMedia = previewable && url !== null && !failed;
+  const placeholder = isVideo ? (
+    <FilmStripIcon size={20} className="text-kumo-subtle" aria-hidden />
+  ) : previewable ? (
+    <ImageIcon size={20} className="text-kumo-subtle" aria-hidden />
+  ) : (
+    <FileIcon size={20} className="text-kumo-subtle" aria-hidden />
+  );
+
+  return (
+    <span className="relative flex h-8 w-8 shrink-0 items-center justify-center">
+      <span
+        className={`lopload-settle flex items-center justify-center ${loaded ? "opacity-0" : "opacity-100"}`}
+      >
+        {placeholder}
+      </span>
+      {showMedia && (
+        <img
+          src={url}
+          alt={`Preview of ${name}`}
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+          className={`lopload-settle lopload-media-outline absolute inset-0 h-8 w-8 rounded object-cover ${
+            loaded ? "opacity-100" : "opacity-0"
+          }`}
+        />
+      )}
+    </span>
+  );
 }

@@ -51,7 +51,7 @@ import { sweepTrash } from "../lib/s3/trashSweep";
 import { abortStaleUploads } from "../lib/s3/orphanSweep";
 import { deriveTrayUploadTargets } from "./trayState";
 
-import { isImageName, isVideoName } from "../ui/format";
+import { isImageName } from "../ui/format";
 import { CredentialsUnreadableError } from "../ui/services";
 import type {
   AppServices,
@@ -426,7 +426,7 @@ class LoploadServices implements AppServices {
     },
     getThumbnailUrl: async (connectionId: string, key: string): Promise<string | null> => {
       const name = key.split("/").pop() ?? key;
-      if (!isImageName(name) && !isVideoName(name)) return null;
+      if (!isImageName(name)) return null;
       const { client, conn } = await this.getClient(connectionId);
       return s3CopyLink(client, conn.bucket, key, THUMBNAIL_URL_EXPIRY_SECONDS);
     },
