@@ -90,6 +90,25 @@ describe("tauri/http", () => {
     expect(lastCall("http_send")).toBeUndefined();
   });
 
+  test("a zero-byte body stays on plugin-http", async () => {
+    // Folder markers (createFolder, the trash-folder marker) PUT an empty
+    // Uint8Array. The fast path's reqwest sends no content-length header for
+    // an empty body while SigV4 signed `content-length: 0`, so R2 rejects the
+    // request with SignatureDoesNotMatch — and there are no bytes to keep off
+    // the IPC serializer anyway.
+    await tauriFetch("https://s3.example.com/bucket/folder/", {
+      method: "PUT",
+      body: new Uint8Array(0),
+    });
+    await tauriFetch("https://s3.example.com/bucket/folder2/", {
+      method: "PUT",
+      body: new ArrayBuffer(0),
+    });
+
+    expect(pluginFetch).toHaveBeenCalledTimes(2);
+    expect(lastCall("http_send")).toBeUndefined();
+  });
+
   test("aborting mid-part cancels the send in Rust and rejects as an AbortError", async () => {
     // Stand in for the Rust command: http_send hangs until http_cancel fires,
     // then rejects the way a cancelled send does.

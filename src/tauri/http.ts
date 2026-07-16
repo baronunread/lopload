@@ -49,8 +49,13 @@ function abortError(): Error {
 }
 
 function byteBody(body: BodyInit | null | undefined): Uint8Array | undefined {
-  if (body instanceof Uint8Array) return body;
-  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  // Zero-byte bodies (folder markers: createFolder, the trash-folder marker)
+  // stay on plugin-http. There are no bytes to keep off the IPC serializer,
+  // and the fast path breaks them: SigV4 signed `content-length: 0`, but
+  // reqwest puts no content-length header on the wire for an empty body, so
+  // R2 reconstructs a different canonical request → SignatureDoesNotMatch.
+  if (body instanceof Uint8Array) return body.byteLength > 0 ? body : undefined;
+  if (body instanceof ArrayBuffer) return body.byteLength > 0 ? new Uint8Array(body) : undefined;
   return undefined;
 }
 

@@ -151,8 +151,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     }
   }
 
-  /** Full re-list with the loading spinner — for navigation, initial load,
-   * and the debounced upload-completion refresh. */
+  /** Full re-list with the loading spinner — for navigation and initial
+   * load. */
   async function refresh() {
     await runList(true);
   }
@@ -235,7 +235,13 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   // list per folder) and fill in as they arrive; rows show "—" meanwhile.
   useEffect(() => {
     let cancelled = false;
-    setFolderMeta({});
+    // Keep the previous stats on screen while fresh ones compute — only drop
+    // folders that are no longer listed. Blanking everything to "—" made
+    // every folder row visibly reload on each upload-completion refresh.
+    setFolderMeta((prev) => {
+      const listed = new Set(entries.filter((e) => e.kind === "folder").map((e) => e.key));
+      return Object.fromEntries(Object.entries(prev).filter(([key]) => listed.has(key)));
+    });
     for (const entry of entries) {
       if (entry.kind !== "folder") continue;
       void services.browser.folderInfo(connectionId, entry.key).then((info) => {
@@ -268,14 +274,16 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   // Auto-refresh the listing once uploads land, so the user never has to
   // navigate away and back to see new files. Debounced so a large batch
-  // (many "uploaded" events in a row) triggers one re-list, not dozens.
+  // (many "uploaded" events in a row) triggers one re-list, not dozens —
+  // and silent, because flipping the spinner mid-upload makes the table
+  // visibly reload for every file that lands.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
-        void refresh();
+        void refreshSilently();
       }, REFRESH_DEBOUNCE_MS);
     };
     const unsubscribe = services.engine.subscribe((event) => {
