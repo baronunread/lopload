@@ -293,7 +293,6 @@ export function TransferWidget({
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
       transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
-      onContextMenu={(e) => e.preventDefault()}
       className={`fixed right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line transition-[bottom] sm:w-[26rem] ${
         liftedForUpdateBanner ? "bottom-20" : "bottom-8"
       }`}

@@ -11,6 +11,21 @@ import "./ui/theme.css";
 import "./ui/noise.css";
 import App from "./App";
 
+// Suppress the native webview context menu (Reload / Inspect Element) on app
+// chrome. Editable elements keep it for copy/paste/spellcheck, and dev builds
+// keep it everywhere so Inspect Element stays available. This must not
+// stopPropagation: the app's own context menus (RemoteBrowser row menu,
+// TransferWidget) attach their own onContextMenu handlers on the same event
+// and need to keep rendering their custom UI.
+if (!import.meta.env.DEV) {
+  window.addEventListener("contextmenu", (e) => {
+    const target = e.target as HTMLElement | null;
+    const editable = target?.closest("input, textarea, [contenteditable]");
+    if (editable || target?.isContentEditable) return;
+    e.preventDefault();
+  });
+}
+
 // Runner B (`bun run selftest`, see src/selftest/mount.tsx) runs the same
 // tests/scenarios/* list as `bun test` inside this real webview instead of
 // rendering the app normally. The `if` has to stay written exactly like this
