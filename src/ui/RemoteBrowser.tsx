@@ -3,6 +3,7 @@ import {
   Breadcrumbs,
   Button,
   Dialog,
+  DropdownMenu,
   Empty,
   Input,
   useKumoToastManager,
@@ -54,6 +55,28 @@ function crumbDropClass(dragActive: boolean, isTarget: boolean): string {
     : `${base} ring-1 ring-dashed ring-kumo-line`;
 }
 
+/** Collapse ancestor breadcrumbs behind a "…" menu once the path goes deeper
+ * than this many segments — keeps Home plus the last two segments visible
+ * (so the trail still reads as Home/…/parent/current) no matter how deep the
+ * real path is, so the toolbar's Filter/New folder/Trash/Upload controls
+ * never get pushed out of view. A plain count threshold rather than a
+ * measured-overflow check — plenty for how deep real paths get, and far
+ * simpler. */
+const BREADCRUMB_COLLAPSE_THRESHOLD = 3;
+
+/** Splits path segments into the ones a collapsed breadcrumb trail hides
+ * behind "…" and the ones it still shows (Home is rendered separately by
+ * the caller and isn't part of either list). */
+function splitBreadcrumbSegments(segments: string[]): {
+  hidden: string[];
+  visible: string[];
+} {
+  if (segments.length <= BREADCRUMB_COLLAPSE_THRESHOLD) {
+    return { hidden: [], visible: segments };
+  }
+  return { hidden: segments.slice(0, -2), visible: segments.slice(-2) };
+}
+
 /** How long to wait, after the last relevant engine event, before re-listing
  * the current folder — batches of many files each finishing individually
  * would otherwise trigger a re-list per file. */
@@ -86,6 +109,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const rows = sortEntries(filterEntries(entries, filterQuery), sort);
   const selection = useSelection(rows);
   const segments = segmentsForPrefix(prefix);
+  const { hidden: hiddenSegments, visible: visibleSegments } = splitBreadcrumbSegments(segments);
 
   // Every list request (spinner or silent) carries an incrementing id, so a
   // slow/stale response can never clobber a newer one that already landed —
@@ -661,8 +685,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       }}
       onClick={() => selection.clear()}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Breadcrumbs>
+      <div className="flex items-center justify-between gap-2">
+        <Breadcrumbs className="min-w-0 flex-1 overflow-hidden">
           <span
             className={crumbDropClass(dragMove.drag !== null, dragMove.dropTarget === "")}
             onClick={(e) => {
@@ -675,9 +699,45 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
               Home
             </Breadcrumbs.Link>
           </span>
-          {segments.map((segment, i) => {
+          {hiddenSegments.length > 0 && (
+            <span className="contents">
+              <Breadcrumbs.Separator />
+              {/* Hidden ancestors aren't drag-move drop targets in this
+                  first pass — only the visible crumbs below (Home + last
+                  two segments) register drop-target handlers. Hovering
+                  this trigger during a drag doesn't open the menu either;
+                  both would be reasonable follow-ups. */}
+              <DropdownMenu>
+                <DropdownMenu.Trigger>
+                  <button
+                    type="button"
+                    aria-label={`Show ${hiddenSegments.length} hidden folder${
+                      hiddenSegments.length === 1 ? "" : "s"
+                    }`}
+                    className="inline-flex shrink-0 items-center rounded-md px-1 py-0.5 text-kumo-subtle hover:bg-kumo-tint"
+                  >
+                    …
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Content>
+                  {hiddenSegments.map((segment, i) => {
+                    const segPrefix = segments.slice(0, i + 1).join("/") + "/";
+                    return (
+                      <DropdownMenu.Item key={segPrefix} onClick={() => navigate(segPrefix)}>
+                        {segment}
+                      </DropdownMenu.Item>
+                    );
+                  })}
+                </DropdownMenu.Content>
+              </DropdownMenu>
+            </span>
+          )}
+          {visibleSegments.map((segment, j) => {
+            // Absolute index within the full `segments` array — needed to
+            // rebuild the same prefix the un-collapsed crumbs always used.
+            const i = hiddenSegments.length + j;
             const segPrefix = segments.slice(0, i + 1).join("/") + "/";
-            const isLast = i === segments.length - 1;
+            const isLast = j === visibleSegments.length - 1;
             return (
               <span key={segPrefix} className="contents">
                 <Breadcrumbs.Separator />
@@ -702,7 +762,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
             );
           })}
         </Breadcrumbs>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Input
             size="sm"
             placeholder="Filter"
