@@ -115,6 +115,9 @@ export interface TransferWidgetProps {
   connectionId: string;
   /** Called with a plain-language batch summary once a batch completes. */
   onBatchFinished?: (summary: string) => void;
+  /** True while the update banner is showing, so the widget lifts clear of
+   * it instead of the two overlapping in the bottom-right corner. */
+  liftedForUpdateBanner?: boolean;
 }
 
 const IN_FLIGHT_KINDS = new Set(["queued", "sending", "checking"]);
@@ -141,6 +144,7 @@ const EXIT_ANIMATION_MS = 200;
 export function TransferWidget({
   connectionId,
   onBatchFinished,
+  liftedForUpdateBanner,
 }: TransferWidgetProps) {
   const services = useServices();
   const { moves: allMoves, dismissMove } = useMoveProgress();
@@ -290,7 +294,9 @@ export function TransferWidget({
       animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
       transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
       onContextMenu={(e) => e.preventDefault()}
-      className="fixed bottom-8 right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line sm:w-[26rem]"
+      className={`fixed right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line transition-[bottom] sm:w-[26rem] ${
+        liftedForUpdateBanner ? "bottom-20" : "bottom-8"
+      }`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-kumo-line bg-kumo-elevated px-4 py-0 text-kumo-strong">
         <button

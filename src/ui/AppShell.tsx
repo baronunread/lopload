@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Toasty } from "@cloudflare/kumo";
 import type { Connection } from "../lib/types";
 import { useServices } from "./services";
-import { AutoUpdateProvider } from "./AutoUpdateContext";
+import { AutoUpdateProvider, useAutoUpdateContext } from "./AutoUpdateContext";
 import { UpdateBanner } from "./UpdateBanner";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { AddStorageDialog } from "./AddStorageDialog";
@@ -18,6 +18,7 @@ const RemoteBrowser = lazy(() => import("./RemoteBrowser").then((m) => ({ defaul
 
 function AppShellInner() {
   const services = useServices();
+  const { banner: updateBanner } = useAutoUpdateContext();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [prefix, setPrefix] = useState("");
@@ -88,7 +89,6 @@ function AppShellInner() {
 
   return (
     <div className="flex h-screen flex-col bg-kumo-canvas">
-      <UpdateBanner />
       <header className="flex items-center justify-between gap-3 border-b border-kumo-line bg-kumo-base px-4 py-3">
         <h1 className="lopload-heading shrink-0 text-xl font-semibold">Lopload</h1>
         <div className="flex min-w-0 items-center gap-2">
@@ -135,8 +135,10 @@ function AppShellInner() {
           </section>
         </main>
 
-        <TransferWidget connectionId={current.id} />
+        <TransferWidget connectionId={current.id} liftedForUpdateBanner={!!updateBanner} />
       </MoveProgressProvider>
+
+      <UpdateBanner />
     </div>
   );
 }
