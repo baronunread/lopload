@@ -17,7 +17,10 @@ for (const scenario of allScenarios) {
   test(
     scenario.name,
     async () => {
-      const app = await mountApp(expect as never, { arrange: scenario.arrange });
+      const app = await mountApp(expect as never, {
+        arrange: scenario.arrange,
+        wrapFetch: scenario.wrapFetch,
+      });
       try {
         await scenario.run(app);
       } finally {

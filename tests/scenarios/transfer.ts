@@ -29,7 +29,7 @@ function bytes(size: number, seed = 1): Uint8Array {
  * the two coincide — which is exactly why this is easy to get wrong and only
  * discover against a real provider.
  */
-async function settle(ctx: ScenarioCtx, name: string, timeoutMs = 60_000) {
+export async function settle(ctx: ScenarioCtx, name: string, timeoutMs = 60_000) {
   const { services, connectionId, prefix } = ctx;
   const key = `${prefix}${name}`;
   return new Promise<{ kind: string }>((resolve, reject) => {

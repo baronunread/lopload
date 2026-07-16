@@ -93,6 +93,15 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   // overwritten by an in-flight refresh() that was kicked off before it.
   const requestIdRef = useRef(0);
 
+  // Whether the current connectionId+prefix has ever produced a successful
+  // listing. Reset on navigation. Once true, a later refresh — e.g. the
+  // debounced re-list after an upload lands — must never blank the table on
+  // failure: a transient error under transfer load (or a stale-credentials
+  // hiccup) would otherwise make an already-loaded folder flash empty. Stale
+  // data beats no data; only the very first load for a location shows the
+  // error/empty UI.
+  const loadedRef = useRef(false);
+
   /** Applies an optimistic update to `entries` immediately and returns a
    * rollback that applies the given inverse — inverse-ops rather than a
    * whole-array snapshot, so rolling back one mutation can't clobber another
@@ -114,9 +123,14 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       setEntries(result);
       setLoadFailed(false);
       setCredentialsConnection(null);
+      loadedRef.current = true;
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       if (!spinner) return; // silent refreshes keep whatever's on screen on failure
+      // A re-list of an already-loaded folder failed — keep showing the last
+      // good listing instead of blanking it. Only a location's first load
+      // (nothing on screen to preserve yet) falls through to the error UI.
+      if (loadedRef.current) return;
       setEntries([]);
       if (err instanceof CredentialsUnreadableError) {
         // The OS keychain couldn't produce credentials for this connection
@@ -151,6 +165,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   }
 
   useEffect(() => {
+    loadedRef.current = false;
     void refresh();
     selection.clear();
     setFilterQuery("");

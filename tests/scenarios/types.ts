@@ -13,6 +13,7 @@
 import type { UserEvent } from "@testing-library/user-event";
 
 import type { Services } from "../../src/services/appServices";
+import type { FetchFn } from "../../src/lib/s3/http-handler";
 import type { BucketProbe } from "../support/bucketProbe";
 import type { HostControl, HostRecord } from "../support/nodeHost";
 
@@ -67,6 +68,10 @@ export interface Scenario {
   /** Skip in the in-app runner — for scenarios that can't work there (e.g. ones
    * needing fault injection, which lives on the Node host's fetch). */
   nodeOnly?: boolean;
+  /** Wraps the Node host's fetch — for fault-injection scenarios (see
+   * tests/support/faultyFetch.ts). Only honored by the Node runner; pair with
+   * `nodeOnly: true`. */
+  wrapFetch?: (inner: FetchFn) => FetchFn;
   /**
    * Seed the bucket BEFORE the app mounts.
    *
