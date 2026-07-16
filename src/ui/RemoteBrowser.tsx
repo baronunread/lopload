@@ -774,6 +774,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           connectionId={connectionId}
           selected={selection.selected}
           dropTarget={dragMove.dropTarget}
+          menuTargetKey={menu?.entry?.key ?? null}
+          menuOpen={menu !== null}
           folderMeta={folderMeta}
           dropTargetHandlersFor={(entry) =>
             entry.kind === "folder" ? dragMove.dropTargetHandlers(entry.key) : undefined

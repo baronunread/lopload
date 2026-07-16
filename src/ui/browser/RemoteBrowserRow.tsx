@@ -11,6 +11,16 @@ export interface RemoteBrowserRowProps {
   connectionId: string;
   isSelected: boolean;
   isDropTarget: boolean;
+  /** True when this row is the target of the currently-open context menu
+   * (right-click or the "⋯" trigger) — it keeps the selected-style
+   * highlight for as long as the menu stays open, even though the pointer
+   * has moved off the row onto the menu itself. */
+  isMenuTarget: boolean;
+  /** True whenever any context menu is open (including the background,
+   * entry-less menu) — suppresses every row's hover highlight so the
+   * pointer moving over other rows to reach the menu doesn't light them
+   * up. */
+  suppressHover: boolean;
   /** Lazily computed size/modified stats for folder rows (S3 folders carry
    * no metadata of their own); undefined while still loading. */
   folderMeta?: FolderInfo;
@@ -36,6 +46,8 @@ export function RemoteBrowserRow({
   connectionId,
   isSelected,
   isDropTarget,
+  isMenuTarget,
+  suppressHover,
   folderMeta,
   dropTargetHandlers,
   onClick,
@@ -54,9 +66,11 @@ export function RemoteBrowserRow({
       className={`h-14 cursor-default select-none ${
         isDropTarget
           ? "bg-kumo-tint ring-1 ring-inset ring-kumo-brand"
-          : isSelected
+          : isSelected || isMenuTarget
             ? "bg-kumo-brand/10 ring-1 ring-inset ring-kumo-brand/50 hover:bg-kumo-brand/15"
-            : "hover:bg-kumo-tint"
+            : suppressHover
+              ? ""
+              : "hover:bg-kumo-tint"
       }`}
       onClick={onClick}
       onMouseDown={onMouseDown}
