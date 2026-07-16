@@ -85,6 +85,42 @@ describe("moveFolderToTrash", () => {
     expect(await probe.get(trashKey(deletedAt, prefix))).toEqual(new Uint8Array(0));
     expect(await probe.keys(trashKey(deletedAt, prefix))).toEqual([trashKey(deletedAt, prefix)]);
   });
+
+  test("writes the folder's trash marker before copying any children — the fix for the loose-files grouping race", async () => {
+    // groupTrashObjects (trash.ts) can only collapse a folder's children into
+    // one Trash row once the marker object exists at the trash location.
+    // Writing the marker last (the old order) meant any listing of the Trash
+    // taken while a big move was still copying showed each child as its own
+    // loose row. This wraps the real MinIO fetch to record request order —
+    // no SDK mocking — and asserts the marker PutObject always lands before
+    // the first child CopyObject.
+    const probe = bucketProbe(bucket.client, bucket.name);
+    const prefix = "trash-order/Vacation/";
+    await probe.put(`${prefix}a.jpg`, new Uint8Array([1]));
+    await probe.put(`${prefix}b.jpg`, new Uint8Array([2]));
+    const deletedAt = Date.now();
+    const destRoot = trashKey(deletedAt, prefix);
+
+    type Event = { kind: "marker-put" | "child-copy"; url: string };
+    const events: Event[] = [];
+    const recordingFetch: FetchFn = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "PUT" && url.includes(encodeURIComponent(destRoot).replace(/%2F/g, "/"))) {
+        const headers = new Headers(init?.headers);
+        events.push({ kind: headers.has("x-amz-copy-source") ? "child-copy" : "marker-put", url });
+      }
+      return nativeFetch(input, init);
+    };
+
+    await moveFolderToTrash(clientWith(recordingFetch), bucket.name, prefix, deletedAt);
+
+    const markerIdx = events.findIndex((e) => e.kind === "marker-put");
+    const firstCopyIdx = events.findIndex((e) => e.kind === "child-copy");
+    expect(markerIdx).not.toBe(-1);
+    expect(firstCopyIdx).not.toBe(-1);
+    expect(markerIdx < firstCopyIdx).toBe(true);
+  });
 });
 
 describe("restoreFileFromTrash", () => {

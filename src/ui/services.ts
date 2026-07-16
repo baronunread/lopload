@@ -99,12 +99,17 @@ export interface CopyProgress {
 }
 
 /** Progress of an in-flight S3 move (rename or drag-to-move). Emitted by
- * BrowserService.subscribeMoves and used by TransferWidget to show status. */
+ * BrowserService.subscribeMoves and used by TransferWidget to show status.
+ * `kind` distinguishes the four operations that all reuse this same tracking
+ * machinery (see appServices.ts's runTracked) so the widget can label and
+ * icon each row appropriately: a plain rename/drag-move, a move to Trash, a
+ * restore out of Trash, or a permanent delete (Delete now / Empty trash). */
 export interface MoveProgress extends CopyProgress {
   moveId: string;
   connectionId: string;
   fromKey: string;
   toKey: string;
+  kind: "move" | "trash" | "restore" | "purge";
   status: "moving" | "completed" | "failed";
   errorMessage?: string;
 }
@@ -164,12 +169,23 @@ export interface TrashItem {
 export interface TrashService {
   list(connectionId: string): Promise<TrashItem[]>;
   /** Moves an item back to its original path. Throws if something already
-   * exists there — the trashed copy is left untouched either way. */
-  restore(connectionId: string, item: TrashItem): Promise<void>;
+   * exists there — the trashed copy is left untouched either way.
+   * `onProgress`, if given, is called directly (in addition to the global
+   * move stream) so a caller like TrashDialog can show "N of M items" on the
+   * specific row it's restoring without listening to every in-flight move. */
+  restore(
+    connectionId: string,
+    item: TrashItem,
+    onProgress?: (progress: CopyProgress) => void,
+  ): Promise<void>;
   /** Removes a single trashed item for good. */
-  deleteNow(connectionId: string, item: TrashItem): Promise<void>;
+  deleteNow(
+    connectionId: string,
+    item: TrashItem,
+    onProgress?: (progress: CopyProgress) => void,
+  ): Promise<void>;
   /** Removes everything in this connection's Trash for good. */
-  emptyTrash(connectionId: string): Promise<void>;
+  emptyTrash(connectionId: string, onProgress?: (progress: CopyProgress) => void): Promise<void>;
 }
 
 export interface EngineService {

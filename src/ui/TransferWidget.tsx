@@ -111,6 +111,72 @@ function moveDetail(move: MoveProgress): string {
   return `${formatBytes(move.copiedBytes)} of ${formatBytes(move.totalBytes)} · ${items}`;
 }
 
+/** Present-tense verb for a row/title still in flight, per kind — rename/
+ * drag-move, move to Trash, restore out of Trash, and permanent delete
+ * (Delete now / Empty trash) all reuse the same MoveProgress tracking (see
+ * appServices.ts's runTracked), so the widget is what tells them apart. */
+function movingVerb(kind: MoveProgress["kind"]): string {
+  switch (kind) {
+    case "trash":
+      return "Moving to Trash";
+    case "restore":
+      return "Restoring";
+    case "purge":
+      return "Deleting";
+    case "move":
+      return "Moving";
+  }
+}
+
+/** Past-tense verb for a row/title that already landed, per kind. */
+function completedVerb(kind: MoveProgress["kind"]): string {
+  switch (kind) {
+    case "trash":
+      return "moved to Trash";
+    case "restore":
+      return "restored";
+    case "purge":
+      return "deleted";
+    case "move":
+      return "moved";
+  }
+}
+
+function failedLabel(kind: MoveProgress["kind"]): string {
+  switch (kind) {
+    case "trash":
+      return "Couldn't move to Trash";
+    case "restore":
+      return "Couldn't restore";
+    case "purge":
+      return "Couldn't delete";
+    case "move":
+      return "Couldn't move";
+  }
+}
+
+/** Badge text for a settled row, per kind. */
+function completedBadgeLabel(kind: MoveProgress["kind"]): string {
+  switch (kind) {
+    case "trash":
+      return "Moved ✓";
+    case "restore":
+      return "Restored ✓";
+    case "purge":
+      return "Deleted ✓";
+    case "move":
+      return "Moved ✓";
+  }
+}
+
+/** The row's display name: a rename/drag-move shows where the item is going
+ * (`toKey`), but Trash/restore/purge rows have no meaningful destination —
+ * `fromKey` and `toKey` are the same original path — so they show what the
+ * operation is acting on instead. */
+function moveDisplayName(move: MoveProgress): string {
+  return baseName(move.kind === "move" ? move.toKey : move.fromKey);
+}
+
 export interface TransferWidgetProps {
   connectionId: string;
   /** Called with a plain-language batch summary once a batch completes. */
@@ -253,7 +319,11 @@ export function TransferWidget({
     }
     if (movingMoves.length > 0) {
       const n = movingMoves.length;
-      return `Moving ${n} item${n === 1 ? "" : "s"}…`;
+      // A mixed batch (say, a rename alongside a Trash move) falls back to
+      // the neutral "Moving" rather than picking one kind's verb arbitrarily.
+      const kinds = new Set(movingMoves.map((m) => m.kind));
+      const moveVerb = kinds.size === 1 ? movingVerb(movingMoves[0].kind) : "Moving";
+      return `${moveVerb} ${n} item${n === 1 ? "" : "s"}…`;
     }
     if (inFlight.length > 0) {
       const n = visibleTransfers.length;
@@ -262,9 +332,12 @@ export function TransferWidget({
     // Nothing left in flight — summarize what landed.
     if (visibleTransfers.length === 0) {
       const n = completedMoves.length;
-      return failedMoves.length > 0
-        ? `${n} of ${visibleMoves.length} moves complete`
-        : `${n} item${n === 1 ? "" : "s"} moved`;
+      if (failedMoves.length > 0) {
+        return `${n} of ${visibleMoves.length} moves complete`;
+      }
+      const kinds = new Set(visibleMoves.map((m) => m.kind));
+      const verbed = kinds.size === 1 ? completedVerb(visibleMoves[0].kind) : "moved";
+      return `${n} item${n === 1 ? "" : "s"} ${verbed}`;
     }
     if (visibleMoves.length === 0) {
       return failed.length > 0
@@ -340,16 +413,16 @@ export function TransferWidget({
                 <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
                 <div className="min-w-0">
                   <p className="truncate font-medium">
-                    {baseName(move.toKey)}
+                    {moveDisplayName(move)}
                   </p>
                   <p className="truncate text-xs text-kumo-subtle tabular-nums">
                     {move.status === "moving"
                       ? move.totalItems > 0
                         ? moveDetail(move)
-                        : "Preparing…"
+                        : `${movingVerb(move.kind)}…`
                       : move.status === "completed"
-                        ? `${move.totalItems} item${move.totalItems === 1 ? "" : "s"} moved`
-                        : move.errorMessage ?? "Couldn't move"}
+                        ? `${move.totalItems} item${move.totalItems === 1 ? "" : "s"} ${completedVerb(move.kind)}`
+                        : (move.errorMessage ?? failedLabel(move.kind))}
                   </p>
                 </div>
               </div>
@@ -357,7 +430,7 @@ export function TransferWidget({
                 {move.status === "moving" && move.totalItems > 0 && (
                   <div className="flex w-36 items-center">
                     <Meter
-                      label="Moving"
+                      label={movingVerb(move.kind)}
                       value={movePercent(move)}
                       showValue
                       className="w-full"
@@ -367,10 +440,10 @@ export function TransferWidget({
                   </div>
                 )}
                 {move.status === "completed" && (
-                  <Badge variant="success">Moved ✓</Badge>
+                  <Badge variant="success">{completedBadgeLabel(move.kind)}</Badge>
                 )}
                 {move.status === "failed" && (
-                  <Badge variant="error">Couldn't move</Badge>
+                  <Badge variant="error">{failedLabel(move.kind)}</Badge>
                 )}
                 {(move.status === "completed" || move.status === "failed") && (
                   <button

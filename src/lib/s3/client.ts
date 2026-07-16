@@ -21,6 +21,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { Connection, Credentials, PlainError, RemoteEntry } from "../types";
 import { toPlainError } from "../errors";
 import { createLogger } from "../logger";
+import { mapWithConcurrency } from "../concurrency";
 import { InjectedFetchHttpHandler, type FetchFn } from "./http-handler";
 import { groupTrashObjects, isTrashKey, parseTrashKey, trashKey, TRASH_PREFIX, type TrashGroup } from "./trash";
 
@@ -115,19 +116,23 @@ export interface RemoteObjectRef {
   size: number;
 }
 
-/** List every object under `prefix` (no delimiter), with size — used by
- * recursive folder ops (rename/delete just need the keys; downloads also
- * need each file's size). */
-async function listObjectsUnder(
+/**
+ * Lists every object under `prefix` (no delimiter) one ListObjectsV2 page at
+ * a time, yielding each page as soon as it lands instead of returning only
+ * once the whole prefix has been enumerated. This is what lets a big-folder
+ * copy or delete start working on the first ~1000 keys while the rest are
+ * still being listed, rather than sitting through the full listing pass
+ * before anything else happens.
+ */
+async function* pagesUnder(
   client: S3Client,
   bucket: string,
   prefix: string,
-): Promise<RemoteObjectRef[]> {
+): AsyncGenerator<RemoteObjectRef[]> {
   // Callers scanning inside the trash location (restoring/purging) need to
   // see trash objects; every other caller (normal browsing/download/rename)
   // must never see them.
   const hideTrash = !isTrashKey(prefix);
-  const objects: RemoteObjectRef[] = [];
   let continuationToken: string | undefined;
   do {
     const res = await client.send(
@@ -137,23 +142,30 @@ async function listObjectsUnder(
         ContinuationToken: continuationToken,
       }),
     );
+    const page: RemoteObjectRef[] = [];
     for (const obj of res.Contents ?? []) {
       if (!obj.Key) continue;
       if (hideTrash && isTrashKey(obj.Key)) continue;
-      objects.push({ key: obj.Key, size: obj.Size ?? 0 });
+      page.push({ key: obj.Key, size: obj.Size ?? 0 });
     }
+    yield page;
     continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
   } while (continuationToken);
-  return objects;
 }
 
-/** List every key under `prefix` (no delimiter) — used by recursive folder ops. */
-async function listAllKeysUnder(
+/** List every object under `prefix` (no delimiter), with size — used by
+ * recursive folder ops (rename/delete just need the keys; downloads also
+ * need each file's size). */
+async function listObjectsUnder(
   client: S3Client,
   bucket: string,
   prefix: string,
-): Promise<string[]> {
-  return (await listObjectsUnder(client, bucket, prefix)).map((o) => o.key);
+): Promise<RemoteObjectRef[]> {
+  const objects: RemoteObjectRef[] = [];
+  for await (const page of pagesUnder(client, bucket, prefix)) {
+    objects.push(...page);
+  }
+  return objects;
 }
 
 /** Recursively lists every real file (not folder markers) under a folder
@@ -207,12 +219,17 @@ export async function folderStats(
   return { files, totalSize, lastModified };
 }
 
-/** Objects copied at once. */
-const OBJECT_CONCURRENCY = 8;
+/** Objects copied at once. A server-side CopyObject moves no bytes through
+ * this app — S3 does the work between its own storage nodes — so this is
+ * bounded by request overhead, not bandwidth, and can run much higher than a
+ * real data-moving transfer would. */
+const OBJECT_CONCURRENCY = 24;
 /** UploadPartCopy requests in flight per large object. */
 const PART_CONCURRENCY = 4;
 /** DeleteObjects' maximum batch size. */
 const DELETE_BATCH_SIZE = 1000;
+/** DeleteObjects batches (each up to DELETE_BATCH_SIZE keys) in flight at once. */
+const DELETE_CONCURRENCY = 4;
 
 /**
  * Objects at or above this size are copied as a multipart upload of
@@ -381,17 +398,199 @@ async function copyObjects(
   );
 }
 
-/** Delete keys in DeleteObjects-sized batches. */
+/** Delete keys in DeleteObjects-sized batches, up to DELETE_CONCURRENCY
+ * batches in flight at once. */
 async function deleteKeys(client: S3Client, bucket: string, keys: string[]): Promise<void> {
+  const batches: string[][] = [];
   for (let i = 0; i < keys.length; i += DELETE_BATCH_SIZE) {
-    const batch = keys.slice(i, i + DELETE_BATCH_SIZE);
-    await client.send(
+    batches.push(keys.slice(i, i + DELETE_BATCH_SIZE));
+  }
+  await mapWithConcurrency(batches, DELETE_CONCURRENCY, (batch) =>
+    client.send(
       new DeleteObjectsCommand({
         Bucket: bucket,
         Delete: { Objects: batch.map((Key) => ({ Key })) },
       }),
-    );
-  }
+    ),
+  );
+}
+
+/** A one-shot-per-wait "more might be coming" signal: any number of callers
+ * can `wait()`, and a producer's `notifyAll()` wakes every one of them so
+ * they can re-check their own condition. Used by the two page-streaming
+ * functions below to let their worker pools block on "no work queued yet,
+ * but the listing generator isn't done" without polling. */
+function createSignal(): { wait(): Promise<void>; notifyAll(): void } {
+  const waiters: Array<() => void> = [];
+  return {
+    wait: () => new Promise((resolve) => waiters.push(resolve)),
+    notifyAll: () => {
+      while (waiters.length > 0) waiters.shift()!();
+    },
+  };
+}
+
+/**
+ * Like copyObjects, but consumes pages from an async generator (see
+ * pagesUnder) instead of a fully-listed array, so copying starts as soon as
+ * the first page lands instead of after the whole prefix has been
+ * enumerated. `totalItems`/`totalBytes` grow as later pages arrive rather
+ * than being fixed up front — TransferWidget's movePercent already tolerates
+ * a growing total the same way it tolerates bytes landing as parts of one
+ * large object complete. Returns every source key seen across every page, so
+ * a caller that also needs to delete them afterwards doesn't have to list
+ * the prefix a second time.
+ */
+async function copyObjectsFromPages(
+  client: S3Client,
+  bucket: string,
+  pages: AsyncGenerator<RemoteObjectRef[]>,
+  destKeyFor: (key: string) => string,
+  onProgress?: (progress: CopyProgress) => void,
+): Promise<string[]> {
+  const allKeys: string[] = [];
+  const pending: RemoteObjectRef[] = [];
+  let totalItems = 0;
+  let totalBytes = 0;
+  let copiedItems = 0;
+  let copiedBytes = 0;
+  let listingDone = false;
+  let failed = false;
+  const signal = createSignal();
+
+  const emit = () => onProgress?.({ copiedBytes, totalBytes, copiedItems, totalItems });
+  emit(); // tell the UI the (so-far-known) totals before the first copy starts
+
+  const produce = async (): Promise<void> => {
+    try {
+      for await (const page of pages) {
+        if (failed) break;
+        for (const obj of page) {
+          pending.push(obj);
+          allKeys.push(obj.key);
+          totalItems += 1;
+          totalBytes += obj.size;
+        }
+        emit();
+        signal.notifyAll();
+      }
+    } catch (err) {
+      failed = true;
+      signal.notifyAll();
+      throw err;
+    } finally {
+      listingDone = true;
+      signal.notifyAll();
+    }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const obj = pending.shift();
+      if (obj === undefined) {
+        if (listingDone) return;
+        await signal.wait();
+        continue;
+      }
+      try {
+        await copyObject(client, bucket, obj, destKeyFor(obj.key), (bytes) => {
+          copiedBytes += bytes;
+          emit();
+        });
+        copiedItems++;
+        emit();
+      } catch (err) {
+        failed = true;
+        signal.notifyAll();
+        throw err;
+      }
+    }
+  };
+
+  await Promise.all([
+    produce(),
+    ...Array.from({ length: OBJECT_CONCURRENCY }, () => worker()),
+  ]);
+
+  return allKeys;
+}
+
+/**
+ * Deletes every key across a stream of listing pages (see pagesUnder),
+ * batching deletes as pages arrive instead of waiting for the whole prefix
+ * to be enumerated first — a ListObjectsV2 page is at most 1000 keys, the
+ * same as DeleteObjects' batch cap, so each page is already exactly one
+ * delete batch. `onProgress`, when given, is item-count-only: there's
+ * nothing copied to weigh bytes against in a pure delete, so
+ * copiedBytes/totalBytes stay 0 throughout and only copiedItems/totalItems
+ * move, once per completed batch.
+ */
+async function deleteKeysFromPages(
+  client: S3Client,
+  bucket: string,
+  pages: AsyncGenerator<RemoteObjectRef[]>,
+  onProgress?: (progress: CopyProgress) => void,
+): Promise<void> {
+  const pending: string[][] = [];
+  let totalItems = 0;
+  let deletedItems = 0;
+  let listingDone = false;
+  let failed = false;
+  const signal = createSignal();
+
+  const emit = () =>
+    onProgress?.({ copiedBytes: 0, totalBytes: 0, copiedItems: deletedItems, totalItems });
+  emit();
+
+  const produce = async (): Promise<void> => {
+    try {
+      for await (const page of pages) {
+        if (failed) break;
+        if (page.length === 0) continue;
+        totalItems += page.length;
+        pending.push(page.map((o) => o.key));
+        emit();
+        signal.notifyAll();
+      }
+    } catch (err) {
+      failed = true;
+      signal.notifyAll();
+      throw err;
+    } finally {
+      listingDone = true;
+      signal.notifyAll();
+    }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const batch = pending.shift();
+      if (batch === undefined) {
+        if (listingDone) return;
+        await signal.wait();
+        continue;
+      }
+      try {
+        await client.send(
+          new DeleteObjectsCommand({
+            Bucket: bucket,
+            Delete: { Objects: batch.map((Key) => ({ Key })) },
+          }),
+        );
+        deletedItems += batch.length;
+        emit();
+      } catch (err) {
+        failed = true;
+        signal.notifyAll();
+        throw err;
+      }
+    }
+  };
+
+  await Promise.all([
+    produce(),
+    ...Array.from({ length: DELETE_CONCURRENCY }, () => worker()),
+  ]);
 }
 
 /** Rename a file: copy it to the new key, then delete the old one. */
@@ -447,15 +646,16 @@ export async function deleteFile(
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
-/** Recursively delete every key under a folder prefix. */
+/** Recursively delete every key under a folder prefix, streaming listing
+ * pages straight into DeleteObjects batches rather than listing the whole
+ * prefix before deleting anything. */
 export async function deleteFolder(
   client: S3Client,
   bucket: string,
   prefix: string,
+  onProgress?: (progress: CopyProgress) => void,
 ): Promise<void> {
-  const keys = await listAllKeysUnder(client, bucket, prefix);
-  if (keys.length === 0) return;
-  await deleteKeys(client, bucket, keys);
+  await deleteKeysFromPages(client, bucket, pagesUnder(client, bucket, prefix), onProgress);
 }
 
 /** Moves a single file to the trash location: copy it there, then delete the
@@ -470,33 +670,46 @@ export async function moveFileToTrash(
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
-/** Moves every object under a folder to the trash location, sharing one
+/**
+ * Moves every object under a folder to the trash location, sharing one
  * `deletedAtMs` so the trash view can group them back into a single row.
- * Always writes a marker for the folder itself at the trash location (even
- * if the folder never had one of its own), so an empty folder — or one
- * whose marker object doesn't exist — still groups and restores correctly. */
+ *
+ * Writes the folder's own zero-byte trash marker *before* copying any
+ * children, unconditionally — even when the source folder already has its
+ * own marker object, which this then just recopies over it below (a copy of
+ * a zero-byte object onto itself is a no-op). This is the fix for the
+ * "loose files in Trash" race: groupTrashObjects (trash.ts) can only collapse
+ * children under one folder row once the marker exists at the trash
+ * location, so writing it last (the old order) meant every listing of the
+ * Trash while a big move was still copying showed each child as its own row
+ * until the marker finally landed. Writing it first is safe even if a
+ * restore races this move mid-copy: originals are deleted last, so
+ * existsUnderPrefix's conflict guard still sees them and blocks the restore.
+ */
 export async function moveFolderToTrash(
   client: S3Client,
   bucket: string,
   prefix: string,
   deletedAtMs: number,
+  onProgress?: (progress: CopyProgress) => void,
 ): Promise<void> {
-  const objects = await listObjectsUnder(client, bucket, prefix);
-  const hasOwnMarker = objects.some((o) => o.key === prefix);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: trashKey(deletedAtMs, prefix),
+      Body: new Uint8Array(0),
+    }),
+  );
 
-  await copyObjects(client, bucket, objects, (key) => trashKey(deletedAtMs, key));
+  const keys = await copyObjectsFromPages(
+    client,
+    bucket,
+    pagesUnder(client, bucket, prefix),
+    (key) => trashKey(deletedAtMs, key),
+    onProgress,
+  );
 
-  if (!hasOwnMarker) {
-    await client.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: trashKey(deletedAtMs, prefix),
-        Body: new Uint8Array(0),
-      }),
-    );
-  }
-
-  await deleteKeys(client, bucket, objects.map((o) => o.key));
+  await deleteKeys(client, bucket, keys);
 }
 
 const RESTORE_CONFLICT_MESSAGE =
@@ -538,26 +751,34 @@ export async function restoreFileFromTrash(
 
 /** Restores every object trashed together as one folder back under its
  * original path. Throws a plain Error, leaving the trashed copy untouched,
- * if anything already lives at that path. */
+ * if anything already lives at that path. Streams listing pages straight
+ * into the copy pool (so a big restore starts moving bytes after the first
+ * page instead of after the whole trashed folder has been enumerated) and
+ * collects every copied key along the way, so the final delete pass needs no
+ * second listing. Copying everything before deleting anything is kept
+ * (rather than deleting each key right after its own copy) so a crash
+ * mid-restore leaves the trashed copy intact instead of half-gone. */
 export async function restoreFolderFromTrash(
   client: S3Client,
   bucket: string,
   deletedAtMs: number,
   originalPrefix: string,
+  onProgress?: (progress: CopyProgress) => void,
 ): Promise<void> {
   if (await existsUnderPrefix(client, bucket, originalPrefix)) {
     throw new Error(RESTORE_CONFLICT_MESSAGE);
   }
   const groupPrefix = trashKey(deletedAtMs, originalPrefix);
-  const trashed = await listObjectsUnder(client, bucket, groupPrefix);
 
-  await copyObjects(
+  const trashedKeys = await copyObjectsFromPages(
     client,
     bucket,
-    trashed,
+    pagesUnder(client, bucket, groupPrefix),
     (key) => originalPrefix + key.slice(groupPrefix.length),
+    onProgress,
   );
-  await deleteKeys(client, bucket, trashed.map((o) => o.key));
+
+  await deleteKeys(client, bucket, trashedKeys);
 }
 
 /** Permanently deletes one trashed row — every object under it if it was a
@@ -568,6 +789,7 @@ export async function deleteTrashItem(
   deletedAtMs: number,
   originalKey: string,
   kind: "file" | "folder",
+  onProgress?: (progress: CopyProgress) => void,
 ): Promise<void> {
   if (kind === "file") {
     await client.send(
@@ -576,7 +798,7 @@ export async function deleteTrashItem(
     return;
   }
   const groupPrefix = trashKey(deletedAtMs, originalKey);
-  await deleteKeys(client, bucket, await listAllKeysUnder(client, bucket, groupPrefix));
+  await deleteKeysFromPages(client, bucket, pagesUnder(client, bucket, groupPrefix), onProgress);
 }
 
 /** Every trashed item, grouped into one row per originally-deleted file or folder. */
@@ -605,8 +827,12 @@ export async function listTrash(client: S3Client, bucket: string): Promise<Trash
 }
 
 /** Permanently empties the entire trash. */
-export async function emptyTrash(client: S3Client, bucket: string): Promise<void> {
-  await deleteKeys(client, bucket, await listAllKeysUnder(client, bucket, TRASH_PREFIX));
+export async function emptyTrash(
+  client: S3Client,
+  bucket: string,
+  onProgress?: (progress: CopyProgress) => void,
+): Promise<void> {
+  await deleteKeysFromPages(client, bucket, pagesUnder(client, bucket, TRASH_PREFIX), onProgress);
 }
 
 /** Create a zero-byte "folder marker" object ending in "/". */
