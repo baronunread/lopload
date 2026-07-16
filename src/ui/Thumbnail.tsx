@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { FileIcon, FilmStripIcon, FolderIcon, ImageIcon } from "@phosphor-icons/react";
-import { isImageName, isVideoName } from "./format";
+import { FolderIcon } from "@phosphor-icons/react";
+import { iconForFileName } from "./fileIcons";
+import { isImageName } from "./format";
 import { useServices } from "./services";
 import { fetchThumbnailUrl, peekThumbnailUrl } from "./thumbnailCache";
 
@@ -20,7 +21,6 @@ export interface ThumbnailProps {
  * of it once loaded. */
 export function Thumbnail({ connectionId, entryKey, name, kind }: ThumbnailProps) {
   const services = useServices();
-  const isVideo = kind === "file" && isVideoName(name);
   const previewable = kind === "file" && isImageName(name);
   // Rows are keyed by entry key, so this component never sees entryKey
   // change — reading the cache in the initializer is safe and lets
@@ -58,20 +58,14 @@ export function Thumbnail({ connectionId, entryKey, name, kind }: ThumbnailProps
   }
 
   const showMedia = previewable && url !== null && !failed;
-  const placeholder = isVideo ? (
-    <FilmStripIcon size={20} className="text-kumo-subtle" aria-hidden />
-  ) : previewable ? (
-    <ImageIcon size={20} className="text-kumo-subtle" aria-hidden />
-  ) : (
-    <FileIcon size={20} className="text-kumo-subtle" aria-hidden />
-  );
+  const PlaceholderIcon = iconForFileName(name);
 
   return (
     <span className="relative flex h-8 w-8 shrink-0 items-center justify-center">
       <span
         className={`lopload-settle flex items-center justify-center ${loaded ? "opacity-0" : "opacity-100"}`}
       >
-        {placeholder}
+        <PlaceholderIcon size={20} className="text-kumo-subtle" aria-hidden />
       </span>
       {showMedia && (
         <img

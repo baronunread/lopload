@@ -1,4 +1,5 @@
 import { FileIcon, FilesIcon, FolderIcon } from "@phosphor-icons/react";
+import { iconForFileName } from "../fileIcons";
 import type { ActiveDrag } from "./useDragMove";
 
 export interface DragGhostProps {
@@ -12,6 +13,9 @@ export interface DragGhostProps {
  * setDragImage snapshot, which WebKit renders as a generic rectangle. */
 export function DragGhost({ drag, ghostRef }: DragGhostProps) {
   if (!drag) return null;
+  // Single-file drags without a rendered thumbnail (non-image/video types)
+  // fall back to a per-file-type icon rather than the generic file glyph.
+  const TypeIcon = drag.fileName !== undefined ? iconForFileName(drag.fileName) : FileIcon;
   return (
     <div
       ref={ghostRef}
@@ -30,7 +34,7 @@ export function DragGhost({ drag, ghostRef }: DragGhostProps) {
       ) : drag.variant === "files" ? (
         <FilesIcon size={18} className="shrink-0 text-kumo-subtle" />
       ) : (
-        <FileIcon size={18} className="shrink-0 text-kumo-subtle" />
+        <TypeIcon size={18} className="shrink-0 text-kumo-subtle" />
       )}
       <span className="lopload-body truncate text-sm">{drag.label}</span>
     </div>
