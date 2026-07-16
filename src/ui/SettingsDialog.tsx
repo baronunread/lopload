@@ -1,38 +1,36 @@
 import { useEffect, useState } from "react";
-import { Button, Dialog, Select, Switch } from "@cloudflare/kumo";
+import { Button, Dialog } from "@cloudflare/kumo";
 import { XIcon } from "@phosphor-icons/react";
 import { useServices } from "./services";
 import { useAutoUpdateContext } from "./AutoUpdateContext";
 import { isPortable } from "../tauri/isPortable";
-import type { TransferPreset, TransferTuning } from "../lib/types";
+import type { TransferTuning } from "../lib/types";
 import { DEFAULT_TUNING, PRESETS, presetMatching } from "./settings/presets";
+import { GeneralPane } from "./settings/GeneralPane";
+import { TransfersPane, type TuningKnob } from "./settings/TransfersPane";
+import { UpdatesPane } from "./settings/UpdatesPane";
+import { MaintenancePane } from "./settings/MaintenancePane";
 
-const CONCURRENT_FILES_OPTIONS = range(1, 8);
-const PARTS_IN_FLIGHT_OPTIONS = range(1, 16);
-const DOWNLOAD_CONNECTIONS_OPTIONS = range(1, 16);
-const PART_SIZE_OPTIONS = [8, 16, 32, 64];
+type Category = "general" | "transfers" | "updates" | "maintenance";
 
-function range(start: number, end: number): number[] {
-  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-}
-
-const PRESET_LABELS: Record<TransferPreset, string> = {
-  slow: "Slow",
-  normal: "Normal",
-  fast: "Fast",
-  custom: "Custom",
-};
+const CATEGORIES: { id: Category; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "transfers", label: "Transfers" },
+  { id: "updates", label: "Updates" },
+  { id: "maintenance", label: "Maintenance" },
+];
 
 export interface SettingsDialogProps {
   onClose: () => void;
-  /** Current connection, used for the "Abort stale uploads" action. Null
-   * hides that action (e.g. no connection selected yet). */
+  /** Current connection, used for the "Clean up interrupted uploads" action.
+   * Null renders that action disabled rather than hiding it. */
   connectionId: string | null;
 }
 
 export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
   const services = useServices();
   const { checkNow } = useAutoUpdateContext();
+  const [category, setCategory] = useState<Category>("general");
   const [autoUpdateEnabled, setAutoUpdateEnabledState] = useState<boolean>(true);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -97,10 +95,7 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
     await saveTuning(PRESETS[value]);
   }
 
-  async function handleKnobChange(
-    knob: "concurrentFiles" | "uploadPartsInFlight" | "downloadConnections" | "partSizeMiB",
-    value: unknown,
-  ) {
+  async function handleKnobChange(knob: TuningKnob, value: unknown) {
     if (typeof value !== "number") return;
     const knobs = { ...tuning, [knob]: value };
     await saveTuning({ ...knobs, preset: presetMatching(knobs) });
@@ -132,7 +127,7 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog className="flex h-[32rem] w-full sm:w-full max-w-md flex-col p-6">
+      <Dialog className="flex h-[30rem] w-full sm:w-full max-w-3xl flex-col p-6">
         <div className="flex shrink-0 items-center gap-3">
           <Dialog.Title className="m-0">Settings</Dialog.Title>
           <Dialog.Close
@@ -148,184 +143,63 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
             )}
           />
         </div>
-        <div
-          className="mt-4 -ml-1 flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto py-1 pr-4 pl-1"
-          style={{ scrollbarGutter: "stable" }}
-        >
-          <section>
-            <h2 className="mb-3 text-sm font-semibold text-kumo-strong">General</h2>
-            <div className="flex flex-col gap-4">
-              <div>
-                <p className="mb-1 text-sm text-kumo-default">Default download directory</p>
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" onClick={handlePickDownloadDir}>
-                    {downloadDir ? "Change" : "Choose"}
-                  </Button>
-                  {downloadDir && (
-                    <>
-                      <span className="min-w-0 flex-1 truncate text-xs text-kumo-subtle">
-                        {downloadDir}
-                      </span>
-                      <Button variant="ghost" onClick={handleClearDownloadDir}>
-                        Clear
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div>
-                <p className="mb-1 text-sm text-kumo-default">Transfer speed</p>
-                <Select
-                  aria-label="Transfer speed"
-                  value={currentPreset}
-                  onValueChange={handlePresetChange}
-                >
-                  <Select.Option value="slow">{PRESET_LABELS.slow}</Select.Option>
-                  <Select.Option value="normal">{PRESET_LABELS.normal}</Select.Option>
-                  <Select.Option value="fast">{PRESET_LABELS.fast}</Select.Option>
-                  {currentPreset === "custom" && (
-                    <Select.Option value="custom" disabled>
-                      {PRESET_LABELS.custom}
-                    </Select.Option>
-                  )}
-                </Select>
-                <p className="mt-1 text-xs text-kumo-subtle">
-                  Controls how many files transfer at once. Use Advanced settings below to
-                  fine-tune further.
-                </p>
-              </div>
-
-              <details className="rounded-md border border-kumo-line p-3">
-                <summary className="cursor-pointer text-sm font-medium text-kumo-strong">
-                  Advanced settings
-                </summary>
-                <div className="mt-3 flex flex-col gap-4">
-                  <div>
-                    <p className="mb-1 text-sm text-kumo-default">Concurrent files</p>
-                    <Select
-                      aria-label="Concurrent files"
-                      value={tuning.concurrentFiles}
-                      onValueChange={(v) => void handleKnobChange("concurrentFiles", v)}
-                    >
-                      {CONCURRENT_FILES_OPTIONS.map((n) => (
-                        <Select.Option key={n} value={n}>
-                          {n}
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-sm text-kumo-default">Upload parts per file</p>
-                    <Select
-                      aria-label="Upload parts per file"
-                      value={tuning.uploadPartsInFlight}
-                      onValueChange={(v) => void handleKnobChange("uploadPartsInFlight", v)}
-                    >
-                      {PARTS_IN_FLIGHT_OPTIONS.map((n) => (
-                        <Select.Option key={n} value={n}>
-                          {n}
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-sm text-kumo-default">Download connections</p>
-                    <Select
-                      aria-label="Download connections"
-                      value={tuning.downloadConnections}
-                      onValueChange={(v) => void handleKnobChange("downloadConnections", v)}
-                    >
-                      {DOWNLOAD_CONNECTIONS_OPTIONS.map((n) => (
-                        <Select.Option key={n} value={n}>
-                          {n}
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-sm text-kumo-default">Part size</p>
-                    <Select
-                      aria-label="Part size"
-                      value={tuning.partSizeMiB}
-                      onValueChange={(v) => void handleKnobChange("partSizeMiB", v)}
-                    >
-                      {PART_SIZE_OPTIONS.map((n) => (
-                        <Select.Option key={n} value={n}>
-                          {n} MiB
-                        </Select.Option>
-                      ))}
-                    </Select>
-                    <p className="mt-1 text-xs text-kumo-subtle">
-                      Applies to transfers queued from now on — transfers already in progress
-                      keep their original part size.
-                    </p>
-                  </div>
-                </div>
-              </details>
-            </div>
-          </section>
-
-          <hr className="border-kumo-line" />
-
-          <section>
-            <h2 className="mb-3 text-sm font-semibold text-kumo-strong">Updates</h2>
-            {portable ? (
-              <p className="text-xs text-kumo-subtle">
-                Automatic updates aren't available for the portable version.
-                Download new releases from the GitHub releases page.
-              </p>
-            ) : (
-              <>
-                <Switch
-                  label="Check for updates automatically"
-                  checked={autoUpdateEnabled}
-                  onCheckedChange={handleToggleAutoUpdate}
-                  controlFirst={false}
-                />
-                <p className="mt-1 text-xs text-kumo-subtle">
-                  Manual check always works regardless of this setting.
-                </p>
-                <div className="mt-4 flex items-center gap-3">
-                  <Button variant="secondary" onClick={handleCheckNow} disabled={checking}>
-                    {checking ? "Checking…" : "Check for updates now"}
-                  </Button>
-                  {checkResult && (
-                    <span className="text-sm text-kumo-subtle tabular-nums">{checkResult}</span>
-                  )}
-                </div>
-              </>
+        <div className="mt-4 flex min-h-0 flex-1 gap-6">
+          <nav className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-kumo-line pr-3">
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setCategory(c.id)}
+                aria-current={category === c.id ? "true" : undefined}
+                className={`rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
+                  category === c.id
+                    ? "bg-kumo-tint font-medium text-kumo-strong"
+                    : "text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default"
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </nav>
+          <div
+            className="-mr-4 min-h-0 flex-1 overflow-y-auto py-1 pr-4"
+            style={{ scrollbarGutter: "stable" }}
+          >
+            {category === "general" && (
+              <GeneralPane
+                downloadDir={downloadDir}
+                onPickDownloadDir={() => void handlePickDownloadDir()}
+                onClearDownloadDir={() => void handleClearDownloadDir()}
+              />
             )}
-          </section>
-
-          {connectionId && (
-            <>
-              <hr className="border-kumo-line" />
-              <section>
-                <h2 className="mb-3 text-sm font-semibold text-kumo-strong">Storage</h2>
-                <p className="mb-1 text-sm text-kumo-default">Abort stale uploads</p>
-                <p className="mb-3 text-xs text-kumo-subtle">
-                  Uploads interrupted by a crash or force-quit can leave unfinished data behind.
-                  This cleans up anything left over from a failed transfer on this connection.
-                </p>
-                <div className="flex items-center gap-3">
-                  <Button
-                    variant="secondary"
-                    onClick={handleAbortStaleUploads}
-                    disabled={abortingStale}
-                  >
-                    {abortingStale ? "Cleaning up…" : "Abort stale uploads"}
-                  </Button>
-                  {abortStaleResult && (
-                    <span className="text-sm text-kumo-subtle tabular-nums">
-                      {abortStaleResult}
-                    </span>
-                  )}
-                </div>
-              </section>
-            </>
-          )}
+            {category === "transfers" && (
+              <TransfersPane
+                tuning={tuning}
+                currentPreset={currentPreset}
+                onPresetChange={(v) => void handlePresetChange(v)}
+                onKnobChange={(knob, v) => void handleKnobChange(knob, v)}
+              />
+            )}
+            {category === "updates" && (
+              <UpdatesPane
+                portable={portable}
+                autoUpdateEnabled={autoUpdateEnabled}
+                onToggleAutoUpdate={(enabled) => void handleToggleAutoUpdate(enabled)}
+                checking={checking}
+                checkResult={checkResult}
+                onCheckNow={() => void handleCheckNow()}
+              />
+            )}
+            {category === "maintenance" && (
+              <MaintenancePane
+                connected={connectionId !== null}
+                cleaning={abortingStale}
+                cleanupResult={abortStaleResult}
+                onCleanUp={() => void handleAbortStaleUploads()}
+              />
+            )}
+          </div>
         </div>
-
       </Dialog>
     </Dialog.Root>
   );
