@@ -196,6 +196,70 @@ describe("RemoteBrowser", () => {
     }
   });
 
+  test("right-clicking a row keeps it highlighted and suppresses hover on other rows while the menu is open", async () => {
+    const harness = await harnessWithConnection();
+    try {
+      await harness.bucket.put("a.txt", "a");
+      await harness.bucket.put("b.txt", "b");
+      const user = userEvent.setup();
+
+      renderBrowser(harness);
+      await screen.findByText("a.txt");
+
+      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+      // Before any menu is open, idle rows carry the plain hover class.
+      expect(rowFor("a.txt").className).toContain("hover:bg-kumo-tint");
+      expect(rowFor("b.txt").className).toContain("hover:bg-kumo-tint");
+
+      fireEvent.contextMenu(rowFor("a.txt"));
+      await screen.findByRole("menu");
+
+      // The right-clicked row gets the selected-style highlight...
+      expect(rowFor("a.txt").className).toContain("bg-kumo-brand/10");
+      expect(rowFor("a.txt").className).toContain("ring-kumo-brand/50");
+      // ...and stays highlighted while the pointer moves over it.
+      fireEvent.mouseOver(rowFor("a.txt"));
+      expect(rowFor("a.txt").className).toContain("bg-kumo-brand/10");
+
+      // Other rows lose their hover class entirely while the menu is open.
+      expect(rowFor("b.txt").className).not.toContain("hover:bg-kumo-tint");
+
+      // Closing the menu restores normal hover behavior on every row.
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      expect(rowFor("a.txt").className).not.toContain("bg-kumo-brand/10");
+      expect(rowFor("a.txt").className).toContain("hover:bg-kumo-tint");
+      expect(rowFor("b.txt").className).toContain("hover:bg-kumo-tint");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  test("right-clicking empty space opens the background menu with no row highlighted, and still suppresses hover", async () => {
+    const harness = await harnessWithConnection();
+    try {
+      await harness.bucket.put("a.txt", "a");
+
+      const { container } = renderBrowser(harness);
+      await screen.findByText("a.txt");
+
+      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+      const background = container.querySelector(".relative.flex.h-full") as HTMLElement;
+
+      fireEvent.contextMenu(background);
+      const menu = await screen.findByRole("menu");
+      expect(menu).toBeInTheDocument();
+
+      // No row is the target of the background menu — it stays unhighlighted...
+      expect(rowFor("a.txt").className).not.toContain("bg-kumo-brand/10");
+      // ...but hover is still suppressed while the menu is up.
+      expect(rowFor("a.txt").className).not.toContain("hover:bg-kumo-tint");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   test("re-lists the current folder once an upload finishes", async () => {
     const harness = await harnessWithConnection();
     try {

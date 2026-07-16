@@ -14,6 +14,13 @@ export interface RemoteBrowserTableProps {
   connectionId: string;
   selected: Set<string>;
   dropTarget: string | null;
+  /** The key of the row the currently-open context menu targets, or null
+   * when no menu is open or it's the background (entry-less) menu. */
+  menuTargetKey: string | null;
+  /** Whether any context menu is currently open — including the
+   * background/entry-less one, which has no `menuTargetKey`. Used to
+   * suppress hover highlighting on every row while it's up. */
+  menuOpen: boolean;
   /** Lazily computed per-folder stats, keyed by folder key. */
   folderMeta: Record<string, FolderInfo>;
   dropTargetHandlersFor: (entry: RemoteEntry) =>
@@ -74,6 +81,8 @@ export function RemoteBrowserTable({
   connectionId,
   selected,
   dropTarget,
+  menuTargetKey,
+  menuOpen,
   folderMeta,
   dropTargetHandlersFor,
   onRowClick,
@@ -143,6 +152,8 @@ export function RemoteBrowserTable({
                 connectionId={connectionId}
                 isSelected={selected.has(entry.key)}
                 isDropTarget={isFolder && dropTarget === entry.key}
+                isMenuTarget={menuOpen && menuTargetKey === entry.key}
+                suppressHover={menuOpen}
                 folderMeta={isFolder ? folderMeta[entry.key] : undefined}
                 dropTargetHandlers={dropTargetHandlersFor(entry)}
                 onClick={(e) => onRowClick(entry, e)}
