@@ -58,7 +58,6 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.3",
     "aws-sdk-client-mock": "^4.1.0",
-    "happy-dom": "^20.10.6",
     "tailwindcss": "^4.3.2",
     "typescript": "~7.0.2",
     "vite": "^8.1.4"

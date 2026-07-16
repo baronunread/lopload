@@ -80,26 +80,29 @@ async function walkDir(
     out.skipped.push(dirPath);
     return;
   }
-  for (const entry of entries) {
-    if (isJunkFile(entry.name)) continue;
-    const childPath = ops.joinPath(dirPath, entry.name);
-    const childRel = `${relPrefix}/${entry.name}`;
-    if (entry.isDirectory) {
-      await walkDir(childPath, childRel, ops, out, folder);
-    } else {
-      try {
-        out.files.push({
-          path: childPath,
-          name: childRel,
-          size: await ops.size(childPath),
-          folderId: folder.folderId,
-          folderName: folder.folderName,
-        });
-      } catch {
-        out.skipped.push(childPath);
-      }
-    }
-  }
+  await Promise.all(
+    entries
+      .filter((entry) => !isJunkFile(entry.name))
+      .map(async (entry) => {
+        const childPath = ops.joinPath(dirPath, entry.name);
+        const childRel = `${relPrefix}/${entry.name}`;
+        if (entry.isDirectory) {
+          await walkDir(childPath, childRel, ops, out, folder);
+        } else {
+          try {
+            out.files.push({
+              path: childPath,
+              name: childRel,
+              size: await ops.size(childPath),
+              folderId: folder.folderId,
+              folderName: folder.folderName,
+            });
+          } catch {
+            out.skipped.push(childPath);
+          }
+        }
+      }),
+  );
 }
 
 /**
@@ -117,25 +120,28 @@ export async function expandDroppedPaths(
   ops: DropFsOps,
 ): Promise<ExpandedDrop> {
   const out: ExpandedDrop = { files: [], skipped: [] };
-  for (const p of paths) {
-    if (isJunkFile(basenameOf(p))) continue;
-    let dir: boolean;
-    try {
-      dir = await isDirectory(p);
-    } catch {
-      out.skipped.push(p);
-      continue;
-    }
-    if (dir) {
-      const folderName = basenameOf(p);
-      await walkDir(p, folderName, ops, out, { folderId: crypto.randomUUID(), folderName });
-    } else {
-      try {
-        out.files.push({ path: p, name: basenameOf(p), size: await ops.size(p) });
-      } catch {
-        out.skipped.push(p);
-      }
-    }
-  }
+  await Promise.all(
+    paths
+      .filter((p) => !isJunkFile(basenameOf(p)))
+      .map(async (p) => {
+        let dir: boolean;
+        try {
+          dir = await isDirectory(p);
+        } catch {
+          out.skipped.push(p);
+          return;
+        }
+        if (dir) {
+          const folderName = basenameOf(p);
+          await walkDir(p, folderName, ops, out, { folderId: crypto.randomUUID(), folderName });
+        } else {
+          try {
+            out.files.push({ path: p, name: basenameOf(p), size: await ops.size(p) });
+          } catch {
+            out.skipped.push(p);
+          }
+        }
+      }),
+  );
   return out;
 }

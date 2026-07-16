@@ -28,31 +28,34 @@ export async function abortStaleUploads(
 ): Promise<AbortStaleUploadsStats> {
   const stats: AbortStaleUploadsStats = { aborted: 0, errors: 0 };
   const transfers = await store.list(connectionId);
+  const stale = transfers.filter(
+    (transfer) =>
+      transfer.direction === "upload" && transfer.uploadId && transfer.state.kind === "failed",
+  );
 
-  for (const transfer of transfers) {
-    if (transfer.direction !== "upload" || !transfer.uploadId || transfer.state.kind !== "failed") {
-      continue;
-    }
-    try {
-      await client.send(
-        new AbortMultipartUploadCommand({
-          Bucket: bucket,
-          Key: transfer.key,
-          UploadId: transfer.uploadId,
-        }),
-      );
-    } catch (err) {
-      // Already gone (expired, or a previous sweep aborted it) is as good
-      // as aborted — nothing left to clean up server-side.
-      if (err instanceof Error && err.name !== "NoSuchUpload") {
-        log.warn("abort stale upload failed", transfer.key, err);
-        stats.errors += 1;
-        continue;
+  await Promise.all(
+    stale.map(async (transfer) => {
+      try {
+        await client.send(
+          new AbortMultipartUploadCommand({
+            Bucket: bucket,
+            Key: transfer.key,
+            UploadId: transfer.uploadId,
+          }),
+        );
+      } catch (err) {
+        // Already gone (expired, or a previous sweep aborted it) is as good
+        // as aborted — nothing left to clean up server-side.
+        if (err instanceof Error && err.name !== "NoSuchUpload") {
+          log.warn("abort stale upload failed", transfer.key, err);
+          stats.errors += 1;
+          return;
+        }
       }
-    }
-    await store.save({ ...transfer, uploadId: undefined });
-    stats.aborted += 1;
-  }
+      await store.save({ ...transfer, uploadId: undefined });
+      stats.aborted += 1;
+    }),
+  );
 
   return stats;
 }

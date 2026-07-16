@@ -448,26 +448,27 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   async function handleBulkDownload(selected: RemoteEntry[]) {
     const destDir = await services.pickDownloadDirectory();
     if (!destDir) return;
-    const downloads: { key: string; localPath: string; size: number }[] = [];
-    for (const entry of selected) {
-      if (entry.kind === "file") {
-        downloads.push({
-          key: entry.key,
-          localPath: `${destDir}/${entry.name}`,
-          size: entry.size ?? 0,
-        });
-        continue;
-      }
-      const files = await services.browser.listFilesRecursive(connectionId, entry.key);
-      const root = `${destDir}/${entry.name}`;
-      for (const f of files) {
-        downloads.push({
+    const perEntry = await Promise.all(
+      selected.map(async (entry) => {
+        if (entry.kind === "file") {
+          return [
+            {
+              key: entry.key,
+              localPath: `${destDir}/${entry.name}`,
+              size: entry.size ?? 0,
+            },
+          ];
+        }
+        const files = await services.browser.listFilesRecursive(connectionId, entry.key);
+        const root = `${destDir}/${entry.name}`;
+        return files.map((f) => ({
           key: f.key,
           localPath: `${root}/${f.key.slice(entry.key.length)}`,
           size: f.size,
-        });
-      }
-    }
+        }));
+      }),
+    );
+    const downloads = perEntry.flat();
     if (downloads.length === 0) return;
     await services.engine.enqueueDownloads(connectionId, downloads);
   }

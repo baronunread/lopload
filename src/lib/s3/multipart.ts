@@ -154,6 +154,7 @@ async function uploadMultipart(
 
   // First pass: parts already on the server count as done up front.
   const pending: number[] = [];
+  const toPersist: TransferPart[] = [];
   for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
     const length = partLength(partNumber);
     const serverPart = serverByNumber.get(partNumber);
@@ -164,7 +165,7 @@ async function uploadMultipart(
       finalParts.push(part);
       const existing = persistedByNumber.get(partNumber);
       if (!existing || existing.etag !== etag || existing.size !== length) {
-        await store.saveParts([part]);
+        toPersist.push(part);
       }
       bytesDone += length;
       onProgress?.(bytesDone, transfer.size);
@@ -172,6 +173,7 @@ async function uploadMultipart(
       pending.push(partNumber);
     }
   }
+  if (toPersist.length > 0) await store.saveParts(toPersist);
 
   // Worker pool: each worker holds one chunk at a time, so memory stays
   // bounded at partsInFlight × partSize.

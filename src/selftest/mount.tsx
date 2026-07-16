@@ -311,12 +311,14 @@ async function makeWorkdir(_host: Host): Promise<string> {
 async function resetStores(host: Host): Promise<void> {
   const connections = await host.stores.connections();
   const transfers = await host.stores.transfers();
-  for (const conn of await connections.list()) {
-    for (const transfer of await transfers.list(conn.id)) {
-      await transfers.delete(transfer.id);
-    }
-    await connections.delete(conn.id);
-  }
+  const conns = await connections.list();
+  await Promise.all(
+    conns.map(async (conn) => {
+      const connTransfers = await transfers.list(conn.id);
+      await Promise.all(connTransfers.map((transfer) => transfers.delete(transfer.id)));
+      await connections.delete(conn.id);
+    }),
+  );
 }
 
 async function runScenario(

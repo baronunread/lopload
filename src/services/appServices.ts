@@ -659,12 +659,12 @@ class LoploadServices implements AppServices {
 
   async pickFiles(): Promise<PickedFile[]> {
     const paths = await this.host.dialogs.pickFiles();
-    const files: PickedFile[] = [];
-    for (const path of paths) {
-      const size = await this.host.files.size(path);
-      files.push({ path, name: path.split(/[/\\]/).pop() ?? path, size });
-    }
-    return files;
+    return Promise.all(
+      paths.map(async (path) => {
+        const size = await this.host.files.size(path);
+        return { path, name: path.split(/[/\\]/).pop() ?? path, size };
+      }),
+    );
   }
 
   async pickSaveDestination(defaultName: string): Promise<string | null> {
@@ -833,14 +833,16 @@ class LoploadServices implements AppServices {
     try {
       const store = await this.getConnectionStore();
       const connections = await store.list();
-      for (const conn of connections) {
-        try {
-          const { client } = await this.getClient(conn.id);
-          await sweepTrash(client, conn.bucket, Date.now());
-        } catch (err) {
-          log.warn("Trash sweep failed for connection", conn.id, err);
-        }
-      }
+      await Promise.all(
+        connections.map(async (conn) => {
+          try {
+            const { client } = await this.getClient(conn.id);
+            await sweepTrash(client, conn.bucket, Date.now());
+          } catch (err) {
+            log.warn("Trash sweep failed for connection", conn.id, err);
+          }
+        }),
+      );
     } catch (err) {
       log.warn("Trash sweep: store iteration failed", err);
     }

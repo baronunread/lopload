@@ -1,4 +1,5 @@
 import "./App.css";
+import { MotionConfig } from "motion/react";
 import { AppShell } from "./ui/AppShell";
 import { ServicesProvider } from "./ui/services";
 import { createTauriHost, isTauriRuntime } from "./services/host.tauri";
@@ -30,9 +31,14 @@ function App() {
   }
 
   return (
-    <ServicesProvider value={getServices()}>
-      <AppShell />
-    </ServicesProvider>
+    // Honors the OS "reduce motion" setting for every motion/react animation
+    // in the app (WCAG 2.3.3) instead of requiring each animated component
+    // to opt in individually.
+    <MotionConfig reducedMotion="user">
+      <ServicesProvider value={getServices()}>
+        <AppShell />
+      </ServicesProvider>
+    </MotionConfig>
   );
 }
 
