@@ -53,7 +53,7 @@ export function MoveToDialog({
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog className="w-full max-w-md p-6">
+      <Dialog className="w-full sm:w-full max-w-md p-6">
         <div className="flex items-center gap-3">
           <Dialog.Title className="m-0">
             Move {sourceKeys.length === 1 ? "1 item" : `${sourceKeys.length} items`} to…
