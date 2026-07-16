@@ -99,6 +99,17 @@ function makeUploadRefreshResilienceScenario(): Scenario {
   };
 }
 
+/**
+ * True if `text` currently renders inside a table row — the file/folder
+ * listing — as opposed to inside the TransferWidget, which also shows a
+ * completed upload's filename in its own history row. A plain
+ * `queryByText`/`getByText` can't tell those apart once a scenario drives a
+ * real upload through the engine.
+ */
+function inTableRow(text: string): boolean {
+  return screen.queryAllByText(text).some((el) => el.closest("tr") !== null);
+}
+
 /** A real 1×1 PNG, so the webview can actually decode and render it. */
 const TINY_PNG = Uint8Array.from(
   atob(
@@ -212,4 +223,58 @@ export const browseScenarios: Scenario[] = [
   },
 
   makeUploadRefreshResilienceScenario(),
+
+  {
+    // GitHub #18: navigation now serves a folder's listing from a
+    // stale-while-revalidate cache (src/ui/listingCache.ts) so re-entering a
+    // folder renders instantly. This guards the case that would break
+    // silently if a mutation site ever forgot to invalidate: a file lands in
+    // "a" through the engine (not the folder's own Upload button, and not
+    // while the folder is even in view) while the browser has already
+    // cached "a"'s listing from an earlier visit — navigating back in must
+    // still show it, not the stale two-item-short cache entry.
+    name: "navigating back into a folder shows a file uploaded while elsewhere, not a stale cached listing",
+    async arrange(bucket) {
+      await bucket.put("a/existing.txt", "hello");
+    },
+    async run({ user, expect, waitFor, services, connectionId, prefix, bucket, makeLocalFile }) {
+      await waitFor(() => {
+        expect(screen.queryByText("a") !== null).toBe(true);
+      });
+
+      await user.dblClick(screen.getByText("a"));
+      await waitFor(() => {
+        expect(screen.queryByText("existing.txt") !== null).toBe(true);
+      });
+
+      // Leave "a" — its listing is now cached. "Leave" means the folder the
+      // run started in, same reasoning as the preview-cache scenario above:
+      // Home on MinIO, but the run's own scoped folder against a real
+      // provider (Home would escape the run's lopload-test/<run>/ scope).
+      const startSegment = prefix.split("/").filter(Boolean).pop();
+      await user.click(screen.getAllByRole("link", { name: startSegment ?? "Home" })[0]);
+      await waitFor(() => {
+        expect(screen.queryByText("a") !== null).toBe(true);
+      });
+
+      const path = await makeLocalFile("new.txt", "world");
+      await services.engine.enqueueFiles(connectionId, `${prefix}a/`, [
+        { path, name: "new.txt", size: 5 },
+      ]);
+      await waitFor(async () => {
+        // The upload has really landed before navigating back in — the
+        // point is to catch a stale cache, not a race with the upload.
+        expect(await bucket.has("a/new.txt")).toBe(true);
+      });
+
+      await user.dblClick(screen.getByText("a"));
+      await waitFor(() => {
+        // Scoped to the table: "new.txt" also shows in the TransferWidget's
+        // completed-upload history, since this scenario drove it through the
+        // real engine rather than bucket.put.
+        expect(inTableRow("existing.txt")).toBe(true);
+        expect(inTableRow("new.txt")).toBe(true);
+      });
+    },
+  },
 ];

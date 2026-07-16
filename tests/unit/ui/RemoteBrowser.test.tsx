@@ -10,11 +10,22 @@ import { Toasty } from "@cloudflare/kumo";
 import { RemoteBrowser } from "../../../src/ui/RemoteBrowser";
 import { ServicesProvider } from "../../../src/ui/services";
 import { formatBytes, formatDate } from "../../../src/ui/format";
+import { clearAllForTests } from "../../../src/ui/listingCache";
 import type { FetchFn } from "../../../src/lib/s3/http-handler";
 import { faultyFetch, type Fault } from "../../support/faultyFetch";
 import { createServiceHarness, type ServiceHarness } from "../../support/serviceHarness";
 
-afterEach(cleanup);
+// Every test in this file reuses the same connection id (CONN below) against
+// a fresh harness/bucket. Most tests go through services.connections.save(),
+// which invalidates this connection's cache entries as a side effect — but a
+// couple write straight into the connection store (to reproduce a denied
+// keychain prompt) and never call save(), so a previous test's cached
+// listing would otherwise leak in as a false cache hit. Clearing the cache
+// between every test sidesteps that regardless of which path a test uses.
+afterEach(() => {
+  cleanup();
+  clearAllForTests();
+});
 
 // Real MinIO round trips take longer than bun's 5s default.
 const test = (name: string, fn: () => Promise<void>) => bunTest(name, fn, 20_000);

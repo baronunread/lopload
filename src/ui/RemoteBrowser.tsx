@@ -22,6 +22,13 @@ import { CredentialsUnreadableError, useServices, type FolderInfo } from "./serv
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { CredentialsReentryForm } from "./CredentialsReentryForm";
+import {
+  fetchFolderInfo,
+  invalidateForKey,
+  peekFolderInfo,
+  peekListing,
+  putListing,
+} from "./listingCache";
 import { DragGhost } from "./browser/DragGhost";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
 import { filterEntries } from "./browser/filter";
@@ -91,6 +98,25 @@ function splitBreadcrumbSegments(segments: string[]): {
  * would otherwise trigger a re-list per file. */
 const REFRESH_DEBOUNCE_MS = 500;
 
+/** Compares two listings by content (key/kind/size/lastModified) rather than
+ * identity — used to skip a re-render when a silent revalidate's response
+ * matches what's already on screen, so a cache-hit navigation followed by a
+ * no-op revalidate doesn't visibly re-render the table. Key-based rather
+ * than index-based so it's insensitive to incidental reordering. */
+function entriesEqual(a: RemoteEntry[], b: RemoteEntry[]): boolean {
+  if (a.length !== b.length) return false;
+  const byKey = new Map(b.map((entry) => [entry.key, entry]));
+  return a.every((entry) => {
+    const other = byKey.get(entry.key);
+    return (
+      other !== undefined &&
+      other.kind === entry.kind &&
+      other.size === entry.size &&
+      other.lastModified === entry.lastModified
+    );
+  });
+}
+
 /** Remote folder browser: breadcrumbs, listing table, thumbnails, and a right-click menu. */
 export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowserProps) {
   const services = useServices();
@@ -147,25 +173,37 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     return () => setEntries(invert);
   }
 
-  async function runList(spinner: boolean) {
+  /**
+   * `revalidatingCache`, when true, marks this as the silent revalidate that
+   * follows a cache-hit navigation (see the effect below) rather than a
+   * post-mutation reconcile. It's the one silent-path exception to "keep
+   * whatever's on screen on failure": a CredentialsUnreadableError isn't
+   * transient (a keychain ACL mismatch, say, or a denied prompt), and
+   * papering over it with stale cached data would trap the user on a frozen
+   * listing with no way to reconnect. Any other failure still keeps the
+   * cached listing, same as an ordinary silent refresh.
+   */
+  async function runList(spinner: boolean, revalidatingCache = false) {
     const requestId = ++requestIdRef.current;
     if (spinner) setLoading(true);
     try {
       const result = await services.browser.list(connectionId, prefix);
       if (requestId !== requestIdRef.current) return;
-      setEntries(result);
+      putListing(connectionId, prefix, result);
+      setEntries((prev) => (entriesEqual(prev, result) ? prev : result));
       setLoadFailed(false);
       setCredentialsConnection(null);
       loadedRef.current = true;
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
-      if (!spinner) return; // silent refreshes keep whatever's on screen on failure
+      const isCredentialsError = err instanceof CredentialsUnreadableError;
+      if (!spinner && !(revalidatingCache && isCredentialsError)) return;
       // A re-list of an already-loaded folder failed — keep showing the last
       // good listing instead of blanking it. Only a location's first load
       // (nothing on screen to preserve yet) falls through to the error UI.
-      if (loadedRef.current) return;
-      setEntries([]);
-      if (err instanceof CredentialsUnreadableError) {
+      if (spinner && loadedRef.current) return;
+      if (spinner) setEntries([]);
+      if (isCredentialsError) {
         // The OS keychain couldn't produce credentials for this connection
         // (denied prompt, or an ACL mismatch after a signing identity
         // change) — offer plain re-entry instead of a broken listing.
@@ -199,7 +237,22 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   useEffect(() => {
     loadedRef.current = false;
-    void refresh();
+    const cached = peekListing(connectionId, prefix);
+    if (cached !== undefined) {
+      // Instant render from cache, then a silent revalidate behind it — the
+      // existing requestIdRef stale-guard and loadedRef keep-last-good
+      // behavior in runList() apply exactly as they do for any other
+      // silent refresh. revalidatingCache=true so a credentials failure
+      // still surfaces the re-entry flow instead of freezing on stale data.
+      setEntries(cached);
+      setLoadFailed(false);
+      setCredentialsConnection(null);
+      setLoading(false);
+      loadedRef.current = true;
+      void runList(false, true);
+    } else {
+      void refresh();
+    }
     selection.clear();
     setFilterQuery("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -268,16 +321,27 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   // list per folder) and fill in as they arrive; rows show "—" meanwhile.
   useEffect(() => {
     let cancelled = false;
-    // Keep the previous stats on screen while fresh ones compute — only drop
-    // folders that are no longer listed. Blanking everything to "—" made
-    // every folder row visibly reload on each upload-completion refresh.
+    // Seed synchronously from cache (instant sizes/dates on back-navigation)
+    // and otherwise keep whatever's already on screen while fresh stats
+    // compute — only drop folders that are no longer listed. Blanking
+    // everything to "—" made every folder row visibly reload on each
+    // upload-completion refresh.
     setFolderMeta((prev) => {
-      const listed = new Set(entries.filter((e) => e.kind === "folder").map((e) => e.key));
-      return Object.fromEntries(Object.entries(prev).filter(([key]) => listed.has(key)));
+      const next: Record<string, FolderInfo> = {};
+      for (const entry of entries) {
+        if (entry.kind !== "folder") continue;
+        const cached = peekFolderInfo(connectionId, entry.key);
+        if (cached !== undefined) next[entry.key] = cached;
+        else if (prev[entry.key]) next[entry.key] = prev[entry.key];
+      }
+      return next;
     });
     for (const entry of entries) {
       if (entry.kind !== "folder") continue;
-      void services.browser.folderInfo(connectionId, entry.key).then((info) => {
+      if (peekFolderInfo(connectionId, entry.key) !== undefined) continue;
+      void fetchFolderInfo(connectionId, entry.key, () =>
+        services.browser.folderInfo(connectionId, entry.key),
+      ).then((info) => {
         if (!cancelled) setFolderMeta((prev) => ({ ...prev, [entry.key]: info }));
       });
     }
@@ -295,8 +359,13 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       return;
     }
     let cancelled = false;
-    setFolderInfoState({ status: "loading" });
-    void services.browser.folderInfo(connectionId, infoEntry.key).then((result) => {
+    const cached = peekFolderInfo(connectionId, infoEntry.key);
+    setFolderInfoState(cached !== undefined ? { status: "loaded", ...cached } : { status: "loading" });
+    // Shares the same inflight fetch (and cache) as the folderMeta background
+    // effect above when both want this folder's stats at once.
+    void fetchFolderInfo(connectionId, infoEntry.key, () =>
+      services.browser.folderInfo(connectionId, infoEntry.key),
+    ).then((result) => {
       if (!cancelled) setFolderInfoState({ status: "loaded", ...result });
     });
     return () => {
@@ -327,6 +396,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         event.transfer.state.kind === "uploaded" &&
         event.transfer.key.startsWith(prefix)
       ) {
+        invalidateForKey(event.transfer.connectionId, event.transfer.key);
         scheduleRefresh();
       }
     });
@@ -458,6 +528,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       }
     }).then(() => {
       if (anyFailed) rollback();
+      for (const m of moves) {
+        invalidateForKey(connectionId, m.fromKey);
+        invalidateForKey(connectionId, m.toKey);
+      }
       void refreshSilently();
     });
   }
@@ -475,6 +549,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     selection.clear();
     try {
       await services.browser.delete(connectionId, entry.key);
+      invalidateForKey(connectionId, entry.key);
       await refreshSilently();
     } catch (err) {
       rollback();
@@ -497,6 +572,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       await mapWithConcurrency(deleted, BULK_OP_CONCURRENCY, (entry) =>
         services.browser.delete(connectionId, entry.key),
       );
+      for (const entry of deleted) invalidateForKey(connectionId, entry.key);
       await refreshSilently();
     } catch (err) {
       rollback();
@@ -628,6 +704,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       );
       try {
         await services.browser.createFolder(connectionId, prefix, name);
+        invalidateForKey(connectionId, newEntry.key);
         await refreshSilently();
       } catch (err) {
         rollback();
@@ -651,6 +728,8 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     );
     try {
       await services.browser.rename(connectionId, entry.key, name);
+      invalidateForKey(connectionId, entry.key);
+      invalidateForKey(connectionId, newKey);
       await refreshSilently();
     } catch (err) {
       rollback();
@@ -1008,7 +1087,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           <TrashDialog
             connectionId={connectionId}
             onClose={() => setShowTrash(false)}
-            onRestored={() => void refresh()}
+            onRestored={(originalKey) => {
+              invalidateForKey(connectionId, originalKey);
+              void refresh();
+            }}
           />
         </Suspense>
       )}
