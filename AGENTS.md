@@ -79,9 +79,11 @@ bun run selftest           # the REAL Tauri binary → real Rust IPC → MinIO.
 bun run test:remote        # the same scenarios → a real R2/S3 bucket.
 ```
 
-`test:remote` needs a `.env.remote` (see `.env.remote.example`) and runs nightly
-in CI. It exists because MinIO is an excellent S3 impersonator right up until it
-isn't — checksum middleware, ETag formats on multipart, redirects — and those
+`test:remote` needs a `.env.remote` (see `.env.remote.example`) and is run
+manually, on demand. `bun run selftest` honours the same `LOPLOAD_TEST_REMOTE=1`
+gate — that combination (real binary, real bucket) is what tag CI runs before
+every release (`.github/workflows/build.yml`). The remote path exists because
+MinIO is an excellent S3 impersonator right up until it isn't — checksum middleware, ETag formats on multipart, redirects — and those
 bugs are invisible to a local-only suite. It confines itself to
 `lopload-test/<run>/` and deletes that prefix when it's done; it cannot touch a
 key outside it.

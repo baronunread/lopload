@@ -114,7 +114,7 @@ export const browseScenarios: Scenario[] = [
       await bucket.put("pics/cat.png", TINY_PNG);
       await bucket.put("pics/clip.mp4", "junk bytes, not a decodable video");
     },
-    async run({ user, expect, waitFor }) {
+    async run({ user, expect, waitFor, prefix }) {
       await waitFor(() => {
         expect(screen.queryByText("pics") !== null).toBe(true);
       });
@@ -135,8 +135,13 @@ export const browseScenarios: Scenario[] = [
 
       // Leave and come back: the presigned URL must come from the cache —
       // the identical string lets the webview serve the image bytes from its
-      // HTTP cache instead of re-downloading on every visit.
-      await user.click(screen.getAllByRole("link", { name: "Home" })[0]);
+      // HTTP cache instead of re-downloading on every visit. "Leave" means
+      // the folder the run started in — which is Home (the bucket root) on
+      // MinIO, but the last prefix segment's breadcrumb against a real
+      // provider, where Home would escape the run's lopload-test/<run>/ scope
+      // and "pics" would never be seen again.
+      const startSegment = prefix.split("/").filter(Boolean).pop();
+      await user.click(screen.getAllByRole("link", { name: startSegment ?? "Home" })[0]);
       await waitFor(() => {
         expect(screen.queryByText("pics") !== null).toBe(true);
       });

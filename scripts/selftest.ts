@@ -1,12 +1,16 @@
 #!/usr/bin/env bun
 // Runs Runner B: the same tests/scenarios/* list as `bun test
 // tests/app.test.ts`, but inside the real Tauri binary (src/selftest/mount.tsx)
-// instead of a Node host — real webview, real Rust IPC, real MinIO.
+// instead of a Node host — real webview, real Rust IPC, real MinIO. Or, with
+// LOPLOAD_TEST_REMOTE=1 and the LOPLOAD_TEST_* vars set (the same opt-in gate
+// `bun test` uses — see tests/support/storage.ts), a real provider bucket,
+// confined to a fresh lopload-test/<run>/ prefix. That's how tag CI runs it.
 //
 // This script:
-//   1. makes sure a real MinIO is up and hands it a fresh bucket (reusing the
-//      exact container logic tests/support/storage.ts already has — this runs
-//      under bun, not the webview, so importing it is fine here),
+//   1. makes sure a real MinIO is up and hands it a fresh bucket (or, remote,
+//      a fresh prefix in the nominated bucket — reusing the exact logic
+//      tests/support/storage.ts already has; this runs under bun, not the
+//      webview, so importing it is fine here),
 //   2. launches `bunx tauri dev` with VITE_LOPLOAD_SELFTEST=1 and that
 //      bucket's connection details as VITE_LOPLOAD_SELFTEST_* env vars,
 //   3. streams the app's stdout to ours (so a `bun run selftest` looks like
@@ -19,7 +23,7 @@
 // sentinel line out of its stdout rather than waiting on its exit code.
 import { resolve } from "node:path";
 
-import { ensureMinio, freshBucket } from "../tests/support/storage";
+import { ensureMinio, freshBucket, usingRemoteStorage } from "../tests/support/storage";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
@@ -66,10 +70,20 @@ async function pump(
 }
 
 async function main(): Promise<number> {
-  console.log("selftest: ensuring MinIO is up...");
-  await ensureMinio();
+  // Same opt-in as `bun test`: LOPLOAD_TEST_REMOTE=1 points the run at a real
+  // provider (isolated to a fresh lopload-test/<run>/ prefix); otherwise it's
+  // the local MinIO container with a bucket of its own.
+  if (usingRemoteStorage()) {
+    console.log("selftest: remote target configured — skipping MinIO");
+  } else {
+    console.log("selftest: ensuring MinIO is up...");
+    await ensureMinio();
+  }
   const bucket = await freshBucket();
-  console.log(`selftest: bucket ${bucket.name} ready at ${bucket.connection.endpoint}`);
+  console.log(
+    `selftest: bucket ${bucket.name} ready at ${bucket.connection.endpoint}` +
+      (bucket.prefix ? ` (scoped to ${bucket.prefix})` : ""),
+  );
 
   // Its own dev-server port, so running the self-test doesn't require you to
   // shut down a `bun run tauri dev` you already have open. vite.config.ts reads
@@ -84,6 +98,7 @@ async function main(): Promise<number> {
     VITE_LOPLOAD_SELFTEST_REGION: bucket.connection.region,
     VITE_LOPLOAD_SELFTEST_ACCESS_KEY: bucket.credentials.accessKey,
     VITE_LOPLOAD_SELFTEST_SECRET_KEY: bucket.credentials.secretKey,
+    VITE_LOPLOAD_SELFTEST_PREFIX: bucket.prefix,
   };
 
   console.log(`selftest: launching \`bunx tauri dev\` on port ${SELFTEST_PORT}...`);

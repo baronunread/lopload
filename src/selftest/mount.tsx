@@ -61,6 +61,11 @@ interface SelftestEnv {
   region: string;
   accessKey: string;
   secretKey: string;
+  /** Key prefix the whole run is confined to — empty for a MinIO bucket of its
+   * own, `lopload-test/<run>/` against a real provider, where this run is a
+   * guest in somebody's real bucket (same contract as Bucket.prefix in
+   * tests/support/storage.ts). */
+  prefix: string;
 }
 
 function readEnv(): SelftestEnv {
@@ -70,13 +75,14 @@ function readEnv(): SelftestEnv {
   const accessKey = env.VITE_LOPLOAD_SELFTEST_ACCESS_KEY;
   const secretKey = env.VITE_LOPLOAD_SELFTEST_SECRET_KEY;
   const region = env.VITE_LOPLOAD_SELFTEST_REGION || "us-east-1";
+  const prefix = env.VITE_LOPLOAD_SELFTEST_PREFIX || "";
   if (!endpoint || !bucket || !accessKey || !secretKey) {
     throw new Error(
       "Missing VITE_LOPLOAD_SELFTEST_* env vars — this entry point only runs " +
         "via `bun run selftest`, which sets them.",
     );
   }
-  return { endpoint, bucket, region, accessKey, secretKey };
+  return { endpoint, bucket, region, accessKey, secretKey, prefix };
 }
 
 /** Prints a line the self-test runner can key on. `console.log` alone isn't
@@ -341,7 +347,10 @@ async function runScenario(
       endpoint: env.endpoint,
       bucket: env.bucket,
       region: env.region,
-      lastPrefix: "",
+      // The run's prefix is the app's starting folder, exactly as Runner A
+      // does it (tests/support/appHarness.ts) — scenarios see the same tree
+      // whether the run owns the bucket or a prefix inside one.
+      lastPrefix: env.prefix,
       createdAt: Date.now(),
     },
     { accessKey: env.accessKey, secretKey: env.secretKey },
@@ -364,9 +373,7 @@ async function runScenario(
       services,
       bucket: probe,
       connectionId: CONNECTION_ID,
-      // The self-test always runs against a bucket of its own (scripts/selftest.ts
-      // provisions a fresh MinIO one), so it never needs to share by prefix.
-      prefix: "",
+      prefix: env.prefix,
       workdir,
       control,
       record,
@@ -404,7 +411,9 @@ async function runSelftest(): Promise<void> {
     { accessKey: env.accessKey, secretKey: env.secretKey },
     host.fetch,
   );
-  const probe = bucketProbe(probeClient, env.bucket);
+  // Scoped to the run's prefix, so against a real provider neither an assert
+  // nor a clear() can name a key outside lopload-test/<run>/.
+  const probe = bucketProbe(probeClient, env.bucket, env.prefix);
 
   const scenarios = allScenarios.filter((s) => !s.nodeOnly);
   report(`SELFTEST_START total=${scenarios.length}`);
@@ -420,6 +429,17 @@ async function runSelftest(): Promise<void> {
     } else {
       failed += 1;
       report(`SELFTEST_SCENARIO FAIL ${scenario.name} :: ${result.error}`);
+    }
+  }
+
+  // Best-effort: against a real provider the run is a guest in somebody's
+  // bucket — leave its prefix the way it was found. (Runner A does the same
+  // in appHarness dispose; MinIO runs skip it, the bucket is theirs alone.)
+  if (env.prefix) {
+    try {
+      await probe.clear();
+    } catch (err) {
+      console.warn("selftest: failed to clean up the run's key prefix", err);
     }
   }
 

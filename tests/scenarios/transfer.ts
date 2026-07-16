@@ -117,10 +117,15 @@ export const transferScenarios: Scenario[] = [
 
   {
     name: "downloading writes the real bytes to the chosen local path",
+    // Seeded in arrange, not run: the app lists the folder once on mount and
+    // never polls, so a put issued from run() races that listing. MinIO on
+    // localhost answers fast enough to hide the race; a real provider doesn't.
+    async arrange(bucket) {
+      await bucket.put("archive.bin", bytes(128 * 1024, 3));
+    },
     async run(ctx) {
-      const { bucket, control, workdir, user, expect, waitFor, readLocalFile } = ctx;
+      const { control, workdir, user, expect, waitFor, readLocalFile } = ctx;
       const payload = bytes(128 * 1024, 3);
-      await bucket.put("archive.bin", payload);
 
       const destination = `${workdir}/downloaded.bin`;
       control.saveDestination = destination;
