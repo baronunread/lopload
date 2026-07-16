@@ -9,6 +9,18 @@ export interface Logger {
 
 export type LogSink = (level: LogLevel, module: string, msg: string, args: unknown[]) => void;
 
+const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+// Below this level, lines skip the console but still reach every sink (the
+// file log keeps full detail). Tests raise it to "warn": the suite makes
+// thousands of HTTP requests, and printing a debug line per request to a TTY
+// stalls the event loop enough to time out real waitFor-based assertions.
+let consoleLevel: LogLevel = "debug";
+
+export function setConsoleLogLevel(level: LogLevel): void {
+  consoleLevel = level;
+}
+
 let extraSinks: LogSink[] = [];
 
 export function addLogSink(sink: LogSink): void {
@@ -16,13 +28,15 @@ export function addLogSink(sink: LogSink): void {
 }
 
 function log(level: LogLevel, module: string, msg: string, args: unknown[]) {
-  const ts = new Date().toISOString();
-  const line = `[${ts}] [${level.toUpperCase()}] [${module}] ${msg}${args.length ? " " + JSON.stringify(args) : ""}`;
-  switch (level) {
-    case "debug": console.debug(line); break;
-    case "info": console.info(line); break;
-    case "warn": console.warn(line); break;
-    case "error": console.error(line); break;
+  if (LEVEL_ORDER[level] >= LEVEL_ORDER[consoleLevel]) {
+    const ts = new Date().toISOString();
+    const line = `[${ts}] [${level.toUpperCase()}] [${module}] ${msg}${args.length ? " " + JSON.stringify(args) : ""}`;
+    switch (level) {
+      case "debug": console.debug(line); break;
+      case "info": console.info(line); break;
+      case "warn": console.warn(line); break;
+      case "error": console.error(line); break;
+    }
   }
   for (const sink of extraSinks) {
     try {

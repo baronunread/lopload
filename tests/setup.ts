@@ -11,6 +11,13 @@ export const nativeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 GlobalRegistrator.register();
 
+// Keep debug/info log lines off the test console. The suite drives real HTTP
+// against MinIO, and a printed line per request is enough terminal
+// backpressure (when stdout is a TTY) to stall timers and fail waitFor-based
+// assertions that pass when output is redirected to a file.
+import { setConsoleLogLevel } from "../src/lib/logger";
+setConsoleLogLevel("warn");
+
 // jest-dom matchers on top of bun's expect
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { expect } from "bun:test";
