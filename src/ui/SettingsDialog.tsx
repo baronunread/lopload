@@ -132,7 +132,7 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog className="flex h-[32rem] w-full max-w-md flex-col p-6">
+      <Dialog className="flex h-[32rem] w-full sm:w-full max-w-md flex-col p-6">
         <div className="flex shrink-0 items-center gap-3">
           <Dialog.Title className="m-0">Settings</Dialog.Title>
           <Dialog.Close

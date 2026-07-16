@@ -88,7 +88,7 @@ export function ShareLinkDialog({ connectionId, fileKey, fileName, onClose }: Sh
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog className="w-full max-w-md p-6">
+      <Dialog className="w-full sm:w-full max-w-md p-6">
         <div className="flex items-center gap-3">
           <Dialog.Title className="m-0">Copy link — {fileName}</Dialog.Title>
           <Dialog.Close
