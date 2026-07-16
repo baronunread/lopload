@@ -92,12 +92,6 @@
     transform 200ms ease-out;
 }
 
-/* The overlay is conditionally mounted, so this must be a one-shot enter
-   animation (defined in App.css) — a transition would never play. */
-.lopload-drop-overlay {
-  animation: lopload-fade-in 150ms ease-out;
-}
-
 /* Hairline inside media edges so light thumbnails don't melt into the
    canvas. Pure black/white (not a tinted neutral) so it reads as an edge,
    not dirt; inset so it doesn't add to the layout box. */

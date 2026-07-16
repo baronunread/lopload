@@ -30,6 +30,10 @@ export interface RemoteBrowserRowProps {
     onMouseEnter: () => void;
     onMouseLeave: () => void;
   };
+  /** Only present for folder rows — rendered as data-drop-prefix on the
+   * <tr> so OS file drags can hit-test the cursor against folder rows
+   * (see folderPrefixAtPoint in RemoteBrowser). */
+  dropPrefix?: string;
   onClick: (e: ReactMouseEvent) => void;
   onMouseDown: (e: ReactMouseEvent) => void;
   onDoubleClick: () => void;
@@ -50,6 +54,7 @@ export function RemoteBrowserRow({
   suppressHover,
   folderMeta,
   dropTargetHandlers,
+  dropPrefix,
   onClick,
   onMouseDown,
   onDoubleClick,
@@ -74,6 +79,7 @@ export function RemoteBrowserRow({
       }`}
       onClick={onClick}
       onMouseDown={onMouseDown}
+      data-drop-prefix={dropPrefix}
       {...dropTargetHandlers}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}

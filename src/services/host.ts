@@ -120,6 +120,12 @@ export interface Host {
   /** Native drag-and-drop. Emits the raw dropped paths; expanding folders into
    * files is LoploadServices' job (see expandDroppedPaths). */
   onFileDrop(cb: (paths: string[]) => void): () => void;
+  /** Hover phases of a native file drag: fires with the cursor position (CSS
+   * pixels, window-relative) while files are dragged over the window, and
+   * null when the drag leaves it. A drop emits nothing here — the drop
+   * handler (onFileDrop) owns resetting whatever state hovering built up, so
+   * the hovered target can't be cleared out from under an in-flight drop. */
+  onFileDragHover(cb: (position: { x: number; y: number } | null) => void): () => void;
   /** Starts mirroring logs to disk. No-op outside the app. */
   initLogSink(): Promise<void>;
 }
