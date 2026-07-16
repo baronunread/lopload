@@ -129,4 +129,41 @@ describe("errors", () => {
     const result = describeThrown(long);
     expect(result.message.length).toBe(500);
   });
+
+  test("describeThrown enriches an S3-shaped error with status, code, and requestId", () => {
+    // Modeled on the real shape of an AWS SDK v3 generated exception (e.g.
+    // an actual NoSuchUpload seen in production logs): a named Error
+    // subclass whose instance carries $metadata.
+    class NoSuchUpload extends Error {
+      $metadata: { httpStatusCode: number; requestId: string };
+      constructor(message: string) {
+        super(message);
+        this.name = "NoSuchUpload";
+        this.$metadata = { httpStatusCode: 404, requestId: "req-abc-123" };
+      }
+    }
+    const err = new NoSuchUpload("The specified multipart upload does not exist.");
+    const result = describeThrown(err);
+    expect(result).toEqual({
+      message: "The specified multipart upload does not exist.",
+      type: "Error",
+      ctor: "NoSuchUpload",
+      status: 404,
+      code: "NoSuchUpload",
+      requestId: "req-abc-123",
+    });
+  });
+
+  test("describeThrown on a plain S3-like object (no Error prototype) still surfaces status/code", () => {
+    const err = { name: "AccessDenied", message: "Access Denied", $metadata: { httpStatusCode: 403 } };
+    const result = describeThrown(err);
+    expect(result.status).toBe(403);
+    expect(result.code).toBe("AccessDenied");
+    expect(result.requestId).toBeUndefined();
+  });
+
+  test("describeThrown omits status/code/requestId entirely for a plain Error (no extra keys)", () => {
+    const result = describeThrown(new TypeError("bad stuff"));
+    expect(Object.keys(result).sort()).toEqual(["ctor", "message", "type"]);
+  });
 });

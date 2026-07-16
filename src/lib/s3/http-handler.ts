@@ -113,7 +113,16 @@ export class InjectedFetchHttpHandler
         transformedHeaders[key] = value;
       });
       const hasReadableStream = response.body != undefined;
-      log.debug("response", url, { status: response.status, hasReadableStream });
+      // Every successful response logs at debug (the file sink drops debug
+      // entirely — see logSink.ts — so this only ever shows up in the
+      // console during local dev). A non-2xx response is signal, not noise:
+      // it's the first indication of a request that's about to surface as a
+      // classified failure, so it's worth keeping in the file at warn.
+      if (response.status >= 400) {
+        log.warn("response", method, url, { status: response.status, hasReadableStream });
+      } else {
+        log.debug("response", url, { status: response.status, hasReadableStream });
+      }
       if (!hasReadableStream) {
         const blob = await response.blob();
         log.debug("response body consumed as Blob", { size: blob.size });

@@ -32,7 +32,7 @@ interface SdkLikeError {
   Code?: string;
   code?: string;
   message?: string;
-  $metadata?: { httpStatusCode?: number };
+  $metadata?: { httpStatusCode?: number; requestId?: string };
 }
 
 function httpStatusOf(err: SdkLikeError): number | undefined {
@@ -41,6 +41,34 @@ function httpStatusOf(err: SdkLikeError): number | undefined {
 
 function codeOf(err: SdkLikeError): string | undefined {
   return err.name ?? err.Code ?? err.code;
+}
+
+function requestIdOf(err: SdkLikeError): string | undefined {
+  return err.$metadata?.requestId;
+}
+
+/** Pulls whatever S3/HTTP diagnostic detail is available on an arbitrary
+ * thrown value, for describeThrown below — never for user-facing text.
+ * Returns an empty object (no keys, not keys set to undefined) when nothing
+ * is available, so it can be spread into a result without adding noise.
+ *
+ * Gated on `$metadata` being present, not just on `code`/`status` being
+ * derivable: every plain `Error`/`TypeError` already has a `.name` (e.g.
+ * "TypeError"), which `codeOf` would otherwise happily report as if it were
+ * an S3 error code. `$metadata` only exists on genuine AWS SDK errors, so
+ * it's the one reliable signal that this is actually SDK-shaped. */
+function sdkDetailsOf(err: unknown): { status?: number; code?: string; requestId?: string } {
+  if (err == null || typeof err !== "object") return {};
+  const e = err as SdkLikeError;
+  if (!e.$metadata) return {};
+  const details: { status?: number; code?: string; requestId?: string } = {};
+  const status = httpStatusOf(e);
+  if (status !== undefined) details.status = status;
+  const code = codeOf(e);
+  if (code !== undefined) details.code = code;
+  const requestId = requestIdOf(e);
+  if (requestId !== undefined) details.requestId = requestId;
+  return details;
 }
 
 const CREDENTIALS_CODES = new Set([
@@ -153,10 +181,23 @@ export function toPlainError(err: unknown): PlainError {
  * user-facing text (see the file header). Never throws itself. Errors from
  * tauri-plugin-http's response stream can be raw strings (Rust IPC
  * rejections), so this exists to keep that detail out of logs as `""`.
+ *
+ * When the thrown value is an S3/AWS-SDK-shaped error, `status` (HTTP status
+ * code), `code` (the S3 error code, e.g. "NoSuchUpload"), and `requestId`
+ * are included too — this is what turns a bare "Error: Access Denied" log
+ * line into one that actually explains what happened.
  */
-export function describeThrown(err: unknown): { message: string; type: string; ctor: string | null } {
+export function describeThrown(err: unknown): {
+  message: string;
+  type: string;
+  ctor: string | null;
+  status?: number;
+  code?: string;
+  requestId?: string;
+} {
+  const details = sdkDetailsOf(err);
   if (err instanceof Error) {
-    return { message: err.message, type: "Error", ctor: err.constructor?.name ?? null };
+    return { message: err.message, type: "Error", ctor: err.constructor?.name ?? null, ...details };
   }
   let ctor: string | null = null;
   try {
@@ -170,5 +211,5 @@ export function describeThrown(err: unknown): { message: string; type: string; c
   } catch {
     message = "<unstringifiable>";
   }
-  return { message, type: typeof err, ctor };
+  return { message, type: typeof err, ctor, ...details };
 }
