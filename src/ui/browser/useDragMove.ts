@@ -10,6 +10,9 @@ export interface ActiveDrag {
   /** The dragged file's own thumbnail, shown instead of the generic file
    * glyph when the row being dragged has a rendered preview. */
   thumbnailSrc?: string;
+  /** The dragged file's name, used to pick a per-file-type icon (pdf, zip,
+   * …) when there's no thumbnail. Only set for single-file drags. */
+  fileName?: string;
   /** Where the ghost first appears (the press point); afterwards the hook
    * moves it directly via `ghostRef`, off React's render path. */
   x: number;
@@ -21,6 +24,7 @@ export interface DragSpec {
   label: string;
   variant: DragChipVariant;
   thumbnailSrc?: string;
+  fileName?: string;
   /** Fired once the press actually becomes a drag (threshold crossed) —
    * e.g. to collapse the selection down to the dragged row. */
   onBegin?: () => void;
@@ -113,6 +117,7 @@ export function useDragMove({ onMove }: UseDragMoveOptions): UseDragMoveResult {
           label: spec.label,
           variant: spec.variant,
           thumbnailSrc: spec.thumbnailSrc,
+          fileName: spec.fileName,
           x: ev.clientX + GHOST_OFFSET_PX,
           y: ev.clientY + GHOST_OFFSET_PX,
         });

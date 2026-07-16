@@ -558,6 +558,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       label: dragKeys.length > 1 ? `${dragKeys.length} items` : entry.name,
       variant: dragKeys.length > 1 ? "files" : isFolder ? "folder" : "file",
       thumbnailSrc,
+      fileName: dragKeys.length === 1 && !isFolder ? entry.name : undefined,
       onBegin: () => {
         if (!isMultiDrag) selection.setSelected(new Set([entry.key]));
       },
