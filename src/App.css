@@ -98,16 +98,39 @@ p {
  * other defaults to auto too), causing a horizontal scrollbar on
  * Windows whenever option text is wider than the dropdown. Truncate
  * option text so it never overflows horizontally.
+ *
+ * These are compound attribute selectors (no space) on purpose: Kumo
+ * puts data-kumo-component and data-kumo-part on the *same* element
+ * (verified against node_modules/@cloudflare/kumo/dist/chunks), and
+ * Combobox/Autocomplete rows use data-kumo-part="item", not "option".
+ * A descendant-combinator `[data-kumo-component="X"] [data-kumo-part="Y"]`
+ * never matches here — there's no separate ancestor carrying the
+ * component attribute — so it silently never applied.
  */
-[data-kumo-component="Select"] [data-kumo-part="option"],
-[data-kumo-component="Autocomplete"] [data-kumo-part="option"],
-[data-kumo-component="Combobox"] [data-kumo-part="option"] {
+[data-kumo-component="Select"][data-kumo-part="option"],
+[data-kumo-component="Autocomplete"][data-kumo-part="item"],
+[data-kumo-component="Combobox"][data-kumo-part="item"] {
   min-width: 0;
 }
-[data-kumo-component="Select"] [data-kumo-part="option"] > :first-child,
-[data-kumo-component="Autocomplete"] [data-kumo-part="option"] > :first-child,
-[data-kumo-component="Combobox"] [data-kumo-part="option"] > :first-child {
+[data-kumo-component="Select"][data-kumo-part="option"] > :first-child,
+[data-kumo-component="Autocomplete"][data-kumo-part="item"] > :first-child,
+[data-kumo-component="Combobox"][data-kumo-part="item"] > :first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * Belt-and-suspenders for the same dropdown: the scrollable div only
+ * sets overflow-y:auto (see above), which per the CSS overflow spec
+ * makes the browser treat the unset x-axis as auto too — so besides
+ * the option-text truncation above, anything else that nudges the
+ * popup a pixel wider than its container (long untruncatable content,
+ * a reserved scrollbar gutter, Windows' classic non-overlay
+ * scrollbars) can still surface a horizontal scrollbar. This popup is
+ * portaled to <body>, so there's no `data-kumo-component` ancestor to
+ * scope off — `[role="listbox"]` isn't used anywhere else in the app.
+ */
+[role="listbox"] {
+  overflow-x: hidden;
 }
