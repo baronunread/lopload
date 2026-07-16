@@ -17,6 +17,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import type { Connection, RemoteEntry } from "../lib/types";
+import { mapWithConcurrency } from "../lib/concurrency";
 import { CredentialsUnreadableError, useServices, type FolderInfo } from "./services";
 import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -63,6 +64,14 @@ function crumbDropClass(dragActive: boolean, isTarget: boolean): string {
  * measured-overflow check — plenty for how deep real paths get, and far
  * simpler. */
 const BREADCRUMB_COLLAPSE_THRESHOLD = 3;
+
+/** Cap on concurrent S3 operations kicked off from a single bulk UI action
+ * (drag-moving or Trash-ing a multi-row selection). Each operation is
+ * already its own recursive, internally-parallel copy/delete (see
+ * OBJECT_CONCURRENCY/DELETE_CONCURRENCY in s3/client.ts) — this just bounds
+ * how many of those run at once so selecting hundreds of rows can't fan out
+ * into hundreds of unbounded folder operations simultaneously. */
+const BULK_OP_CONCURRENCY = 3;
 
 /** Splits path segments into the ones a collapsed breadcrumb trail hides
  * behind "…" and the ones it still shows (Home is rendered separately by
@@ -435,26 +444,22 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       (prev) => [...prev, ...removed.filter((r) => !prev.some((e) => e.key === r.key))],
     );
 
-    let completed = 0;
-    const total = moves.length;
-    for (const m of moves) {
-      services.browser
-        .move(connectionId, m.fromKey, m.toKey)
-        .then(() => {
-          completed++;
-          if (completed === total) void refreshSilently();
-        })
-        .catch((err) => {
-          completed++;
-          rollback();
-          toasts.add({
-            variant: "error",
-            title: "Couldn't move",
-            description: err instanceof Error ? err.message : "Something went wrong.",
-          });
-          if (completed === total) void refreshSilently();
+    let anyFailed = false;
+    void mapWithConcurrency(moves, BULK_OP_CONCURRENCY, async (m) => {
+      try {
+        await services.browser.move(connectionId, m.fromKey, m.toKey);
+      } catch (err) {
+        anyFailed = true;
+        toasts.add({
+          variant: "error",
+          title: "Couldn't move",
+          description: err instanceof Error ? err.message : "Something went wrong.",
         });
-    }
+      }
+    }).then(() => {
+      if (anyFailed) rollback();
+      void refreshSilently();
+    });
   }
 
   const dragMove = useDragMove({ onMove: handleMove });
@@ -489,7 +494,9 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     );
     selection.clear();
     try {
-      await Promise.all(deleted.map((entry) => services.browser.delete(connectionId, entry.key)));
+      await mapWithConcurrency(deleted, BULK_OP_CONCURRENCY, (entry) =>
+        services.browser.delete(connectionId, entry.key),
+      );
       await refreshSilently();
     } catch (err) {
       rollback();

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
 import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
-import { useServices, type TrashItem } from "../services";
+import { useServices, type CopyProgress, type TrashItem } from "../services";
 import { formatBytes, formatDate } from "../format";
 import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
 
@@ -31,19 +31,27 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  /** Per-row "N of M items" readout for a restore or delete-now in flight,
+   * fed directly by the service call's onProgress rather than the global
+   * move stream — a row only needs its own progress, not everyone else's. */
+  const [rowProgress, setRowProgress] = useState<Record<string, CopyProgress>>({});
+  /** Running item count for an in-flight Empty trash, shown near its confirm
+   * control since there's no per-row spinner for "everything at once". */
+  const [emptyProgress, setEmptyProgress] = useState<CopyProgress | null>(null);
   const toasts = useKumoToastManager();
 
-  /** Applies an optimistic update to `items` immediately and returns a
-   * rollback that applies the inverse — inverse-ops rather than a whole-list
-   * snapshot, so rolling back one action can't clobber another concurrent
-   * optimistic update. */
-  function mutateItems(
-    apply: (prev: TrashItem[]) => TrashItem[],
-    invert: (prev: TrashItem[]) => TrashItem[],
-  ): () => void {
-    setItems(apply);
-    return () => setItems(invert);
+  function setItemProgress(id: string, progress: CopyProgress | undefined): void {
+    setRowProgress((prev) => {
+      if (progress === undefined) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      return { ...prev, [id]: progress };
+    });
   }
 
   async function refresh() {
@@ -61,17 +69,19 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 
+  // Restore and delete-now deliberately do NOT remove the row optimistically
+  // before the call settles, unlike the bulk/context-menu delete-to-trash
+  // flows in RemoteBrowser: those are near-instant, but a big folder restore
+  // or purge can run long enough that the row needs to stay put and show
+  // "N of M items" while it works — see rowProgress below — rather than
+  // vanish immediately and reappear on failure.
   async function handleRestore(item: TrashItem) {
     setBusyId(item.id);
-    const rollback = mutateItems(
-      (prev) => prev.filter((i) => i.id !== item.id),
-      (prev) => (prev.some((i) => i.id === item.id) ? prev : [...prev, item]),
-    );
     try {
-      await services.trash.restore(connectionId, item);
+      await services.trash.restore(connectionId, item, (p) => setItemProgress(item.id, p));
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
       onRestored();
     } catch (err) {
-      rollback();
       toasts.add({
         variant: "error",
         title: "Couldn't restore",
@@ -79,6 +89,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
       });
     } finally {
       setBusyId(null);
+      setItemProgress(item.id, undefined);
     }
   }
 
@@ -90,14 +101,11 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
 
     if (current.kind === "delete-now") {
       const { item } = current;
-      const rollback = mutateItems(
-        (prev) => prev.filter((i) => i.id !== item.id),
-        (prev) => (prev.some((i) => i.id === item.id) ? prev : [...prev, item]),
-      );
+      setDeletingId(item.id);
       try {
-        await services.trash.deleteNow(connectionId, item);
+        await services.trash.deleteNow(connectionId, item, (p) => setItemProgress(item.id, p));
+        setItems((prev) => prev.filter((i) => i.id !== item.id));
       } catch (err) {
-        rollback();
         toasts.add({
           variant: "error",
           title: "Couldn't delete",
@@ -105,19 +113,16 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
         });
       } finally {
         setConfirming(false);
+        setDeletingId(null);
+        setItemProgress(item.id, undefined);
       }
       return;
     }
 
-    const previousItems = items;
-    const rollback = mutateItems(
-      () => [],
-      () => previousItems,
-    );
     try {
-      await services.trash.emptyTrash(connectionId);
+      await services.trash.emptyTrash(connectionId, (p) => setEmptyProgress(p));
+      setItems([]);
     } catch (err) {
-      rollback();
       toasts.add({
         variant: "error",
         title: "Couldn't empty Trash",
@@ -125,6 +130,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
       });
     } finally {
       setConfirming(false);
+      setEmptyProgress(null);
     }
   }
 
@@ -181,12 +187,20 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                       <div className="truncate text-xs text-kumo-subtle">
                         Gone for good {formatDate(item.purgeAt)}
                       </div>
+                      {rowProgress[item.id] && (
+                        <div className="mt-1 truncate text-xs text-kumo-subtle tabular-nums">
+                          {busyId === item.id ? "Restoring" : "Deleting"}
+                          {"… "}
+                          {rowProgress[item.id].copiedItems} of {rowProgress[item.id].totalItems} items
+                        </div>
+                      )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       <Button
                         variant="secondary"
                         size="sm"
                         loading={busyId === item.id}
+                        disabled={deletingId === item.id}
                         onClick={() => void handleRestore(item)}
                       >
                         Restore
@@ -195,6 +209,8 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                         variant="secondary-destructive"
                         style={SOLID_DANGER_TEXT_STYLE}
                         size="sm"
+                        loading={deletingId === item.id}
+                        disabled={busyId === item.id}
                         onClick={() => setPending({ kind: "delete-now", item })}
                       >
                         Delete now
@@ -205,15 +221,21 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
               </AnimatePresence>
             </ul>
           )}
-          <div className="mt-4 flex items-center">
+          <div className="mt-4 flex items-center gap-3">
             {items.length > 0 && (
               <Button
                 variant="secondary-destructive"
                 style={SOLID_DANGER_TEXT_STYLE}
+                loading={emptyProgress !== null}
                 onClick={() => setPending({ kind: "empty" })}
               >
                 Empty trash
               </Button>
+            )}
+            {emptyProgress && (
+              <span className="text-xs text-kumo-subtle tabular-nums">
+                Deleting {emptyProgress.copiedItems} of {emptyProgress.totalItems} items…
+              </span>
             )}
           </div>
         </Dialog>

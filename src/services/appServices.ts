@@ -257,6 +257,67 @@ class LoploadServices implements AppServices {
     this.host.tray.setStatus({ uploading, percent, failed });
   }
 
+  /**
+   * Shared tracking harness behind every progress-reporting background
+   * operation (rename/move, trash, restore, purge): mints a moveId, seeds an
+   * initial MoveProgress, forwards `fn`'s CopyProgress events into
+   * `moveSubscribers` (so TransferWidget shows it even if the dialog that
+   * started it gets closed), and settles the tracked entry to "completed" or
+   * "failed" once `fn` does. `fn` gets an `emit` callback rather than doing
+   * this bookkeeping itself, so each caller only supplies the S3 call and
+   * `kind` distinguishing what it's for.
+   */
+  private async runTracked(
+    connectionId: string,
+    fromKey: string,
+    toKey: string,
+    kind: MoveProgress["kind"],
+    fn: (emit: (progress: CopyProgress) => void) => Promise<void>,
+  ): Promise<void> {
+    const moveId = crypto.randomUUID();
+    const emit = (partial: Partial<MoveProgress>) => {
+      const current = this.activeMoves.get(moveId);
+      if (!current) return;
+      const next: MoveProgress = { ...current, ...partial };
+      this.activeMoves.set(moveId, next);
+      for (const fn of this.moveSubscribers) fn(next);
+    };
+
+    const initial: MoveProgress = {
+      moveId,
+      connectionId,
+      fromKey,
+      toKey,
+      kind,
+      copiedBytes: 0,
+      totalBytes: 0,
+      copiedItems: 0,
+      totalItems: 0,
+      status: "moving",
+    };
+    this.activeMoves.set(moveId, initial);
+    for (const fn of this.moveSubscribers) fn(initial);
+
+    // A settled operation is the subscriber's to remember, not ours: the map
+    // tracks what's in flight, so the terminal event goes out and then the
+    // entry goes away rather than accumulating for the life of the process.
+    try {
+      await fn((p) => emit(p));
+      const final = this.activeMoves.get(moveId);
+      emit({
+        status: "completed",
+        copiedItems: final?.totalItems ?? 0,
+        copiedBytes: final?.totalBytes ?? 0,
+      });
+      this.activeMoves.delete(moveId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Something went wrong.";
+      emit({ status: "failed", errorMessage: msg });
+      this.activeMoves.delete(moveId);
+      throw err;
+    }
+  }
+
   private findEngineFor(transferId: string): TransferEngine | undefined {
     for (const engine of this.engines.values()) {
       if (engine.getTransfer(transferId)) return engine;
@@ -354,58 +415,17 @@ class LoploadServices implements AppServices {
       onProgress?: (progress: CopyProgress) => void,
     ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
-      const moveId = crypto.randomUUID();
-      const emit = (partial: Partial<MoveProgress>) => {
-        const current = this.activeMoves.get(moveId);
-        if (!current) return;
-        const next: MoveProgress = { ...current, ...partial };
-        this.activeMoves.set(moveId, next);
-        for (const fn of this.moveSubscribers) fn(next);
-      };
-
-      // Totals start at zero and are filled in by the first progress event,
-      // once the copy has listed what's actually under the prefix.
-      const initial: MoveProgress = {
-        moveId,
-        connectionId,
-        fromKey: key,
-        toKey,
-        copiedBytes: 0,
-        totalBytes: 0,
-        copiedItems: 0,
-        totalItems: isFolderKey(key) ? 0 : 1,
-        status: "moving",
-      };
-      this.activeMoves.set(moveId, initial);
-      for (const fn of this.moveSubscribers) fn(initial);
-
-      const progress = (p: CopyProgress) => {
-        emit(p);
-        onProgress?.(p);
-      };
-
-      // A settled move is the subscriber's to remember, not ours: the map
-      // tracks what's in flight, so the terminal event goes out and then the
-      // entry goes away rather than accumulating for the life of the process.
-      try {
+      await this.runTracked(connectionId, key, toKey, "move", async (emit) => {
+        const progress = (p: CopyProgress) => {
+          emit(p);
+          onProgress?.(p);
+        };
         if (isFolderKey(key)) {
           await s3RenameFolder(client, conn.bucket, key, toKey, progress);
         } else {
           await s3RenameFile(client, conn.bucket, key, toKey, progress);
         }
-        const final = this.activeMoves.get(moveId);
-        emit({
-          status: "completed",
-          copiedItems: final?.totalItems ?? 1,
-          copiedBytes: final?.totalBytes ?? 0,
-        });
-        this.activeMoves.delete(moveId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Something went wrong.";
-        emit({ status: "failed", errorMessage: msg });
-        this.activeMoves.delete(moveId);
-        throw err;
-      }
+      });
     },
     subscribeMoves: (cb: (event: MoveProgress) => void): (() => void) => {
       this.moveSubscribers.add(cb);
@@ -415,7 +435,9 @@ class LoploadServices implements AppServices {
       const { client, conn } = await this.getClient(connectionId);
       const deletedAtMs = Date.now();
       if (isFolderKey(key)) {
-        await s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs);
+        await this.runTracked(connectionId, key, key, "trash", (emit) =>
+          s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs, emit),
+        );
       } else {
         await s3MoveFileToTrash(client, conn.bucket, key, deletedAtMs);
       }
@@ -457,21 +479,66 @@ class LoploadServices implements AppServices {
         size: g.totalSize,
       }));
     },
-    restore: async (connectionId: string, item: TrashItem): Promise<void> => {
+    restore: async (
+      connectionId: string,
+      item: TrashItem,
+      onProgress?: (progress: CopyProgress) => void,
+    ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       if (item.kind === "folder") {
-        await s3RestoreFolderFromTrash(client, conn.bucket, item.deletedAt, item.originalKey);
+        await this.runTracked(
+          connectionId,
+          item.originalKey,
+          item.originalKey,
+          "restore",
+          async (emit) => {
+            const progress = (p: CopyProgress) => {
+              emit(p);
+              onProgress?.(p);
+            };
+            await s3RestoreFolderFromTrash(client, conn.bucket, item.deletedAt, item.originalKey, progress);
+          },
+        );
       } else {
         await s3RestoreFileFromTrash(client, conn.bucket, item.deletedAt, item.originalKey);
       }
     },
-    deleteNow: async (connectionId: string, item: TrashItem): Promise<void> => {
+    deleteNow: async (
+      connectionId: string,
+      item: TrashItem,
+      onProgress?: (progress: CopyProgress) => void,
+    ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
-      await s3DeleteTrashItem(client, conn.bucket, item.deletedAt, item.originalKey, item.kind);
+      if (item.kind === "folder") {
+        await this.runTracked(
+          connectionId,
+          item.originalKey,
+          item.originalKey,
+          "purge",
+          async (emit) => {
+            const progress = (p: CopyProgress) => {
+              emit(p);
+              onProgress?.(p);
+            };
+            await s3DeleteTrashItem(client, conn.bucket, item.deletedAt, item.originalKey, item.kind, progress);
+          },
+        );
+      } else {
+        await s3DeleteTrashItem(client, conn.bucket, item.deletedAt, item.originalKey, item.kind);
+      }
     },
-    emptyTrash: async (connectionId: string): Promise<void> => {
+    emptyTrash: async (
+      connectionId: string,
+      onProgress?: (progress: CopyProgress) => void,
+    ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
-      await s3EmptyTrash(client, conn.bucket);
+      await this.runTracked(connectionId, "Trash", "Trash", "purge", async (emit) => {
+        const progress = (p: CopyProgress) => {
+          emit(p);
+          onProgress?.(p);
+        };
+        await s3EmptyTrash(client, conn.bucket, progress);
+      });
     },
   };
 
