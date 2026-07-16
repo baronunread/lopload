@@ -53,7 +53,15 @@ const MIGRATIONS = [
 
 let migrated: Promise<void> | null = null;
 
-export async function loadDatabase(path = "sqlite:lopload.db"): Promise<Database> {
+/** The selftest build gets its own database file: `bun run selftest` wipes
+ * connection/transfer state between scenarios, and that must never touch the
+ * connections the real app has saved. Vite inlines VITE_LOPLOAD_SELFTEST
+ * statically, so normal builds keep the plain path with no branch. */
+const DEFAULT_DB_PATH = import.meta.env.VITE_LOPLOAD_SELFTEST
+  ? "sqlite:lopload-selftest.db"
+  : "sqlite:lopload.db";
+
+export async function loadDatabase(path = DEFAULT_DB_PATH): Promise<Database> {
   const db = await Database.load(path);
   if (!migrated) {
     migrated = (async () => {

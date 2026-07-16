@@ -26,7 +26,10 @@ and run in both places:
   Launches the actual Tauri binary (`bunx tauri dev` on port 14330, so it
   coexists with a `bun run tauri dev` you already have open) and runs the same
   scenarios inside its webview: real Rust IPC (`http_send`, `write_at`), real
-  OS keychain, real SQLite, real disk, real MinIO. Exit code comes from the
+  OS keychain, real SQLite, real disk, real MinIO. Its SQLite db and settings
+  file are selftest-scoped (`lopload-selftest.db` / `settings-selftest.json`),
+  so wiping state between scenarios never touches the connections the real
+  app has saved. Exit code comes from the
   `SELFTEST_RESULT PASS|FAIL` sentinel. Budget ~10 min cold (cargo build),
   ~1–2 min warm.
 

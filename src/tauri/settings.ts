@@ -3,7 +3,12 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import type { TransferTuning } from "../lib/types";
 import { DEFAULT_TUNING, presetMatching } from "../lib/tuning";
 
-const SETTINGS_PATH = "settings.json";
+/** Selftest builds write their own settings file — the selftest sets
+ * lastConnectionId on every scenario and must not redirect the real app's
+ * pointer. Statically inlined by Vite; normal builds keep settings.json. */
+const SETTINGS_PATH = import.meta.env.VITE_LOPLOAD_SELFTEST
+  ? "settings-selftest.json"
+  : "settings.json";
 
 const store = new LazyStore(SETTINGS_PATH, {
   defaults: {

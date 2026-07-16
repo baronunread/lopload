@@ -15,7 +15,9 @@
 //     decoration only *also* records them into `record`, so scenarios get the
 //     same HostControl/HostRecord assertion surface the Node host offers.
 // fetch, fs, keychain, stores and settings are untouched: real Rust HTTP,
-// real disk, real OS keychain, real SQLite.
+// real disk, real OS keychain, real SQLite — though the db and settings
+// files are selftest-scoped ones, so scenario resets never touch the state
+// the real app has saved (see loadDatabase / src/tauri/settings.ts).
 //
 // Import boundary: everything this file (transitively) imports ends up in the
 // production Vite bundle's module graph *unless* main.tsx's dynamic
@@ -44,12 +46,12 @@ import { allScenarios } from "../../tests/scenarios";
 import type { Expect, Scenario, ScenarioCtx } from "../../tests/scenarios/types";
 import type { HostControl, HostRecord } from "../../tests/support/nodeHost";
 
-/** The connection id/name this run uses. Deliberately distinctive — this Host
- * is the real one, backed by the real on-disk SQLite db and OS keychain
- * (`bun run tauri dev` already shares those with the installed app; this
- * self-test doesn't introduce that, it inherits it), so a collision with a
- * real saved connection would be a real problem. Cleaned up in `finally`
- * below regardless of pass/fail. */
+/** The connection id/name this run uses. The SQLite db and settings file are
+ * selftest-scoped (lopload-selftest.db / settings-selftest.json — see
+ * loadDatabase and src/tauri/settings.ts), so wiping stores between scenarios
+ * can't touch the connections the real app has saved. The OS keychain is the
+ * one shared surface left: entries live under the same service, so this id
+ * stays deliberately distinctive and is deleted after the run. */
 const CONNECTION_ID = "lopload-selftest";
 const CONNECTION_NAME = "Lopload Selftest";
 
@@ -421,9 +423,9 @@ async function runSelftest(): Promise<void> {
     }
   }
 
-  // Best-effort: this Host is the real one, backed by the same on-disk
-  // SQLite db and OS keychain the installed app uses, so don't leave a test
-  // connection sitting there after the run — regardless of pass/fail.
+  // Best-effort: the db and settings are selftest-scoped, but the OS
+  // keychain is the real one — don't leave test credentials sitting there
+  // after the run, regardless of pass/fail.
   try {
     const store = await host.stores.connections();
     await store.delete(CONNECTION_ID);
