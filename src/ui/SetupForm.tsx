@@ -168,81 +168,87 @@ export function SetupForm({
 
   return (
     <form
-      className="grid grid-cols-1 items-start gap-4 short:grid-cols-2"
+      /* @container on the form, grid on the inner div: an element can't
+         respond to its own container query, and the column count depends on
+         the width actually available here (onboarding card vs. dialog),
+         not on the window. Two columns from 28rem (@md) of form width up. */
+      className="@container"
       onSubmit={(e) => {
         e.preventDefault();
         if (ready && !saving) void handleSave();
         else if (testState !== "testing") void handleTest();
       }}
     >
-      <Input
-        label="Name"
-        placeholder="e.g. Videos"
-        value={form.name}
-        onChange={(e) => update("name", e.target.value)}
-        required
-      />
-      <Input
-        label="Endpoint URL"
-        placeholder="https://..."
-        value={form.endpoint}
-        onChange={(e) => update("endpoint", e.target.value)}
-        required
-      />
-      <Input
-        label="Access key"
-        value={form.accessKey}
-        onChange={(e) => update("accessKey", e.target.value)}
-        required
-      />
-      <SensitiveInput
-        label="Secret key"
-        value={form.secretKey}
-        onValueChange={(value) => update("secretKey", value)}
-      />
-      <Input
-        label="Bucket name"
-        description="The folder space this connection reads and writes to."
-        value={form.bucket}
-        onChange={(e) => update("bucket", e.target.value)}
-        required
-      />
-      <Input
-        label="Region"
-        required={false}
-        value={form.region}
-        onChange={(e) => update("region", e.target.value)}
-      />
+      <div className="grid grid-cols-1 items-start gap-4 @md:grid-cols-2">
+        <Input
+          label="Name"
+          placeholder="e.g. Videos"
+          value={form.name}
+          onChange={(e) => update("name", e.target.value)}
+          required
+        />
+        <Input
+          label="Endpoint URL"
+          placeholder="https://..."
+          value={form.endpoint}
+          onChange={(e) => update("endpoint", e.target.value)}
+          required
+        />
+        <Input
+          label="Access key"
+          value={form.accessKey}
+          onChange={(e) => update("accessKey", e.target.value)}
+          required
+        />
+        <SensitiveInput
+          label="Secret key"
+          value={form.secretKey}
+          onValueChange={(value) => update("secretKey", value)}
+        />
+        <Input
+          label="Bucket name"
+          description="The folder space this connection reads and writes to."
+          value={form.bucket}
+          onChange={(e) => update("bucket", e.target.value)}
+          required
+        />
+        <Input
+          label="Region"
+          required={false}
+          value={form.region}
+          onChange={(e) => update("region", e.target.value)}
+        />
 
-      <Button
-        type="submit"
-        variant={ready ? "primary" : "secondary"}
-        loading={testState === "testing" || (ready && saving)}
-        className={`w-full justify-center short:col-span-2 ${shake ? "lopload-shake" : ""}`}
-      >
-        {/* Both labels are always mounted, stacked in the same grid cell, and
-            crossfade via opacity/transform — this animates the swap instead
-            of jumping straight from one word to the other. aria-hidden keeps
-            the inactive label out of the accessible name. */}
-        <span className="relative grid">
-          <span
-            aria-hidden={ready}
-            className={`col-start-1 row-start-1 transition-[opacity,translate] duration-200 ease-out ${
-              ready ? "-translate-y-1 opacity-0" : "translate-y-0 opacity-100"
-            }`}
-          >
-            Test connection
+        <Button
+          type="submit"
+          variant={ready ? "primary" : "secondary"}
+          loading={testState === "testing" || (ready && saving)}
+          className={`w-full justify-center @md:col-span-2 ${shake ? "lopload-shake" : ""}`}
+        >
+          {/* Both labels are always mounted, stacked in the same grid cell, and
+              crossfade via opacity/transform — this animates the swap instead
+              of jumping straight from one word to the other. aria-hidden keeps
+              the inactive label out of the accessible name. */}
+          <span className="relative grid">
+            <span
+              aria-hidden={ready}
+              className={`col-start-1 row-start-1 transition-[opacity,translate] duration-200 ease-out ${
+                ready ? "-translate-y-1 opacity-0" : "translate-y-0 opacity-100"
+              }`}
+            >
+              Test connection
+            </span>
+            <span
+              aria-hidden={!ready}
+              className={`col-start-1 row-start-1 transition-[opacity,translate] duration-200 ease-out ${
+                ready ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
+              }`}
+            >
+              Save connection
+            </span>
           </span>
-          <span
-            aria-hidden={!ready}
-            className={`col-start-1 row-start-1 transition-[opacity,translate] duration-200 ease-out ${
-              ready ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
-            }`}
-          >
-            Save connection
-          </span>
-        </span>
-      </Button>
+        </Button>
+      </div>
     </form>
   );
 }

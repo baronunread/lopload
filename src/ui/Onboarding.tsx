@@ -48,7 +48,7 @@ export function Onboarding({ onDone }: OnboardingProps) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -16 }}
             transition={{ duration: 0.25 }}
-            className="my-auto flex w-full max-w-md shrink-0 flex-col gap-4 rounded-xl bg-kumo-base p-8 ring-1 ring-kumo-line short:max-w-2xl"
+            className="my-auto flex w-full max-w-2xl shrink-0 flex-col gap-4 rounded-xl bg-kumo-base p-8 ring-1 ring-kumo-line"
           >
             <div className="flex flex-col gap-1 text-center">
               <h1 className="lopload-heading text-2xl font-semibold">Welcome to Lopload</h1>

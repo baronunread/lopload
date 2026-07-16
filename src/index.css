@@ -6,8 +6,3 @@
 @source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
 @import "@cloudflare/kumo/styles/tailwind";
 @import "tailwindcss";
-
-/* `short:` — the window is vertically cramped but wide enough for two
-   columns. Used by SetupForm (and its containers) to trade width for
-   height, since this app mostly runs windowed. */
-@custom-variant short (@media (max-height: 700px) and (min-width: 560px));
