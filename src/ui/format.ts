@@ -67,10 +67,10 @@ export function formatBytes(bytes: number): string {
   return `${rounded} ${units[i]}`;
 }
 
-export function formatDate(ms: number | undefined): string {
+export function formatDate(ms: number | undefined, locale?: string | string[]): string {
   if (!ms) return "—";
   const d = new Date(ms);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
