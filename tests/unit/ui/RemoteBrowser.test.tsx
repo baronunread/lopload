@@ -98,6 +98,66 @@ describe("RemoteBrowser", () => {
     }
   });
 
+  test("a deep path collapses ancestor breadcrumbs behind a '…' menu, keeping the toolbar actions reachable", async () => {
+    const harness = await harnessWithConnection();
+    try {
+      await harness.bucket.put("alpha/beta/gamma/delta/epsilon/leaf.txt", "hi");
+      const user = userEvent.setup();
+
+      renderBrowser(harness);
+      await screen.findByText("alpha");
+
+      // Navigate five levels deep, one double-click at a time.
+      await user.dblClick(screen.getByText("alpha"));
+      await screen.findByText("beta");
+      await user.dblClick(screen.getByText("beta"));
+      await screen.findByText("gamma");
+      await user.dblClick(screen.getByText("gamma"));
+      await screen.findByText("delta");
+      await user.dblClick(screen.getByText("delta"));
+      await screen.findByText("epsilon");
+      await user.dblClick(screen.getByText("epsilon"));
+      await screen.findByText("leaf.txt");
+      await waitFor(async () =>
+        expect(await currentLastPrefix(harness)).toBe("alpha/beta/gamma/delta/epsilon/"),
+      );
+
+      // Only Home plus the last two segments (delta, epsilon) show — the
+      // toolbar's action buttons stay reachable regardless.
+      expect(screen.getAllByText("Home")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("delta")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("epsilon")[0]).toBeInTheDocument();
+      expect(screen.queryByText("alpha")).not.toBeInTheDocument();
+      expect(screen.queryByText("beta")).not.toBeInTheDocument();
+      expect(screen.queryByText("gamma")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "New folder" }),
+      ).toBeInTheDocument();
+
+      // The "…" trigger lists the hidden ancestors, top-down, each
+      // navigable — pick the first of the duplicated mobile/desktop pair.
+      const trigger = screen.getAllByRole("button", { name: "Show 3 hidden folders" })[0];
+      await user.click(trigger);
+
+      const menu = await screen.findByRole("menu");
+      const items = within(menu).getAllByRole("menuitem");
+      expect(items.map((item) => item.textContent)).toEqual(["alpha", "beta", "gamma"]);
+
+      // Clicking a hidden ancestor navigates straight there.
+      await user.click(within(menu).getByRole("menuitem", { name: "beta" }));
+
+      await waitFor(async () => expect(await currentLastPrefix(harness)).toBe("alpha/beta/"));
+      await screen.findByText("gamma");
+      // Only two segments now — no collapsing needed, so the menu trigger
+      // is gone and both ancestor crumbs are plain, visible links.
+      expect(screen.queryByRole("button", { name: /hidden folder/ })).not.toBeInTheDocument();
+      expect(screen.getAllByText("alpha")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("beta")[0]).toBeInTheDocument();
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   test("shows an empty state when a folder has no entries", async () => {
     const harness = await harnessWithConnection();
     try {
