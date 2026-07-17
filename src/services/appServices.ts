@@ -184,8 +184,10 @@ class LoploadServices implements AppServices {
 
   private async buildEngine(connectionId: string): Promise<TransferEngine> {
     await this.ensureTuningLoaded();
-    const { client, conn } = await this.getClient(connectionId);
-    const store = await this.getTransferStore();
+    const [{ client, conn }, store] = await Promise.all([
+      this.getClient(connectionId),
+      this.getTransferStore(),
+    ]);
     const engine = new TransferEngine({
       client,
       bucket: conn.bucket,
@@ -236,12 +238,13 @@ class LoploadServices implements AppServices {
     let doneBytes = 0;
     let failed = 0;
     for (const t of this.transferSnapshots.values()) {
-      if (t.state.kind === "queued" || t.state.kind === "sending" || t.state.kind === "checking") {
+      const { state } = t;
+      if (state.kind === "queued" || state.kind === "sending" || state.kind === "checking") {
         uploading += 1;
         totalBytes += t.size;
-        if (t.state.kind === "sending") doneBytes += t.size * (t.state.percent / 100);
-        else if (t.state.kind === "checking") doneBytes += t.size;
-      } else if (t.state.kind === "failed") {
+        if (state.kind === "sending") doneBytes += t.size * (state.percent / 100);
+        else if (state.kind === "checking") doneBytes += t.size;
+      } else if (state.kind === "failed") {
         failed += 1;
       }
     }
@@ -600,8 +603,10 @@ class LoploadServices implements AppServices {
     abortStaleUploads: async (
       connectionId: string,
     ): Promise<{ aborted: number; errors: number }> => {
-      const { client, conn } = await this.getClient(connectionId);
-      const store = await this.getTransferStore();
+      const [{ client, conn }, store] = await Promise.all([
+        this.getClient(connectionId),
+        this.getTransferStore(),
+      ]);
       return abortStaleUploads(client, conn.bucket, store, connectionId);
     },
   };
@@ -810,17 +815,13 @@ class LoploadServices implements AppServices {
 
     await Promise.all(
       engines.flatMap((engine) =>
-        engine
-          .listTransfers()
-          .filter(
-            (t) =>
-              t.state.kind === "queued" ||
-              t.state.kind === "sending" ||
-              t.state.kind === "checking",
-          )
+        engine.listTransfers().flatMap((t) => {
+          const { kind } = t.state;
+          if (kind !== "queued" && kind !== "sending" && kind !== "checking") return [];
           // A cancel that fails has nothing left to tell us — we're tearing the
           // whole instance down either way.
-          .map((t) => engine.cancel(t.id).catch(() => {})),
+          return [engine.cancel(t.id).catch(() => {})];
+        }),
       ),
     );
 

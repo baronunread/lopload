@@ -247,28 +247,29 @@ export class TransferEngine {
 
   private async resumePendingInternal(): Promise<void> {
     const all = await this.store.list(this.connectionId);
+    // this.queue is FIFO-ordered and still gets pushed to below, so it can't
+    // just be replaced with a Set — but every id in `all` is distinct, so a
+    // Set snapshot mirrors it fine as long as we mirror those pushes into it.
+    const queuedIds = new Set(this.queue);
     for (const transfer of all) {
       // Idempotency guard: if this transfer id is already queued, actively
       // running, or already tracked in a non-terminal state, a previous
       // (possibly concurrent) call to resumePending already handled it —
       // skip it so we never double-queue the same upload.
-      if (this.queue.includes(transfer.id) || this.active.has(transfer.id)) {
+      if (queuedIds.has(transfer.id) || this.active.has(transfer.id)) {
         continue;
       }
       const tracked = this.transfers.get(transfer.id);
+      const trackedKind = tracked?.state.kind;
       if (
-        tracked &&
-        (tracked.state.kind === "queued" ||
-          tracked.state.kind === "sending" ||
-          tracked.state.kind === "checking")
+        trackedKind === "queued" ||
+        trackedKind === "sending" ||
+        trackedKind === "checking"
       ) {
         continue;
       }
-      if (
-        transfer.state.kind === "queued" ||
-        transfer.state.kind === "sending" ||
-        transfer.state.kind === "checking"
-      ) {
+      const { kind } = transfer.state;
+      if (kind === "queued" || kind === "sending" || kind === "checking") {
         // An upload with a persisted uploadId can pick up where it left off
         // — uploadMultipart's ListParts reconciliation skips whatever parts
         // already made it to S3. Everything else (uploads that never got an
@@ -281,6 +282,7 @@ export class TransferEngine {
           await this.store.save(transfer);
           this.transfers.set(transfer.id, transfer);
           this.queue.push(transfer.id);
+          queuedIds.add(transfer.id);
           this.emit({ type: "transfer-updated", transfer: { ...transfer } });
           continue;
         }
