@@ -11,5 +11,3 @@ export const allScenarios: Scenario[] = [
   ...folderAndTrashScenarios,
   ...transferScenarios,
 ];
-
-export type { Scenario, ScenarioCtx } from "./types";

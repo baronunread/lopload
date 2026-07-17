@@ -838,7 +838,7 @@ export async function createFolder(
 /** SigV4's hard ceiling on presigned URL lifetime — AWS (and S3-compatible
  * stores like MinIO) reject anything past this. Callers must pick an expiry
  * at or under this value. */
-export const MAX_COPY_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
+const MAX_COPY_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
 
 /** Presigned GET URL, valid for `expiresInSeconds` (capped at
  * MAX_COPY_LINK_EXPIRY_SECONDS, SigV4's hard maximum). */

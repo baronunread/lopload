@@ -30,6 +30,32 @@ export interface TransfersPaneProps {
   onKnobChange: (knob: TuningKnob, value: unknown) => void;
 }
 
+interface TuningFieldProps {
+  label: string;
+  knob: TuningKnob;
+  value: number;
+  options: readonly number[];
+  suffix?: string;
+  help: string;
+  onKnobChange: (knob: TuningKnob, value: unknown) => void;
+}
+
+function TuningField({ label, knob, value, options, suffix, help, onKnobChange }: TuningFieldProps) {
+  return (
+    <div>
+      <p className="mb-1 text-sm text-kumo-default">{label}</p>
+      <Select aria-label={label} value={value} onValueChange={(v) => onKnobChange(knob, v)}>
+        {options.map((n) => (
+          <Select.Option key={n} value={n}>
+            {suffix ? `${n} ${suffix}` : n}
+          </Select.Option>
+        ))}
+      </Select>
+      <p className="mt-1 text-xs text-kumo-subtle">{help}</p>
+    </div>
+  );
+}
+
 /** Speed preset plus the always-visible Advanced knobs (no more <details>). */
 export function TransfersPane({
   tuning,
@@ -59,77 +85,39 @@ export function TransfersPane({
       <div className="rounded-md border border-kumo-line p-3">
         <h3 className="mb-3 text-sm font-medium text-kumo-strong">Advanced</h3>
         <div className="flex flex-col gap-4">
-          <div>
-            <p className="mb-1 text-sm text-kumo-default">Concurrent files</p>
-            <Select
-              aria-label="Concurrent files"
-              value={tuning.concurrentFiles}
-              onValueChange={(v) => onKnobChange("concurrentFiles", v)}
-            >
-              {CONCURRENT_FILES_OPTIONS.map((n) => (
-                <Select.Option key={n} value={n}>
-                  {n}
-                </Select.Option>
-              ))}
-            </Select>
-            <p className="mt-1 text-xs text-kumo-subtle">
-              How many files transfer at the same time. Higher can clear a batch faster but uses
-              more memory and connections.
-            </p>
-          </div>
-          <div>
-            <p className="mb-1 text-sm text-kumo-default">Upload parts per file</p>
-            <Select
-              aria-label="Upload parts per file"
-              value={tuning.uploadPartsInFlight}
-              onValueChange={(v) => onKnobChange("uploadPartsInFlight", v)}
-            >
-              {PARTS_IN_FLIGHT_OPTIONS.map((n) => (
-                <Select.Option key={n} value={n}>
-                  {n}
-                </Select.Option>
-              ))}
-            </Select>
-            <p className="mt-1 text-xs text-kumo-subtle">
-              How many chunks of a single large upload send in parallel. More parts can speed up
-              big files on fast connections.
-            </p>
-          </div>
-          <div>
-            <p className="mb-1 text-sm text-kumo-default">Download connections</p>
-            <Select
-              aria-label="Download connections"
-              value={tuning.downloadConnections}
-              onValueChange={(v) => onKnobChange("downloadConnections", v)}
-            >
-              {DOWNLOAD_CONNECTIONS_OPTIONS.map((n) => (
-                <Select.Option key={n} value={n}>
-                  {n}
-                </Select.Option>
-              ))}
-            </Select>
-            <p className="mt-1 text-xs text-kumo-subtle">
-              How many parallel connections a single download can use to pull data faster.
-            </p>
-          </div>
-          <div>
-            <p className="mb-1 text-sm text-kumo-default">Part size</p>
-            <Select
-              aria-label="Part size"
-              value={tuning.partSizeMiB}
-              onValueChange={(v) => onKnobChange("partSizeMiB", v)}
-            >
-              {PART_SIZE_OPTIONS.map((n) => (
-                <Select.Option key={n} value={n}>
-                  {n} MiB
-                </Select.Option>
-              ))}
-            </Select>
-            <p className="mt-1 text-xs text-kumo-subtle">
-              Bigger parts mean fewer requests; smaller parts recover faster from errors. Applies
-              to newly queued transfers — ones already in progress keep their original part size.
-            </p>
-          </div>
+          <TuningField
+            label="Concurrent files"
+            knob="concurrentFiles"
+            value={tuning.concurrentFiles}
+            options={CONCURRENT_FILES_OPTIONS}
+            help="How many files transfer at the same time. Higher can clear a batch faster but uses more memory and connections."
+            onKnobChange={onKnobChange}
+          />
+          <TuningField
+            label="Upload parts per file"
+            knob="uploadPartsInFlight"
+            value={tuning.uploadPartsInFlight}
+            options={PARTS_IN_FLIGHT_OPTIONS}
+            help="How many chunks of a single large upload send in parallel. More parts can speed up big files on fast connections."
+            onKnobChange={onKnobChange}
+          />
+          <TuningField
+            label="Download connections"
+            knob="downloadConnections"
+            value={tuning.downloadConnections}
+            options={DOWNLOAD_CONNECTIONS_OPTIONS}
+            help="How many parallel connections a single download can use to pull data faster."
+            onKnobChange={onKnobChange}
+          />
+          <TuningField
+            label="Part size"
+            knob="partSizeMiB"
+            value={tuning.partSizeMiB}
+            options={PART_SIZE_OPTIONS}
+            suffix="MiB"
+            help="Bigger parts mean fewer requests; smaller parts recover faster from errors. Applies to newly queued transfers — ones already in progress keep their original part size."
+            onKnobChange={onKnobChange}
+          />
         </div>
       </div>
     </div>

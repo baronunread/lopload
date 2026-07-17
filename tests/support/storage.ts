@@ -29,18 +29,18 @@ import { createS3Client } from "../../src/lib/s3/client";
 import type { Connection, Credentials } from "../../src/lib/types";
 import { nativeFetch } from "../setup";
 
-export const CONTAINER_NAME = "lopload-test-minio";
-export const MINIO_PORT = 9400;
-export const MINIO_ENDPOINT = `http://127.0.0.1:${MINIO_PORT}`;
-export const MINIO_REGION = "us-east-1";
-export const MINIO_CREDENTIALS: Credentials = {
+const CONTAINER_NAME = "lopload-test-minio";
+const MINIO_PORT = 9400;
+const MINIO_ENDPOINT = `http://127.0.0.1:${MINIO_PORT}`;
+const MINIO_REGION = "us-east-1";
+const MINIO_CREDENTIALS: Credentials = {
   accessKey: "minioadmin",
   secretKey: "minioadmin",
 };
 
 /** Everything a remote run touches lives under this. Nothing outside it is ever
  * read, written, or deleted. */
-export const REMOTE_ROOT = "lopload-test/";
+const REMOTE_ROOT = "lopload-test/";
 
 export interface Bucket {
   name: string;

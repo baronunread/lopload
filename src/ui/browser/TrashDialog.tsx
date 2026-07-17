@@ -4,7 +4,8 @@ import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
 import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { useServices, type CopyProgress, type TrashItem } from "../services";
 import { formatBytes, formatDate } from "../format";
-import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
+import { SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
+import { ConfirmDialog } from "../ConfirmDialog";
 
 export interface TrashDialogProps {
   connectionId: string;
@@ -242,46 +243,19 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
         </Dialog>
       </Dialog.Root>
 
-      <Dialog.Root
+      <ConfirmDialog
         open={pending !== null}
         onOpenChange={(open) => !open && setPending(null)}
-        role="alertdialog"
-      >
-        {pending && (
-          <Dialog className="p-6">
-            <div className="flex items-center gap-3">
-              <Dialog.Title className="m-0">
-                {pending.kind === "empty"
-                  ? "Empty trash?"
-                  : `Delete ${displayName(pending.item.originalKey)} now?`}
-              </Dialog.Title>
-              <Dialog.Close
-                render={(p) => (
-                  <Button
-                    variant="ghost"
-                    shape="square"
-                    aria-label="Close"
-                    icon={XIcon}
-                    className="ml-auto"
-                    {...p}
-                  />
-                )}
-              />
-            </div>
-            <Dialog.Description>This can't be undone.</Dialog.Description>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="destructive"
-                style={SOLID_DANGER_BUTTON_STYLE}
-                loading={confirming}
-                onClick={() => void confirmPending()}
-              >
-                {pending.kind === "empty" ? "Empty trash" : "Delete now"}
-              </Button>
-            </div>
-          </Dialog>
-        )}
-      </Dialog.Root>
+        title={
+          pending?.kind === "empty"
+            ? "Empty trash?"
+            : `Delete ${pending ? displayName(pending.item.originalKey) : ""} now?`
+        }
+        description="This can't be undone."
+        confirmLabel={pending?.kind === "empty" ? "Empty trash" : "Delete now"}
+        loading={confirming}
+        onConfirm={() => void confirmPending()}
+      />
     </LazyMotion>
   );
 }

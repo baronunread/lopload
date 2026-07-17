@@ -69,6 +69,35 @@ function stripQuotes(etag: string): string {
   return etag.replace(/^"|"$/g, "");
 }
 
+/** Concatenates buffered chunks into one contiguous write. */
+function concatChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
+  const buffer = new Uint8Array(totalBytes);
+  let pos = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, pos);
+    pos += chunk.length;
+  }
+  return buffer;
+}
+
+/** Throws (and discards the temp file) if the locally-computed MD5 doesn't
+ * match the object's ETag. */
+async function verifyChecksum(
+  writer: LocalFileWriter,
+  tempPath: string,
+  transferKey: string,
+  localHex: string,
+  etag: string,
+): Promise<void> {
+  if (localHex.toLowerCase() !== etag.toLowerCase()) {
+    log.warn("checksum mismatch", transferKey, { localHex, etag });
+    await writer.discard(tempPath);
+    throw new VerificationError(
+      "The downloaded file's checksum didn't match what was expected.",
+    );
+  }
+}
+
 /** A plain single-part ETag is a bare 32-hex-char MD5 we can verify against. */
 const PLAIN_MD5_ETAG = /^[0-9a-f]{32}$/i;
 
@@ -166,12 +195,7 @@ async function downloadStreamed(
 
   const flush = async (): Promise<void> => {
     if (pendingBytes === 0) return;
-    const buffer = new Uint8Array(pendingBytes);
-    let pos = 0;
-    for (const chunk of pending) {
-      buffer.set(chunk, pos);
-      pos += chunk.length;
-    }
+    const buffer = concatChunks(pending, pendingBytes);
     await writer.writeChunk(tempPath, buffer, !wroteAnything);
     wroteAnything = true;
     pending = [];
@@ -211,13 +235,7 @@ async function downloadStreamed(
   }
   if (hasher) {
     const localHex = bytesToHex(hasher.digest());
-    if (localHex.toLowerCase() !== etag.toLowerCase()) {
-      log.warn("checksum mismatch", transfer.key, { localHex, etag });
-      await writer.discard(tempPath);
-      throw new VerificationError(
-        "The downloaded file's checksum didn't match what was expected.",
-      );
-    }
+    await verifyChecksum(writer, tempPath, transfer.key, localHex, etag);
   }
 
   log.debug("download complete", transfer.key, { received, etag });
@@ -334,12 +352,7 @@ async function downloadRanged(
 
       const flush = async (): Promise<void> => {
         if (pendingBytes === 0) return;
-        const buffer = new Uint8Array(pendingBytes);
-        let pos = 0;
-        for (const chunk of pending) {
-          buffer.set(chunk, pos);
-          pos += chunk.length;
-        }
+        const buffer = concatChunks(pending, pendingBytes);
         await writer.writeAt(tempPath, pendingOffset, buffer);
         pending = [];
         pendingBytes = 0;
@@ -422,13 +435,7 @@ async function downloadRanged(
       hasher.update(await reader.readChunk(tempPath, offset, length));
     }
     const localHex = bytesToHex(hasher.digest());
-    if (localHex.toLowerCase() !== etag.toLowerCase()) {
-      log.warn("checksum mismatch", transfer.key, { localHex, etag });
-      await writer.discard(tempPath);
-      throw new VerificationError(
-        "The downloaded file's checksum didn't match what was expected.",
-      );
-    }
+    await verifyChecksum(writer, tempPath, transfer.key, localHex, etag);
   }
 
   log.debug("ranged download complete", transfer.key, { received, etag });

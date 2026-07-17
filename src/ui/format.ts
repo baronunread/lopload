@@ -3,7 +3,7 @@
 import type { Transfer, TransferState } from "../lib/types";
 
 /** The exact five chip labels from the spec table — order matters for docs, not for logic. */
-export const STATUS_LABELS = {
+const STATUS_LABELS = {
   queued: "Queued",
   sending: "Uploading",
   checking: "Checking",
@@ -53,18 +53,22 @@ export function chipInfo(
   }
 }
 
+/** Scales `value` down by 1024 until it fits the largest matching unit. */
+function scaleToUnit(value: number, units: readonly string[]): string {
+  let scaled = value;
+  let i = 0;
+  while (scaled >= 1024 && i < units.length - 1) {
+    scaled /= 1024;
+    i++;
+  }
+  const rounded = i === 0 ? scaled : Math.round(scaled * 10) / 10;
+  return `${rounded} ${units[i]}`;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes === 0) return "0 KB";
-  const units = ["bytes", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i++;
-  }
-  const rounded = i === 0 ? value : Math.round(value * 10) / 10;
-  return `${rounded} ${units[i]}`;
+  return scaleToUnit(bytes, ["bytes", "KB", "MB", "GB", "TB"]);
 }
 
 export function formatDate(ms: number | undefined, locale?: string | string[]): string {
@@ -87,15 +91,7 @@ export function isVideoName(name: string): boolean {
 export function formatSpeed(bytesPerSec: number): string {
   if (!Number.isFinite(bytesPerSec) || bytesPerSec < 0) return "—";
   if (bytesPerSec < 1) return "0 B/s";
-  const units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
-  let value = bytesPerSec;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i++;
-  }
-  const rounded = i === 0 ? value : Math.round(value * 10) / 10;
-  return `${rounded} ${units[i]}`;
+  return scaleToUnit(bytesPerSec, ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]);
 }
 
 /** Splits a remote key into breadcrumb segments, e.g. "a/b/c.txt" -> ["a", "b"]. */
