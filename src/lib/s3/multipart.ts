@@ -248,12 +248,13 @@ async function uploadMultipart(
   transfer.uploadId = undefined;
   await store.save({ ...transfer, uploadId: undefined });
 
-  const head = await client.send(
-    new HeadObjectCommand({ Bucket: bucket, Key: transfer.key }),
-    { abortSignal: signal },
-  );
-
-  const expectedEtag = await compositeEtag(finalParts.map((p) => stripQuotes(p.etag)));
+  const [head, expectedEtag] = await Promise.all([
+    client.send(
+      new HeadObjectCommand({ Bucket: bucket, Key: transfer.key }),
+      { abortSignal: signal },
+    ),
+    compositeEtag(finalParts.map((p) => stripQuotes(p.etag))),
+  ]);
   const actualEtag = stripQuotes(head.ETag ?? "").toLowerCase();
 
   if (head.ContentLength !== transfer.size || actualEtag !== expectedEtag.toLowerCase()) {
