@@ -53,12 +53,14 @@ function SortableHead({
 }) {
   const isActive = sort.key === sortKey;
   return (
-    <Table.Head className={className}>
+    <Table.Head
+      className={className}
+      aria-sort={isActive ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
+    >
       <button
         type="button"
         className="lopload-body flex items-center gap-1 text-left font-medium"
         onClick={() => onSortChange(sortKey)}
-        aria-sort={isActive ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       >
         {label}
         {isActive &&

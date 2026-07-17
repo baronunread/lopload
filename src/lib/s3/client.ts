@@ -646,18 +646,6 @@ export async function deleteFile(
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
-/** Recursively delete every key under a folder prefix, streaming listing
- * pages straight into DeleteObjects batches rather than listing the whole
- * prefix before deleting anything. */
-export async function deleteFolder(
-  client: S3Client,
-  bucket: string,
-  prefix: string,
-  onProgress?: (progress: CopyProgress) => void,
-): Promise<void> {
-  await deleteKeysFromPages(client, bucket, pagesUnder(client, bucket, prefix), onProgress);
-}
-
 /** Moves a single file to the trash location: copy it there, then delete the
  * original. */
 export async function moveFileToTrash(
