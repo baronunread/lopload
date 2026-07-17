@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { Badge, Meter } from "@cloudflare/kumo";
-import { motion } from "motion/react";
+import { LazyMotion, m, domAnimation } from "motion/react";
 import {
   CaretDownIcon,
   FolderIcon,
@@ -177,6 +177,233 @@ function moveDisplayName(move: MoveProgress): string {
   return baseName(move.kind === "move" ? move.toKey : move.fromKey);
 }
 
+const IN_FLIGHT_KINDS = new Set(["queued", "sending", "checking"]);
+
+/** One row of in-flight/settled folder-move progress. Reads `dismissMove`
+ * straight from context rather than taking it as a prop — it's the same
+ * MoveProgressContext the parent already reads `moves` from. */
+function MoveRow({ move }: { move: MoveProgress }) {
+  const { dismissMove } = useMoveProgress();
+  return (
+    <li className="lopload-settle flex items-center justify-between gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line">
+      <div className="flex min-w-0 flex-1 items-center gap-2 lopload-body">
+        <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
+        <div className="min-w-0">
+          <p className="truncate font-medium">
+            {moveDisplayName(move)}
+          </p>
+          <p className="truncate text-xs text-kumo-subtle tabular-nums">
+            {move.status === "moving"
+              ? move.totalItems > 0
+                ? moveDetail(move)
+                : `${movingVerb(move.kind)}…`
+              : move.status === "completed"
+                ? `${move.totalItems} item${move.totalItems === 1 ? "" : "s"} ${completedVerb(move.kind)}`
+                : (move.errorMessage ?? failedLabel(move.kind))}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-shrink-0 items-center gap-2">
+        {move.status === "moving" && move.totalItems > 0 && (
+          <div className="flex w-36 items-center">
+            <Meter
+              label={movingVerb(move.kind)}
+              value={movePercent(move)}
+              showValue
+              className="w-full"
+              trackClassName="!h-1"
+              indicatorClassName="bg-kumo-warning"
+            />
+          </div>
+        )}
+        {move.status === "completed" && (
+          <Badge variant="success">{completedBadgeLabel(move.kind)}</Badge>
+        )}
+        {move.status === "failed" && (
+          <Badge variant="error">{failedLabel(move.kind)}</Badge>
+        )}
+        {(move.status === "completed" || move.status === "failed") && (
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
+            onClick={() => dismissMove(move.moveId)}
+          >
+            <XIcon size={16} />
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/** One row of file-transfer progress: either a lone file or a whole
+ * dropped/picked folder collapsed into one aggregated row (see
+ * `groupTransfers`). Takes the parent's `transfers` state setters directly —
+ * they're stable `useState` setters, so passing them down avoids a layer of
+ * callback wrappers that would just forward the same calls. */
+function TransferRow({
+  row,
+  setTransfers,
+  setDismissed,
+}: {
+  row: DisplayRow;
+  setTransfers: Dispatch<SetStateAction<Transfer[]>>;
+  setDismissed: Dispatch<SetStateAction<Set<string>>>;
+}) {
+  const services = useServices();
+  const isFolder = row.transfers.length > 1 || row.folderName !== undefined;
+  const state = isFolder ? rowState(row.transfers) : row.transfers[0].state;
+  const totalSize = row.transfers.reduce((sum, t) => sum + t.size, 0);
+  const name = isFolder ? row.folderName : row.transfers[0].key.split("/").pop();
+  const sendingTransfer = row.transfers.find((t) => t.state.kind === "sending");
+  const speed = sendingTransfer?.state.kind === "sending" ? sendingTransfer.state.speedBytesPerSec : undefined;
+  const subtitle = isFolder
+    ? `${row.transfers.length} file${row.transfers.length === 1 ? "" : "s"} • ${formatBytes(totalSize)}`
+    : speed != null
+      ? `${formatBytes(totalSize)} • ${formatSpeed(speed)}`
+      : formatBytes(totalSize);
+  // Single pass each — was filter().map(), iterating row.transfers twice for
+  // what's typically a handful of files.
+  const failedIds = row.transfers.flatMap((t) => (t.state.kind === "failed" ? [t.id] : []));
+  const inFlightIds = row.transfers.flatMap((t) =>
+    IN_FLIGHT_KINDS.has(t.state.kind) ? [t.id] : [],
+  );
+
+  return (
+    <li className="lopload-settle flex flex-col gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 lopload-body">
+          {isFolder && (
+            <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
+          )}
+          <div className="min-w-0">
+            <p className="truncate font-medium">{name}</p>
+            <p className="truncate text-xs text-kumo-subtle tabular-nums">{subtitle}</p>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <StatusChip
+            state={state}
+            direction={row.transfers[0].direction}
+          />
+          {inFlightIds.length > 0 && (
+            <button
+              type="button"
+              aria-label={`Cancel ${isFolder ? row.folderName : row.transfers[0].key}`}
+              className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
+              onClick={() => {
+                // Built once, looked up per row of `prev` below — was an
+                // .includes() on the plain array inside the filter callback.
+                const cancelIds = new Set(inFlightIds);
+                setTransfers((prev) =>
+                  prev.filter((existing) => !cancelIds.has(existing.id)),
+                );
+                for (const id of inFlightIds) void services.engine.cancel(id);
+              }}
+            >
+              <StopCircleIcon size={16} />
+            </button>
+          )}
+          {!isFolder && state.kind === "downloaded" && (
+            <button
+              type="button"
+              aria-label="Show in folder"
+              className="relative flex h-8 w-8 cursor-pointer items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
+              onClick={() => void services.revealInFinder(row.transfers[0].localPath)}
+            >
+              <FolderOpenIcon size={16} />
+            </button>
+          )}
+          {state.kind === "failed" && (
+            <button
+              type="button"
+              aria-label={`Dismiss ${isFolder ? row.folderName : row.transfers[0].key}`}
+              className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
+              onClick={() => {
+                setDismissed((prev) => {
+                  const next = new Set(prev);
+                  for (const id of failedIds) next.add(id);
+                  return next;
+                });
+                for (const id of failedIds) void services.engine.dismiss(id);
+              }}
+            >
+              <XIcon size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+      {isFolder && sendingTransfer?.state.kind === "sending" && (
+        <div className="flex items-center gap-2 text-xs text-kumo-subtle ml-2">
+          <span className="truncate max-w-36">
+            {sendingTransfer.key.split("/").pop()}
+          </span>
+          <span className="tabular-nums shrink-0">
+            {sendingTransfer.state.percent}%
+          </span>
+        </div>
+      )}
+    </li>
+  );
+}
+
+interface TitleParts {
+  movingMoves: MoveProgress[];
+  inFlight: Transfer[];
+  visibleTransfers: Transfer[];
+  visibleMoves: MoveProgress[];
+  failed: Transfer[];
+  failedMoves: MoveProgress[];
+  completedTransfers: Transfer[];
+  completedMoves: MoveProgress[];
+  verb: string;
+  verbIng: string;
+  total: number;
+  completed: number;
+}
+
+/** Drive-style dynamic title: says what's still happening while anything's in
+ * flight, then summarizes once the batch settles. A title counts only what's
+ * actually still running — rows that already finished stay listed below, but
+ * "Moving 3 items…" next to two "Moved ✓" rows would just be wrong. */
+function widgetTitle(p: TitleParts): string {
+  if (p.movingMoves.length > 0 && p.inFlight.length > 0) {
+    const n = p.movingMoves.length + p.inFlight.length;
+    return `Transferring ${n} item${n === 1 ? "" : "s"}…`;
+  }
+  if (p.movingMoves.length > 0) {
+    const n = p.movingMoves.length;
+    // A mixed batch (say, a rename alongside a Trash move) falls back to
+    // the neutral "Moving" rather than picking one kind's verb arbitrarily.
+    const kinds = new Set(p.movingMoves.map((m) => m.kind));
+    const moveVerb = kinds.size === 1 ? movingVerb(p.movingMoves[0].kind) : "Moving";
+    return `${moveVerb} ${n} item${n === 1 ? "" : "s"}…`;
+  }
+  if (p.inFlight.length > 0) {
+    const n = p.visibleTransfers.length;
+    return `${p.verbIng} ${n} item${n === 1 ? "" : "s"}…`;
+  }
+  // Nothing left in flight — summarize what landed.
+  if (p.visibleTransfers.length === 0) {
+    const n = p.completedMoves.length;
+    if (p.failedMoves.length > 0) {
+      return `${n} of ${p.visibleMoves.length} moves complete`;
+    }
+    const kinds = new Set(p.visibleMoves.map((m) => m.kind));
+    const verbed = kinds.size === 1 ? completedVerb(p.visibleMoves[0].kind) : "moved";
+    return `${n} item${n === 1 ? "" : "s"} ${verbed}`;
+  }
+  if (p.visibleMoves.length === 0) {
+    return p.failed.length > 0
+      ? `${p.completedTransfers.length} of ${p.visibleTransfers.length} ${p.verb}s complete`
+      : `${p.completedTransfers.length} ${p.verb}${p.completedTransfers.length === 1 ? "" : "s"} complete`;
+  }
+  return p.failed.length > 0 || p.failedMoves.length > 0
+    ? `${p.completed} of ${p.total} complete`
+    : `${p.completed} complete`;
+}
+
 export interface TransferWidgetProps {
   connectionId: string;
   /** Called with a plain-language batch summary once a batch completes. */
@@ -185,8 +412,6 @@ export interface TransferWidgetProps {
    * it instead of the two overlapping in the bottom-right corner. */
   liftedForUpdateBanner?: boolean;
 }
-
-const IN_FLIGHT_KINDS = new Set(["queued", "sending", "checking"]);
 
 /** Duration of the fade/slide-out, in ms — kept in sync with the motion
  * `transition` below and used to time the widget's actual removal from the
@@ -308,46 +533,21 @@ export function TransferWidget({
   const verbIng =
     verb === "transfer" ? "Transferring" : verb === "download" ? "Downloading" : "Uploading";
 
-  // Drive-style dynamic title: says what's still happening while anything's in
-  // flight, then summarizes once the batch settles. A title counts only what's
-  // actually still running — rows that already finished stay listed below, but
-  // "Moving 3 items…" next to two "Moved ✓" rows would just be wrong.
-  const title = (() => {
-    if (movingMoves.length > 0 && inFlight.length > 0) {
-      const n = movingMoves.length + inFlight.length;
-      return `Transferring ${n} item${n === 1 ? "" : "s"}…`;
-    }
-    if (movingMoves.length > 0) {
-      const n = movingMoves.length;
-      // A mixed batch (say, a rename alongside a Trash move) falls back to
-      // the neutral "Moving" rather than picking one kind's verb arbitrarily.
-      const kinds = new Set(movingMoves.map((m) => m.kind));
-      const moveVerb = kinds.size === 1 ? movingVerb(movingMoves[0].kind) : "Moving";
-      return `${moveVerb} ${n} item${n === 1 ? "" : "s"}…`;
-    }
-    if (inFlight.length > 0) {
-      const n = visibleTransfers.length;
-      return `${verbIng} ${n} item${n === 1 ? "" : "s"}…`;
-    }
-    // Nothing left in flight — summarize what landed.
-    if (visibleTransfers.length === 0) {
-      const n = completedMoves.length;
-      if (failedMoves.length > 0) {
-        return `${n} of ${visibleMoves.length} moves complete`;
-      }
-      const kinds = new Set(visibleMoves.map((m) => m.kind));
-      const verbed = kinds.size === 1 ? completedVerb(visibleMoves[0].kind) : "moved";
-      return `${n} item${n === 1 ? "" : "s"} ${verbed}`;
-    }
-    if (visibleMoves.length === 0) {
-      return failed.length > 0
-        ? `${completedTransfers.length} of ${visibleTransfers.length} ${verb}s complete`
-        : `${completedTransfers.length} ${verb}${completedTransfers.length === 1 ? "" : "s"} complete`;
-    }
-    return failed.length > 0 || failedMoves.length > 0
-      ? `${completed} of ${total} complete`
-      : `${completed} complete`;
-  })();
+  // Drive-style dynamic title (see widgetTitle's doc comment for the rules).
+  const title = widgetTitle({
+    movingMoves,
+    inFlight,
+    visibleTransfers,
+    visibleMoves,
+    failed,
+    failedMoves,
+    completedTransfers,
+    completedMoves,
+    verb,
+    verbIng,
+    total,
+    completed,
+  });
 
   const [mounted, setMounted] = useState(shouldShow);
   useEffect(() => {
@@ -362,201 +562,64 @@ export function TransferWidget({
   if (!mounted) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 24 }}
-      animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
-      transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
-      className={`fixed right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line transition-[bottom] sm:w-[26rem] ${
-        liftedForUpdateBanner ? "bottom-20" : "bottom-8"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-2 border-b border-kumo-line bg-kumo-elevated px-4 py-0 text-kumo-strong">
-        <button
-          type="button"
-          className="lopload-body flex min-w-0 flex-1 items-center gap-2 py-3 text-left font-medium"
-          onClick={() => setCollapsed((c) => !c)}
-          aria-expanded={!collapsed}
-        >
-          <span className="truncate tabular-nums">{title}</span>
-        </button>
-        <div className="flex flex-shrink-0 items-center gap-2">
+    <LazyMotion features={domAnimation}>
+      <m.div
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: shouldShow ? 1 : 0, y: shouldShow ? 0 : 8 }}
+        transition={{ duration: EXIT_ANIMATION_MS / 1000 }}
+        className={`fixed right-8 z-40 flex w-80 max-h-[70vh] flex-col overflow-hidden rounded-2xl bg-kumo-base shadow-lg ring-1 ring-kumo-line transition-[bottom] sm:w-[26rem] ${
+          liftedForUpdateBanner ? "bottom-20" : "bottom-8"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-kumo-line bg-kumo-elevated px-4 py-0 text-kumo-strong">
           <button
             type="button"
-            aria-label={collapsed ? "Expand transfers" : "Collapse transfers"}
-            className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
+            className="lopload-body flex min-w-0 flex-1 items-center gap-2 py-3 text-left font-medium"
             onClick={() => setCollapsed((c) => !c)}
+            aria-expanded={!collapsed}
           >
-            <CaretDownIcon
-              size={16}
-              className={`transition-transform duration-200 ${collapsed ? "rotate-180" : ""}`}
-            />
+            <span className="truncate tabular-nums">{title}</span>
           </button>
-          <button
-            type="button"
-            aria-label="Close"
-            className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
-            onClick={clearAll}
-          >
-            <XIcon size={16} />
-          </button>
-        </div>
-      </div>
-
-      {!collapsed && (
-        <ul className="flex flex-col gap-2 overflow-y-auto p-2">
-          {visibleMoves.map((move) => (
-            <li
-              key={move.moveId}
-              className="lopload-settle flex items-center justify-between gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <button
+              type="button"
+              aria-label={collapsed ? "Expand transfers" : "Collapse transfers"}
+              className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
+              onClick={() => setCollapsed((c) => !c)}
             >
-              <div className="flex min-w-0 flex-1 items-center gap-2 lopload-body">
-                <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
-                <div className="min-w-0">
-                  <p className="truncate font-medium">
-                    {moveDisplayName(move)}
-                  </p>
-                  <p className="truncate text-xs text-kumo-subtle tabular-nums">
-                    {move.status === "moving"
-                      ? move.totalItems > 0
-                        ? moveDetail(move)
-                        : `${movingVerb(move.kind)}…`
-                      : move.status === "completed"
-                        ? `${move.totalItems} item${move.totalItems === 1 ? "" : "s"} ${completedVerb(move.kind)}`
-                        : (move.errorMessage ?? failedLabel(move.kind))}
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-shrink-0 items-center gap-2">
-                {move.status === "moving" && move.totalItems > 0 && (
-                  <div className="flex w-36 items-center">
-                    <Meter
-                      label={movingVerb(move.kind)}
-                      value={movePercent(move)}
-                      showValue
-                      className="w-full"
-                      trackClassName="!h-1"
-                      indicatorClassName="bg-kumo-warning"
-                    />
-                  </div>
-                )}
-                {move.status === "completed" && (
-                  <Badge variant="success">{completedBadgeLabel(move.kind)}</Badge>
-                )}
-                {move.status === "failed" && (
-                  <Badge variant="error">{failedLabel(move.kind)}</Badge>
-                )}
-                {(move.status === "completed" || move.status === "failed") && (
-                  <button
-                    type="button"
-                    aria-label="Dismiss"
-                    className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
-                    onClick={() => dismissMove(move.moveId)}
-                  >
-                    <XIcon size={16} />
-                  </button>
-                )}
-              </div>
-            </li>
-          ))}
+              <CaretDownIcon
+                size={16}
+                className={`transition-transform duration-200 ${collapsed ? "rotate-180" : ""}`}
+              />
+            </button>
+            <button
+              type="button"
+              aria-label="Close"
+              className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
+              onClick={clearAll}
+            >
+              <XIcon size={16} />
+            </button>
+          </div>
+        </div>
 
-          {groupTransfers(visibleTransfers).map((row) => {
-            const isFolder = row.transfers.length > 1 || row.folderName !== undefined;
-            const state = isFolder ? rowState(row.transfers) : row.transfers[0].state;
-            const totalSize = row.transfers.reduce((sum, t) => sum + t.size, 0);
-            const name = isFolder ? row.folderName : row.transfers[0].key.split("/").pop();
-            const sendingTransfer = row.transfers.find((t) => t.state.kind === "sending");
-            const speed = sendingTransfer?.state.kind === "sending" ? sendingTransfer.state.speedBytesPerSec : undefined;
-            const subtitle = isFolder
-              ? `${row.transfers.length} file${row.transfers.length === 1 ? "" : "s"} • ${formatBytes(totalSize)}`
-              : speed != null
-                ? `${formatBytes(totalSize)} • ${formatSpeed(speed)}`
-                : formatBytes(totalSize);
-            const failedIds = row.transfers
-              .filter((t) => t.state.kind === "failed")
-              .map((t) => t.id);
-            const inFlightIds = row.transfers
-              .filter((t) => IN_FLIGHT_KINDS.has(t.state.kind))
-              .map((t) => t.id);
+        {!collapsed && (
+          <ul className="flex flex-col gap-2 overflow-y-auto p-2">
+            {visibleMoves.map((move) => (
+              <MoveRow key={move.moveId} move={move} />
+            ))}
 
-            return (
-              <li
+            {groupTransfers(visibleTransfers).map((row) => (
+              <TransferRow
                 key={row.rowKey}
-                className="lopload-settle flex flex-col gap-2 rounded-lg bg-kumo-base p-3 ring-1 ring-kumo-line"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 flex-1 items-center gap-2 lopload-body">
-                    {isFolder && (
-                      <FolderIcon size={16} className="flex-shrink-0 text-kumo-subtle" />
-                    )}
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{name}</p>
-                      <p className="truncate text-xs text-kumo-subtle tabular-nums">{subtitle}</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
-                    <StatusChip
-                      state={state}
-                      direction={row.transfers[0].direction}
-                    />
-                    {inFlightIds.length > 0 && (
-                      <button
-                        type="button"
-                        aria-label={`Cancel ${isFolder ? row.folderName : row.transfers[0].key}`}
-                        className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
-                        onClick={() => {
-                          setTransfers((prev) =>
-                            prev.filter((existing) => !inFlightIds.includes(existing.id)),
-                          );
-                          for (const id of inFlightIds) void services.engine.cancel(id);
-                        }}
-                      >
-                        <StopCircleIcon size={16} />
-                      </button>
-                    )}
-                    {!isFolder && state.kind === "downloaded" && (
-                      <button
-                        type="button"
-                        aria-label="Show in folder"
-                        className="relative flex h-8 w-8 cursor-pointer items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
-                        onClick={() => void services.revealInFinder(row.transfers[0].localPath)}
-                      >
-                        <FolderOpenIcon size={16} />
-                      </button>
-                    )}
-                    {state.kind === "failed" && (
-                      <button
-                        type="button"
-                        aria-label={`Dismiss ${isFolder ? row.folderName : row.transfers[0].key}`}
-                        className="relative flex h-8 w-8 items-center justify-center text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:text-kumo-default active:scale-[0.96]"
-                        onClick={() => {
-                          setDismissed((prev) => {
-                            const next = new Set(prev);
-                            for (const id of failedIds) next.add(id);
-                            return next;
-                          });
-                          for (const id of failedIds) void services.engine.dismiss(id);
-                        }}
-                      >
-                        <XIcon size={16} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {isFolder && sendingTransfer?.state.kind === "sending" && (
-                  <div className="flex items-center gap-2 text-xs text-kumo-subtle ml-2">
-                    <span className="truncate max-w-36">
-                      {sendingTransfer.key.split("/").pop()}
-                    </span>
-                    <span className="tabular-nums shrink-0">
-                      {sendingTransfer.state.percent}%
-                    </span>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </motion.div>
+                row={row}
+                setTransfers={setTransfers}
+                setDismissed={setDismissed}
+              />
+            ))}
+          </ul>
+        )}
+      </m.div>
+    </LazyMotion>
   );
 }
