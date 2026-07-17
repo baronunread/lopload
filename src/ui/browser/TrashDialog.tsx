@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AnimatePresence, LazyMotion, domAnimation, m } from "motion/react";
+import { AnimatePresence, LazyMotion, domMax, m } from "motion/react";
 import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
 import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { useServices, type CopyProgress, type TrashItem } from "../services";
@@ -136,7 +136,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   }
 
   return (
-    <LazyMotion features={domAnimation}>
+    <LazyMotion features={domMax}>
       <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
         <Dialog className="w-full sm:w-full max-w-lg p-6">
         <div className="flex items-center gap-3">
