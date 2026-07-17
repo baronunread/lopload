@@ -158,6 +158,7 @@ export function RemoteBrowserTable({
                 suppressHover={menuOpen}
                 folderMeta={isFolder ? folderMeta[entry.key] : undefined}
                 dropTargetHandlers={dropTargetHandlersFor(entry)}
+                dropPrefix={isFolder ? entry.key : undefined}
                 onClick={(e) => onRowClick(entry, e)}
                 onMouseDown={(e) => onRowMouseDown(entry, e)}
                 onDoubleClick={() => onRowDoubleClick(entry)}

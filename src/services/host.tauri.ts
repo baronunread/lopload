@@ -183,6 +183,36 @@ export function createTauriHost(): Host {
       };
     },
 
+    onFileDragHover: (cb) => {
+      let unlisten: (() => void) | null = null;
+      let cancelled = false;
+
+      void getCurrentWebview()
+        .onDragDropEvent((event) => {
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            // Tauri reports physical pixels; DOM rects are CSS pixels.
+            const scale = window.devicePixelRatio || 1;
+            cb({
+              x: event.payload.position.x / scale,
+              y: event.payload.position.y / scale,
+            });
+          } else if (event.payload.type === "leave") {
+            // "drop" deliberately emits nothing — see Host.onFileDragHover.
+            cb(null);
+          }
+        })
+        .then((fn) => {
+          if (cancelled) fn();
+          else unlisten = fn;
+        })
+        .catch((err) => log.warn("drag-hover listener failed to attach", err));
+
+      return () => {
+        cancelled = true;
+        unlisten?.();
+      };
+    },
+
     initLogSink: initFileLogSink,
   };
 }

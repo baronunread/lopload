@@ -11,6 +11,11 @@
   -webkit-text-size-adjust: 100%;
 }
 
+html,
+body {
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   cursor: default;
@@ -55,15 +60,27 @@ p {
    connection") without any extra color/motion vocabulary. Kept short and
    low-amplitude per the spec's "gentle and purposeful only" motion rule. */
 @keyframes lopload-shake {
+
   10%,
-  90% { transform: translateX(-1px); }
+  90% {
+    transform: translateX(-1px);
+  }
+
   20%,
-  80% { transform: translateX(2px); }
+  80% {
+    transform: translateX(2px);
+  }
+
   30%,
   50%,
-  70% { transform: translateX(-4px); }
+  70% {
+    transform: translateX(-4px);
+  }
+
   40%,
-  60% { transform: translateX(4px); }
+  60% {
+    transform: translateX(4px);
+  }
 }
 
 .lopload-shake {
@@ -112,9 +129,10 @@ p {
 [data-kumo-component="Combobox"][data-kumo-part="item"] {
   min-width: 0;
 }
-[data-kumo-component="Select"][data-kumo-part="option"] > :first-child,
-[data-kumo-component="Autocomplete"][data-kumo-part="item"] > :first-child,
-[data-kumo-component="Combobox"][data-kumo-part="item"] > :first-child {
+
+[data-kumo-component="Select"][data-kumo-part="option"]> :first-child,
+[data-kumo-component="Autocomplete"][data-kumo-part="item"]> :first-child,
+[data-kumo-component="Combobox"][data-kumo-part="item"]> :first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

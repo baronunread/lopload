@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { AnimatePresence, LazyMotion, domAnimation, m } from "motion/react";
 import { Button, Empty, useKumoToastManager } from "@cloudflare/kumo";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import type { Connection, RemoteEntry } from "../lib/types";
 import { mapWithConcurrency } from "../lib/concurrency";
+import { segmentsForPrefix } from "./format";
 import { CredentialsUnreadableError, useServices, type FolderInfo } from "./services";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { CredentialsReentryForm } from "./CredentialsReentryForm";
@@ -51,6 +53,22 @@ const BULK_OP_CONCURRENCY = 3;
  * would otherwise trigger a re-list per file. */
 const REFRESH_DEBOUNCE_MS = 500;
 
+/** The folder-row prefix under the given window point, if any. Folder rows
+ * tag themselves with data-drop-prefix; containment is checked against their
+ * rects directly (rather than elementFromPoint) because the drop overlay
+ * sits above the table for the whole drag. Zero-size rects are skipped so
+ * unrendered rows can never match. */
+function folderPrefixAtPoint(x: number, y: number): string | null {
+  for (const el of document.querySelectorAll<HTMLElement>("[data-drop-prefix]")) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) continue;
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      return el.dataset.dropPrefix ?? null;
+    }
+  }
+  return null;
+}
+
 /** Compares two listings by content (key/kind/size/lastModified) rather than
  * identity — used to skip a re-render when a silent revalidate's response
  * matches what's already on screen, so a cache-hit navigation followed by a
@@ -85,7 +103,12 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   const [infoEntry, setInfoEntry] = useState<RemoteEntry | null>(null);
   const [folderInfoState, setFolderInfoState] = useState<FolderInfoState | null>(null);
   const [dragging, setDragging] = useState(false);
-  const dragCounter = useRef(0);
+  // The folder row an OS file drag is currently hovering, as an upload
+  // target prefix — null means "drop uploads to the current folder". The
+  // ref mirrors the state for the drop callback, which fires from the host
+  // (not React) after async path expansion.
+  const [osDropPrefix, setOsDropPrefix] = useState<string | null>(null);
+  const osDropPrefixRef = useRef<string | null>(null);
   const [filterQuery, setFilterQuery] = useState("");
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [showTrash, setShowTrash] = useState(false);
@@ -96,6 +119,11 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   const rows = sortEntries(filterEntries(entries, filterQuery), sort);
   const selection = useSelection(rows);
+
+  // What the drop overlay names as the upload destination: the hovered
+  // folder row if there is one, otherwise the folder currently open.
+  const dropTargetSegments = segmentsForPrefix(osDropPrefix ?? prefix);
+  const dropTargetLabel = dropTargetSegments[dropTargetSegments.length - 1] ?? "Home";
 
   // Every list request (spinner or silent) carries an incrementing id, so a
   // slow/stale response can never clobber a newer one that already landed —
@@ -210,15 +238,21 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
   }, [connectionId, prefix]);
 
   useEffect(() => {
+    const clearDragState = () => {
+      setDragging(false);
+      setOsDropPrefix(null);
+      osDropPrefixRef.current = null;
+    };
     return services.onFileDrop(
       (files) => {
-        setDragging(false);
-        dragCounter.current = 0;
-        void services.engine.enqueueFiles(connectionId, prefix, files);
+        // Read the hovered folder before clearing: dropping on a folder row
+        // uploads into that folder, anywhere else into the current one.
+        const target = osDropPrefixRef.current ?? prefix;
+        clearDragState();
+        void services.engine.enqueueFiles(connectionId, target, files);
       },
       (message) => {
-        setDragging(false);
-        dragCounter.current = 0;
+        clearDragState();
         toasts.add({
           variant: "error",
           title: "Some of what you dropped couldn't be added",
@@ -228,6 +262,25 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, prefix]);
+
+  // Drives the drop overlay and per-folder-row targeting off the host's
+  // native drag hover events (position while dragging, null on leave) —
+  // DOM drag events are unreliable under Tauri, where wry intercepts the
+  // native drop handling to emit these events instead.
+  useEffect(() => {
+    return services.onFileDragHover((position) => {
+      if (position === null) {
+        setDragging(false);
+        setOsDropPrefix(null);
+        osDropPrefixRef.current = null;
+        return;
+      }
+      setDragging(true);
+      const target = folderPrefixAtPoint(position.x, position.y);
+      osDropPrefixRef.current = target;
+      setOsDropPrefix(target);
+    });
+  }, [services]);
 
   // Escape clears the filter first, then (on a subsequent press) the
   // selection — wherever focus happens to be.
@@ -704,18 +757,9 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      // Internal row moves are pointer-driven (see useDragMove), so any
-      // HTML5 drag reaching these handlers is an OS file drag — show the
-      // upload overlay.
-      onDragEnter={(e) => {
-        e.preventDefault();
-        dragCounter.current += 1;
-        setDragging(true);
-      }}
-      onDragLeave={() => {
-        dragCounter.current -= 1;
-        if (dragCounter.current <= 0) setDragging(false);
-      }}
+      // OS file drags are tracked via the host's native drag events (see the
+      // onFileDragHover effect) — these handlers only stop the webview's
+      // default behavior if an HTML5 drag ever reaches the DOM anyway.
       onDragOver={(e) => {
         e.preventDefault();
       }}
@@ -783,7 +827,7 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
           rows={rows}
           connectionId={connectionId}
           selected={selection.selected}
-          dropTarget={dragMove.dropTarget}
+          dropTarget={dragMove.dropTarget ?? osDropPrefix}
           menuTargetKey={menu?.entry?.key ?? null}
           menuOpen={menu !== null}
           folderMeta={folderMeta}
@@ -822,13 +866,30 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
       <EntryInfoDialog infoEntry={infoEntry} folderInfoState={folderInfoState} onClose={() => setInfoEntry(null)} />
 
-      {dragging && (
-        <div className="lopload-drop-overlay pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-kumo-brand/20 ring-2 ring-dashed ring-kumo-brand">
-          <p className="lopload-heading text-lg font-semibold text-kumo-default">
-            Drop to send
-          </p>
-        </div>
-      )}
+      <LazyMotion features={domAnimation}>
+        <AnimatePresence>
+          {dragging && (
+            <m.div
+              initial={{ opacity: 0, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
+              className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-kumo-brand/15"
+            >
+              <m.div
+                aria-hidden
+                className="absolute inset-1 rounded-lg ring-2 ring-dashed ring-kumo-brand"
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+              />
+              <p className="lopload-heading rounded-lg bg-kumo-base/85 px-4 py-2 text-lg font-semibold text-kumo-default shadow-lg">
+                Drop to upload to{" "}
+                <span className="text-kumo-brand">{dropTargetLabel}</span>
+              </p>
+            </m.div>
+          )}
+        </AnimatePresence>
+      </LazyMotion>
 
       <DragGhost drag={dragMove.drag} ghostRef={dragMove.ghostRef} />
 

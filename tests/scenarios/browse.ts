@@ -8,7 +8,7 @@
 // Note the split: seeding happens in `arrange`, which runs before the app
 // mounts. The app lists once on mount and doesn't poll, so an object written
 // during `run` can lose the race and never appear.
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 
 import type { FetchFn } from "../../src/lib/s3/http-handler";
 import type { Scenario } from "./types";
@@ -17,6 +17,14 @@ import { settle } from "./transfer";
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// Folder names sized like real-world torrent-style directories — long enough
+// that, before per-crumb truncation, the ancestor crumb pushed the current
+// one out of the toolbar entirely (GitHub #20).
+const LONG_PARENT =
+  "Neon Genesis Evangelion Complete Series [BD] [Dual Audio][1080p][HEVC 10bit x265]";
+const LONG_CHILD =
+  "[Anime Time] Neon Genesis Evangelion + The End of Evangelion [BD][1080p][HEVC 10bit x265]";
 
 function requestUrl(input: Parameters<FetchFn>[0]): string {
   if (typeof input === "string") return input;
@@ -274,6 +282,59 @@ export const browseScenarios: Scenario[] = [
         // real engine rather than bucket.put.
         expect(inTableRow("existing.txt")).toBe(true);
         expect(inTableRow("new.txt")).toBe(true);
+      });
+    },
+  },
+
+  {
+    name: "very long folder names keep the current crumb rendered and ancestor crumbs clickable",
+    async arrange(bucket) {
+      await bucket.put(`${LONG_PARENT}/${LONG_CHILD}/movie.mkv`, "not really a video");
+    },
+    async run({ user, expect, waitFor, prefix }) {
+      await waitFor(() => {
+        expect(screen.queryByText(LONG_PARENT) !== null).toBe(true);
+      });
+      await user.dblClick(screen.getByText(LONG_PARENT));
+      await waitFor(() => {
+        expect(inTableRow(LONG_CHILD)).toBe(true);
+      });
+      await user.dblClick(screen.getByText(LONG_CHILD));
+      await waitFor(() => {
+        expect(inTableRow("movie.mkv")).toBe(true);
+      });
+
+      // The current folder's crumb is in the trail with its full name (CSS
+      // ellipsizes it visually; happy-dom runs no layout, so what's checkable
+      // is that the crumb is there and carries the whole name).
+      const current = document.querySelector('[aria-current="page"]');
+      expect(current !== null).toBe(true);
+      expect(current!.textContent).toContain(LONG_CHILD);
+
+      // The long ancestor crumb — now a truncating box instead of
+      // display:contents — must still navigate on click.
+      await user.click(screen.getAllByRole("link", { name: LONG_PARENT })[0]);
+      await waitFor(() => {
+        expect(inTableRow(LONG_CHILD)).toBe(true);
+      });
+
+      // The Move dialog renders the same trail: Home must survive (it was
+      // crushed to a sliver before #20) and stay clickable.
+      await user.click(screen.getByRole("button", { name: `Actions for ${LONG_CHILD}` }));
+      await user.click(await screen.findByRole("menuitem", { name: "Move to…" }));
+      const dialog = await screen.findByRole("dialog");
+      const dialogCurrent = dialog.querySelector('[aria-current="page"]');
+      expect(dialogCurrent !== null).toBe(true);
+      expect(dialogCurrent!.textContent).toContain(LONG_PARENT);
+      // Go up one level inside the dialog — to Home on MinIO, but only to
+      // the run's own scoped folder against a real provider (same caveat as
+      // the toolbar navigation scenarios above).
+      const startSegment = prefix.split("/").filter(Boolean).pop();
+      await user.click(
+        within(dialog).getAllByRole("link", { name: startSegment ?? "Home" })[0],
+      );
+      await waitFor(() => {
+        expect(within(dialog).queryByText(LONG_PARENT) !== null).toBe(true);
       });
     },
   },

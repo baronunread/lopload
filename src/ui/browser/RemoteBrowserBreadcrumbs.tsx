@@ -6,9 +6,14 @@ import { segmentsForPrefix } from "../format";
  * candidate gets a dashed hint ring so it reads as droppable at all, and
  * the hovered one lights up like folder rows do. Idle crumbs keep a
  * transparent box (never `display: contents` — backgrounds and rings don't
- * render on a box-less element). */
+ * render on a box-less element).
+ *
+ * `min-w-0 max-w-[35%]`: kumo's crumbs truncate themselves, but only if the
+ * wrapper span lets them shrink — an unconstrained inline-flex sizes to its
+ * content, so one long folder name would push the current crumb (and, at
+ * narrow widths, the whole trail) out of view with no ellipsis. */
 function crumbDropClass(dragActive: boolean, isTarget: boolean): string {
-  const base = "inline-flex items-center rounded-md px-1 py-0.5 ring-inset";
+  const base = "inline-flex min-w-0 max-w-[35%] items-center rounded-md px-1 py-0.5 ring-inset";
   if (!dragActive) return base;
   return isTarget
     ? `${base} bg-kumo-brand/20 ring-1 ring-kumo-brand`
@@ -65,9 +70,10 @@ export function RemoteBrowserBreadcrumbs({
     <Breadcrumbs className="min-w-0 flex-1 overflow-hidden">
       {/* Wraps Breadcrumbs.Link's real <a href="#">, so keyboard users
           already reach and activate it via that anchor (the click
-          bubbles up to this span) — no separate role/tabIndex needed. */}
+          bubbles up to this span) — no separate role/tabIndex needed.
+          Home is short and always meaningful — it never shrinks. */}
       <span
-        className={crumbDropClass(dragActive, dropTarget === "")}
+        className={`shrink-0 ${crumbDropClass(dragActive, dropTarget === "")}`}
         onClick={(e) => {
           e.preventDefault();
           navigate("");
@@ -121,13 +127,19 @@ export function RemoteBrowserBreadcrumbs({
           <span key={segPrefix} className="contents">
             <Breadcrumbs.Separator />
             {isLast ? (
-              <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
+              // The current folder is what the user is looking at — it
+              // shrinks last (shrink-0 up to its cap), so a long ancestor
+              // truncates before eating the current crumb's space.
+              <span className="flex min-w-0 max-w-[50%] shrink-0" title={segment}>
+                <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
+              </span>
             ) : (
               // Same wrapper-around-a-real-anchor pattern as the Home
               // crumb above — keyboard access comes from the nested
               // Breadcrumbs.Link, so no role is added here either.
               <span
                 className={crumbDropClass(dragActive, dropTarget === segPrefix)}
+                title={segment}
                 onClick={(e) => {
                   e.preventDefault();
                   navigate(segPrefix);

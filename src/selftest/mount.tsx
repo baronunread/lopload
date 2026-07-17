@@ -198,6 +198,7 @@ function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
   const base = createTauriHost();
   const record = emptyRecord();
   const dropSubscribers = new Set<(paths: string[]) => void>();
+  const dragHoverSubscribers = new Set<(position: { x: number; y: number } | null) => void>();
 
   const control: HostControl = {
     filesToPick: [],
@@ -206,6 +207,9 @@ function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
     availableUpdate: null,
     dropFiles(paths) {
       for (const fn of dropSubscribers) fn(paths);
+    },
+    dragFileHover(position) {
+      for (const fn of dragHoverSubscribers) fn(position);
     },
   };
 
@@ -266,6 +270,15 @@ function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
       const unlistenReal = base.onFileDrop(cb);
       return () => {
         dropSubscribers.delete(cb);
+        unlistenReal();
+      };
+    },
+
+    onFileDragHover: (cb) => {
+      dragHoverSubscribers.add(cb);
+      const unlistenReal = base.onFileDragHover(cb);
+      return () => {
+        dragHoverSubscribers.delete(cb);
         unlistenReal();
       };
     },

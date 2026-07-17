@@ -729,6 +729,10 @@ class LoploadServices implements AppServices {
     });
   }
 
+  onFileDragHover(cb: (position: { x: number; y: number } | null) => void): () => void {
+    return this.host.onFileDragHover(cb);
+  }
+
   private async expandAndEmit(
     paths: string[],
     cb: (files: PickedFile[]) => void,
