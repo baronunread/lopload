@@ -309,8 +309,10 @@ async function makeWorkdir(_host: Host): Promise<string> {
  * and bucket objects are already gone.
  */
 async function resetStores(host: Host): Promise<void> {
-  const connections = await host.stores.connections();
-  const transfers = await host.stores.transfers();
+  const [connections, transfers] = await Promise.all([
+    host.stores.connections(),
+    host.stores.transfers(),
+  ]);
   const conns = await connections.list();
   await Promise.all(
     conns.map(async (conn) => {
