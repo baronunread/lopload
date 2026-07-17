@@ -124,9 +124,13 @@ export const folderAndTrashScenarios: Scenario[] = [
       await user.click(screen.getByRole("button", { name: "Trash" }));
       const trashDialog = await screen.findByRole("dialog");
 
+      // 60s like the purge waits below (GitHub #24): the grouping row only
+      // appears once all 25 children plus the folder marker have actually
+      // been copied into Trash — a multi-file round trip that blows the 15s
+      // default on a loaded machine or a slow CI runner.
       await waitFor(() => {
         expect(within(trashDialog).queryAllByText("bigbatch").length).toBe(1);
-      });
+      }, 60_000);
       expect(within(trashDialog).queryByText("file-00.txt") === null).toBe(true);
 
       // Delete now doubles as this scenario's cleanup — see the comment on
@@ -217,18 +221,20 @@ export const folderAndTrashScenarios: Scenario[] = [
       const menu = await screen.findByRole("menu");
       await user.click(within(menu).getByRole("menuitem", { name: "Move 12 items to Trash" }));
 
+      // 60s: waits on 12 real move-to-Trash operations (GitHub #24).
       await waitFor(async () => {
         for (let i = 0; i < 12; i++) {
           expect(await bucket.has(`bulkcap-${pad(i)}.txt`)).toBe(false);
         }
-      });
+      }, 60_000);
 
       let ours: TrashItem[] = [];
+      // 60s for the same reason as the wait above (GitHub #24).
       await waitFor(async () => {
         const trashed = await services.trash.list(connectionId);
         ours = trashed.filter((i) => i.originalKey.startsWith(`${prefix}bulkcap-`));
         expect(ours.length).toBe(12);
-      });
+      }, 60_000);
 
       // Clean up only what this scenario created — Trash lives at the
       // bucket root, outside a remote run's scoped prefix, so it's not safe
