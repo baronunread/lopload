@@ -69,7 +69,7 @@ export const folderAndTrashScenarios: Scenario[] = [
         expect(inTableRow("photos")).toBe(false);
         expect(await bucket.has("photos/cat.png")).toBe(false);
       });
-      expect(screen.queryByText("Couldn't move to Trash")).toBeNull();
+      expect(screen.queryByText("Couldn't move to Trash") === null).toBe(true);
 
       await user.click(screen.getByRole("button", { name: "Trash" }));
       const trashDialog = await screen.findByRole("dialog");
@@ -84,9 +84,13 @@ export const folderAndTrashScenarios: Scenario[] = [
       const confirm = await screen.findByRole("alertdialog");
       await user.click(within(confirm).getByRole("button", { name: "Delete now" }));
 
+      // 60s, not the 15s default: the storage round trip is milliseconds, but
+      // the userEvent/happy-dom/dialog-animation stack above it costs ~10s on
+      // a quiet machine — any concurrent load pushed this past 15s (GitHub
+      // #24). Same budget the suite already gives transfer settling.
       await waitFor(() => {
-        expect(within(trashDialog).queryByText("photos")).toBeNull();
-      });
+        expect(within(trashDialog).queryByText("photos") === null).toBe(true);
+      }, 60_000);
     },
   },
 
@@ -123,7 +127,7 @@ export const folderAndTrashScenarios: Scenario[] = [
       await waitFor(() => {
         expect(within(trashDialog).queryAllByText("bigbatch").length).toBe(1);
       });
-      expect(within(trashDialog).queryByText("file-00.txt")).toBeNull();
+      expect(within(trashDialog).queryByText("file-00.txt") === null).toBe(true);
 
       // Delete now doubles as this scenario's cleanup — see the comment on
       // the scenario above.
@@ -131,9 +135,10 @@ export const folderAndTrashScenarios: Scenario[] = [
       const confirm = await screen.findByRole("alertdialog");
       await user.click(within(confirm).getByRole("button", { name: "Delete now" }));
 
+      // 60s for the same reason as the scenario above (GitHub #24).
       await waitFor(() => {
-        expect(within(trashDialog).queryByText("bigbatch")).toBeNull();
-      });
+        expect(within(trashDialog).queryByText("bigbatch") === null).toBe(true);
+      }, 60_000);
     },
   },
 

@@ -81,8 +81,8 @@ function makeUploadRefreshResilienceScenario(): Scenario {
       await sleep(700);
 
       expect(screen.queryByText("existing.txt") !== null).toBe(true);
-      expect(screen.queryByText("Couldn't load this storage")).toBeNull();
-      expect(screen.queryByText("This folder is empty")).toBeNull();
+      expect(screen.queryByText("Couldn't load this storage") === null).toBe(true);
+      expect(screen.queryByText("This folder is empty") === null).toBe(true);
 
       // The app isn't stuck: an unfaulted refresh afterwards recovers fully.
       const secondPath = await makeLocalFile("second.bin", "world2");
@@ -180,7 +180,7 @@ export const browseScenarios: Scenario[] = [
       // "photos" is not an object — S3 has no folders. It appears only because
       // the app synthesizes it from the common prefix of the two real objects.
       expect(screen.queryByText("photos") !== null).toBe(true);
-      expect(screen.queryByText("cat.png")).toBeNull();
+      expect(screen.queryByText("cat.png") === null).toBe(true);
     },
   },
 
@@ -200,7 +200,7 @@ export const browseScenarios: Scenario[] = [
       await waitFor(() => {
         expect(screen.queryByText("cat.png") !== null).toBe(true);
       });
-      expect(screen.queryByText("readme.txt")).toBeNull();
+      expect(screen.queryByText("readme.txt") === null).toBe(true);
     },
   },
 
