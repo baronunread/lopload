@@ -1,14 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MoveProgress } from "../services";
 import { useServices } from "../services";
+import { MoveProgressContext } from "./MoveProgressContextValue";
 
-interface MoveProgressCtx {
-  moves: MoveProgress[];
-  dismissMove: (moveId: string) => void;
-  clearCompleted: () => void;
-}
-
-const MoveProgressContext = createContext<MoveProgressCtx | null>(null);
+export { useMoveProgress } from "./MoveProgressContextValue";
 
 export function MoveProgressProvider({ children }: { children: React.ReactNode }) {
   const services = useServices();
@@ -61,18 +56,14 @@ export function MoveProgressProvider({ children }: { children: React.ReactNode }
     );
   }, []);
 
+  const value = useMemo(
+    () => ({ moves, dismissMove, clearCompleted }),
+    [moves, dismissMove, clearCompleted],
+  );
+
   return (
-    <MoveProgressContext.Provider value={{ moves, dismissMove, clearCompleted }}>
+    <MoveProgressContext.Provider value={value}>
       {children}
     </MoveProgressContext.Provider>
   );
-}
-
-export function useMoveProgress(): MoveProgressCtx {
-  const ctx = useContext(MoveProgressContext);
-  if (!ctx) {
-    // Fallback for tests that render TransferWidget without the provider.
-    return { moves: [], dismissMove: () => {}, clearCompleted: () => {} };
-  }
-  return ctx;
 }
