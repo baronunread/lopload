@@ -32,9 +32,11 @@ export function selectStaleSessionLogs(sessions: LogEntry[], maxFiles: number): 
 
 async function listSessionLogs(dir: string): Promise<LogEntry[]> {
   const files = await readDir(dir).catch<[]>(() => []);
-  const names = files
-    .filter((f) => !f.isDirectory && f.name?.startsWith("lopload-") && f.name.endsWith(".log"))
-    .map((f) => f.name!);
+  const names = files.flatMap((f) =>
+    !f.isDirectory && f.name && f.name.startsWith("lopload-") && f.name.endsWith(".log")
+      ? [f.name]
+      : [],
+  );
 
   // Parallel, not sequential: with hundreds of session files sitting around
   // (see selectStaleSessionLogs above for why that used to happen), stat-ing
