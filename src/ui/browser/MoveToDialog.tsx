@@ -73,6 +73,10 @@ export function MoveToDialog({
         </div>
         <div className="mt-3">
           <Breadcrumbs>
+            {/* Wraps Breadcrumbs.Link's real <a href="#"> (display:contents,
+                no box of its own) — keyboard users reach and activate it via
+                that anchor, and the click bubbles up to this span, so no
+                separate role/tabIndex is needed here. */}
             <span
               className="contents"
               onClick={(e) => {
@@ -93,6 +97,8 @@ export function MoveToDialog({
                   {isLast ? (
                     <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
                   ) : (
+                    // Same wrapper-around-a-real-anchor pattern as the Home
+                    // crumb above.
                     <span
                       className="contents"
                       onClick={(e) => {

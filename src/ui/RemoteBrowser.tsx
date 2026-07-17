@@ -1,25 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import {
-  Breadcrumbs,
-  Button,
-  Dialog,
-  DropdownMenu,
-  Empty,
-  Input,
-  useKumoToastManager,
-} from "@cloudflare/kumo";
-import {
-  FolderPlusIcon,
-  HouseIcon,
-  MagnifyingGlassIcon,
-  TrashIcon,
-  UploadSimpleIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { Button, Empty, useKumoToastManager } from "@cloudflare/kumo";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import type { Connection, RemoteEntry } from "../lib/types";
 import { mapWithConcurrency } from "../lib/concurrency";
 import { CredentialsUnreadableError, useServices, type FolderInfo } from "./services";
-import { formatBytes, formatDate, segmentsForPrefix } from "./format";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { CredentialsReentryForm } from "./CredentialsReentryForm";
 import {
@@ -30,7 +14,15 @@ import {
   putListing,
 } from "./listingCache";
 import { DragGhost } from "./browser/DragGhost";
+import {
+  EntryInfoDialog,
+  PendingActionDialog,
+  type FolderInfoState,
+  type PendingAction,
+} from "./browser/RemoteBrowserDialogs";
+import { RemoteBrowserBreadcrumbs } from "./browser/RemoteBrowserBreadcrumbs";
 import { RemoteBrowserTable } from "./browser/RemoteBrowserTable";
+import { RemoteBrowserToolbar } from "./browser/RemoteBrowserToolbar";
 import { filterEntries } from "./browser/filter";
 import { DEFAULT_SORT, nextSortState, sortEntries, type SortKey } from "./browser/sort";
 import { useDragMove } from "./browser/useDragMove";
@@ -46,32 +38,6 @@ export interface RemoteBrowserProps {
   onNavigate: (prefix: string) => void;
 }
 
-type PendingAction = { kind: "new-folder" } | { kind: "rename"; entry: RemoteEntry };
-
-type FolderInfoState = { status: "loading" } | ({ status: "loaded" } & FolderInfo);
-
-/** Breadcrumb ancestors are drop targets during a drag-to-move: every
- * candidate gets a dashed hint ring so it reads as droppable at all, and
- * the hovered one lights up like folder rows do. Idle crumbs keep a
- * transparent box (never `display: contents` — backgrounds and rings don't
- * render on a box-less element). */
-function crumbDropClass(dragActive: boolean, isTarget: boolean): string {
-  const base = "inline-flex items-center rounded-md px-1 py-0.5 ring-inset";
-  if (!dragActive) return base;
-  return isTarget
-    ? `${base} bg-kumo-brand/20 ring-1 ring-kumo-brand`
-    : `${base} ring-1 ring-dashed ring-kumo-line`;
-}
-
-/** Collapse ancestor breadcrumbs behind a "…" menu once the path goes deeper
- * than this many segments — keeps Home plus the last two segments visible
- * (so the trail still reads as Home/…/parent/current) no matter how deep the
- * real path is, so the toolbar's Filter/New folder/Trash/Upload controls
- * never get pushed out of view. A plain count threshold rather than a
- * measured-overflow check — plenty for how deep real paths get, and far
- * simpler. */
-const BREADCRUMB_COLLAPSE_THRESHOLD = 3;
-
 /** Cap on concurrent S3 operations kicked off from a single bulk UI action
  * (drag-moving or Trash-ing a multi-row selection). Each operation is
  * already its own recursive, internally-parallel copy/delete (see
@@ -79,19 +45,6 @@ const BREADCRUMB_COLLAPSE_THRESHOLD = 3;
  * how many of those run at once so selecting hundreds of rows can't fan out
  * into hundreds of unbounded folder operations simultaneously. */
 const BULK_OP_CONCURRENCY = 3;
-
-/** Splits path segments into the ones a collapsed breadcrumb trail hides
- * behind "…" and the ones it still shows (Home is rendered separately by
- * the caller and isn't part of either list). */
-function splitBreadcrumbSegments(segments: string[]): {
-  hidden: string[];
-  visible: string[];
-} {
-  if (segments.length <= BREADCRUMB_COLLAPSE_THRESHOLD) {
-    return { hidden: [], visible: segments };
-  }
-  return { hidden: segments.slice(0, -2), visible: segments.slice(-2) };
-}
 
 /** How long to wait, after the last relevant engine event, before re-listing
  * the current folder — batches of many files each finishing individually
@@ -143,8 +96,6 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
   const rows = sortEntries(filterEntries(entries, filterQuery), sort);
   const selection = useSelection(rows);
-  const segments = segmentsForPrefix(prefix);
-  const { hidden: hiddenSegments, visible: visibleSegments } = splitBreadcrumbSegments(segments);
 
   // Every list request (spinner or silent) carries an incrementing id, so a
   // slow/stale response can never clobber a newer one that already landed —
@@ -771,118 +722,29 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       onDrop={(e) => {
         e.preventDefault();
       }}
+      // Deselect-on-background-click, for mouse users; Escape (handled in
+      // the effect above) is the keyboard equivalent, so this wrapper isn't
+      // itself an interaction target and doesn't need a role.
       onClick={() => selection.clear()}
     >
       <div className="flex items-center justify-between gap-2">
-        <Breadcrumbs className="min-w-0 flex-1 overflow-hidden">
-          <span
-            className={crumbDropClass(dragMove.drag !== null, dragMove.dropTarget === "")}
-            onClick={(e) => {
-              e.preventDefault();
-              navigate("");
-            }}
-            {...dragMove.dropTargetHandlers("")}
-          >
-            <Breadcrumbs.Link href="#" icon={<HouseIcon size={16} />}>
-              Home
-            </Breadcrumbs.Link>
-          </span>
-          {hiddenSegments.length > 0 && (
-            <span className="contents">
-              <Breadcrumbs.Separator />
-              {/* Hidden ancestors aren't drag-move drop targets in this
-                  first pass — only the visible crumbs below (Home + last
-                  two segments) register drop-target handlers. Hovering
-                  this trigger during a drag doesn't open the menu either;
-                  both would be reasonable follow-ups. */}
-              <DropdownMenu>
-                <DropdownMenu.Trigger>
-                  <button
-                    type="button"
-                    aria-label={`Show ${hiddenSegments.length} hidden folder${
-                      hiddenSegments.length === 1 ? "" : "s"
-                    }`}
-                    className="inline-flex shrink-0 items-center rounded-md px-1 py-0.5 text-kumo-subtle hover:bg-kumo-tint"
-                  >
-                    …
-                  </button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content>
-                  {hiddenSegments.map((segment, i) => {
-                    const segPrefix = segments.slice(0, i + 1).join("/") + "/";
-                    return (
-                      <DropdownMenu.Item key={segPrefix} onClick={() => navigate(segPrefix)}>
-                        {segment}
-                      </DropdownMenu.Item>
-                    );
-                  })}
-                </DropdownMenu.Content>
-              </DropdownMenu>
-            </span>
-          )}
-          {visibleSegments.map((segment, j) => {
-            // Absolute index within the full `segments` array — needed to
-            // rebuild the same prefix the un-collapsed crumbs always used.
-            const i = hiddenSegments.length + j;
-            const segPrefix = segments.slice(0, i + 1).join("/") + "/";
-            const isLast = j === visibleSegments.length - 1;
-            return (
-              <span key={segPrefix} className="contents">
-                <Breadcrumbs.Separator />
-                {isLast ? (
-                  <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
-                ) : (
-                  <span
-                    className={crumbDropClass(
-                      dragMove.drag !== null,
-                      dragMove.dropTarget === segPrefix,
-                    )}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      navigate(segPrefix);
-                    }}
-                    {...dragMove.dropTargetHandlers(segPrefix)}
-                  >
-                    <Breadcrumbs.Link href="#">{segment}</Breadcrumbs.Link>
-                  </span>
-                )}
-              </span>
-            );
-          })}
-        </Breadcrumbs>
-        <div className="flex shrink-0 items-center gap-2">
-          <Input
-            size="sm"
-            placeholder="Filter"
-            aria-label="Filter this folder"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            className="w-36"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={FolderPlusIcon}
-            onClick={() => {
-              setPendingName("");
-              setPending({ kind: "new-folder" });
-            }}
-          >
-            New folder
-          </Button>
-          <Button variant="secondary" size="sm" icon={TrashIcon} onClick={() => setShowTrash(true)}>
-            Trash
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            icon={UploadSimpleIcon}
-            onClick={() => void handlePick()}
-          >
-            Upload
-          </Button>
-        </div>
+        <RemoteBrowserBreadcrumbs
+          prefix={prefix}
+          navigate={navigate}
+          dragActive={dragMove.drag !== null}
+          dropTarget={dragMove.dropTarget}
+          dropTargetHandlers={dragMove.dropTargetHandlers}
+        />
+        <RemoteBrowserToolbar
+          filterQuery={filterQuery}
+          onFilterChange={setFilterQuery}
+          onNewFolder={() => {
+            setPendingName("");
+            setPending({ kind: "new-folder" });
+          }}
+          onShowTrash={() => setShowTrash(true)}
+          onUpload={() => void handlePick()}
+        />
       </div>
 
       {credentialsConnection ? (
@@ -950,105 +812,15 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
         />
       )}
 
-      <Dialog.Root
-        open={pending !== null}
-        onOpenChange={(open) => {
-          if (!open) setPending(null);
-        }}
-      >
-        {pending && (
-          <Dialog className="p-6">
-            <div className="flex items-center gap-3">
-              <Dialog.Title className="m-0">
-                {pending.kind === "new-folder" ? "New folder" : "Rename"}
-              </Dialog.Title>
-              <Dialog.Close
-                render={(p) => (
-                  <Button
-                    variant="ghost"
-                    shape="square"
-                    aria-label="Close"
-                    icon={XIcon}
-                    className="ml-auto"
-                    {...p}
-                  />
-                )}
-              />
-            </div>
-            <Input
-              label="Name"
-              value={pendingName}
-              onChange={(e) => setPendingName(e.target.value)}
-              autoFocus
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="primary"
-                disabled={!pendingName.trim()}
-                onClick={() => void confirmPending()}
-              >
-                Save
-              </Button>
-            </div>
-          </Dialog>
-        )}
-      </Dialog.Root>
+      <PendingActionDialog
+        pending={pending}
+        pendingName={pendingName}
+        onNameChange={setPendingName}
+        onConfirm={() => void confirmPending()}
+        onClose={() => setPending(null)}
+      />
 
-      <Dialog.Root
-        open={infoEntry !== null}
-        onOpenChange={(open) => {
-          if (!open) setInfoEntry(null);
-        }}
-      >
-        {infoEntry && (
-          <Dialog className="p-6">
-            <div className="flex items-center gap-3">
-              <Dialog.Title className="m-0">
-                {infoEntry.kind === "folder" ? "Folder info" : "File info"}
-              </Dialog.Title>
-              <Dialog.Close
-                render={(p) => (
-                  <Button
-                    variant="ghost"
-                    shape="square"
-                    aria-label="Close"
-                    icon={XIcon}
-                    className="ml-auto"
-                    {...p}
-                  />
-                )}
-              />
-            </div>
-            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm selectable">
-              <dt className="text-kumo-subtle">Name</dt>
-              <dd className="break-all">{infoEntry.name}</dd>
-              <dt className="text-kumo-subtle">Path</dt>
-              <dd className="break-all">{infoEntry.key}</dd>
-              <dt className="text-kumo-subtle">Type</dt>
-              <dd>{infoEntry.kind}</dd>
-              {infoEntry.kind === "folder" ? (
-                <>
-                  <dt className="text-kumo-subtle">Details</dt>
-                  <dd>
-                    {folderInfoState?.status === "loaded"
-                      ? `${folderInfoState.files} file${folderInfoState.files === 1 ? "" : "s"}, ${formatBytes(
-                          folderInfoState.totalSize,
-                        )}, last changed ${formatDate(folderInfoState.lastModified ?? undefined)}`
-                      : "Loading…"}
-                  </dd>
-                </>
-              ) : (
-                <>
-                  <dt className="text-kumo-subtle">Size</dt>
-                  <dd>{formatBytes(infoEntry.size ?? 0)}</dd>
-                  <dt className="text-kumo-subtle">Modified</dt>
-                  <dd>{formatDate(infoEntry.lastModified)}</dd>
-                </>
-              )}
-            </dl>
-          </Dialog>
-        )}
-      </Dialog.Root>
+      <EntryInfoDialog infoEntry={infoEntry} folderInfoState={folderInfoState} onClose={() => setInfoEntry(null)} />
 
       {dragging && (
         <div className="lopload-drop-overlay pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-kumo-brand/20 ring-2 ring-dashed ring-kumo-brand">
