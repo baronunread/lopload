@@ -267,6 +267,10 @@ export interface AppServices {
    * when a dropped folder can't be read (e.g. an unreadable subdirectory) —
    * without it such failures were only visible in the console/OS notifications. */
   onFileDrop(cb: (files: PickedFile[]) => void, onError?: (message: string) => void): () => void;
+  /** Hover phases of an OS file drag over the window: the cursor position in
+   * CSS pixels while dragging, null once the drag leaves. Drops emit nothing
+   * here (see Host.onFileDragHover) — the onFileDrop callback resets state. */
+  onFileDragHover(cb: (position: { x: number; y: number } | null) => void): () => void;
   /** Updates the dock/taskbar badge to reflect the current failed-transfer count. */
   setBadgeCount(count: number): void;
   /** Fires a native OS notification. */

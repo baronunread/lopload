@@ -146,4 +146,67 @@ export const transferScenarios: Scenario[] = [
       expect(Array.from(written.subarray(0, 256))).toEqual(Array.from(payload.subarray(0, 256)));
     },
   },
+
+  {
+    name: "an OS drag shows the upload overlay and dropping on a folder row uploads into that folder",
+    async arrange(bucket) {
+      await bucket.put("docs/existing.txt", "already here");
+    },
+    async run(ctx) {
+      const { bucket, control, expect, waitFor, makeLocalFile, prefix } = ctx;
+      const payload = bytes(32 * 1024, 11);
+      const path = await makeLocalFile("report.bin", payload);
+
+      const rowSelector = `[data-drop-prefix="${prefix}docs/"]`;
+      await waitFor(() => {
+        expect(document.querySelector(rowSelector) !== null).toBe(true);
+      });
+
+      // happy-dom runs no layout, so every element's rect is zero-size — and
+      // the hit test skips zero-size rects. Give the docs row a real one so
+      // the cursor can land on it.
+      const row = document.querySelector(rowSelector) as HTMLElement;
+      row.getBoundingClientRect = () =>
+        ({
+          left: 0, top: 100, right: 800, bottom: 156,
+          width: 800, height: 56, x: 0, y: 100,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      // Drag in over empty space: the overlay comes up naming the current
+      // folder (the bucket root shows as Home).
+      control.dragFileHover({ x: 400, y: 50 });
+      await waitFor(() => {
+        const overlay = screen.queryByText(/Drop to upload to/);
+        expect(overlay !== null).toBe(true);
+        expect(overlay!.textContent).toContain("Home");
+      });
+
+      // Drag over the docs row: it highlights as the target and the overlay
+      // names it.
+      control.dragFileHover({ x: 400, y: 128 });
+      await waitFor(() => {
+        expect(screen.getByText(/Drop to upload to/).textContent).toContain("docs");
+        expect((document.querySelector(rowSelector) as HTMLElement).className).toContain(
+          "ring-kumo-brand",
+        );
+      });
+
+      // Drop: the file must land under docs/, not in the folder being viewed.
+      control.dropFiles([path]);
+      const state = await settle(ctx, "docs/report.bin");
+      expect(state.kind).toBe("uploaded");
+
+      const stored = await bucket.get("docs/report.bin");
+      expect(stored !== null).toBe(true);
+      expect(stored!.byteLength).toBe(payload.byteLength);
+      expect(Array.from(stored!.subarray(0, 256))).toEqual(Array.from(payload.subarray(0, 256)));
+
+      // The overlay leaves once the drop lands — eventually, not instantly:
+      // AnimatePresence keeps it mounted through its exit animation.
+      await waitFor(() => {
+        expect(screen.queryByText(/Drop to upload to/) === null).toBe(true);
+      });
+    },
+  },
 ];

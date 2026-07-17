@@ -57,6 +57,9 @@ export interface HostControl {
   availableUpdate: string | null;
   /** Simulates the user dropping these native paths onto the window. */
   dropFiles(paths: string[]): void;
+  /** Simulates the hover phase of an OS file drag: a cursor position (CSS
+   * pixels) while dragging over the window, null when the drag leaves. */
+  dragFileHover(position: { x: number; y: number } | null): void;
 }
 
 export interface NodeHost {
@@ -95,6 +98,7 @@ export async function createNodeHost(): Promise<NodeHost> {
   };
 
   const dropSubscribers = new Set<(paths: string[]) => void>();
+  const dragHoverSubscribers = new Set<(position: { x: number; y: number } | null) => void>();
 
   const control: HostControl = {
     filesToPick: [],
@@ -103,6 +107,9 @@ export async function createNodeHost(): Promise<NodeHost> {
     availableUpdate: null,
     dropFiles(paths) {
       for (const fn of dropSubscribers) fn(paths);
+    },
+    dragFileHover(position) {
+      for (const fn of dragHoverSubscribers) fn(position);
     },
   };
 
@@ -177,6 +184,11 @@ export async function createNodeHost(): Promise<NodeHost> {
     onFileDrop: (cb) => {
       dropSubscribers.add(cb);
       return () => void dropSubscribers.delete(cb);
+    },
+
+    onFileDragHover: (cb) => {
+      dragHoverSubscribers.add(cb);
+      return () => void dragHoverSubscribers.delete(cb);
     },
 
     initLogSink: async () => {},
