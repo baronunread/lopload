@@ -102,9 +102,12 @@ describe("listingCache", () => {
 
       const first = fetchFolderInfo("conn-b", "photos/", fetcher);
       const second = fetchFolderInfo("conn-b", "photos/", fetcher);
-      release(folderInfo(5));
-      expect(await first).toEqual(folderInfo(5));
-      expect(await second).toEqual(folderInfo(5));
+      // One shared object: folderInfo() stamps lastModified with Date.now(),
+      // so building it twice flakes whenever the ms clock ticks in between.
+      const released = folderInfo(5);
+      release(released);
+      expect(await first).toEqual(released);
+      expect(await second).toEqual(released);
       expect(calls).toBe(1);
     });
 
@@ -184,7 +187,10 @@ describe("listingCache", () => {
       putListing("conn-a", "photos/", [FILE_B]);
       await fetchFolderInfo("conn-a", "photos/", async () => folderInfo(1));
       putListing("conn-b", "", [FILE_B]);
-      await fetchFolderInfo("conn-b", "photos/", async () => folderInfo(9));
+      // Kept in a const for the same clock-tick reason as the inflight-dedupe
+      // test above — this exact flake hit CI on a loaded runner (PR #22).
+      const infoB = folderInfo(9);
+      await fetchFolderInfo("conn-b", "photos/", async () => infoB);
 
       invalidateConnection("conn-a");
 
@@ -193,7 +199,7 @@ describe("listingCache", () => {
       expect(peekFolderInfo("conn-a", "photos/")).toBeUndefined();
 
       expect(peekListing("conn-b", "")).toEqual([FILE_B]);
-      expect(peekFolderInfo("conn-b", "photos/")).toEqual(folderInfo(9));
+      expect(peekFolderInfo("conn-b", "photos/")).toEqual(infoB);
     });
   });
 });
