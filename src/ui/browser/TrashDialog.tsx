@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, LazyMotion, domAnimation, m } from "motion/react";
 import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
 import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { useServices, type CopyProgress, type TrashItem } from "../services";
@@ -136,7 +136,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   }
 
   return (
-    <>
+    <LazyMotion features={domAnimation}>
       <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
         <Dialog className="w-full sm:w-full max-w-lg p-6">
         <div className="flex items-center gap-3">
@@ -169,7 +169,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
             <ul className="-mr-2 mt-4 flex max-h-96 flex-col gap-2 overflow-auto pr-2">
               <AnimatePresence initial={false}>
                 {items.map((item, index) => (
-                  <motion.li
+                  <m.li
                     key={item.id}
                     layout
                     initial={{ opacity: 0, y: 8 }}
@@ -217,7 +217,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                         Delete now
                       </Button>
                     </div>
-                  </motion.li>
+                  </m.li>
                 ))}
               </AnimatePresence>
             </ul>
@@ -282,6 +282,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
           </Dialog>
         )}
       </Dialog.Root>
-    </>
+    </LazyMotion>
   );
 }

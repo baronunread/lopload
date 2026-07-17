@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion } from "motion/react";
+import { LazyMotion, domAnimation, m } from "motion/react";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 
 /** localStorage key holding the user's explicit theme override; when unset,
@@ -46,32 +46,34 @@ export function ThemeToggle() {
   }
 
   return (
-    <button
-      type="button"
-      aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      onClick={toggle}
-      className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-kumo-subtle transition-transform after:absolute after:-inset-0.5 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
-    >
-      {/* Both icons stay mounted and cross-fade in place, so a quick
-          double-toggle interrupts mid-animation instead of restarting. */}
-      <motion.span
-        initial={false}
-        animate={mode === "dark" ? SHOWN : HIDDEN}
-        transition={ICON_SPRING}
-        className="flex"
-        aria-hidden
+    <LazyMotion features={domAnimation}>
+      <button
+        type="button"
+        aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        onClick={toggle}
+        className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-kumo-subtle transition-transform after:absolute after:-inset-0.5 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
       >
-        <MoonIcon size={18} />
-      </motion.span>
-      <motion.span
-        initial={false}
-        animate={mode === "light" ? SHOWN : HIDDEN}
-        transition={ICON_SPRING}
-        className="absolute flex"
-        aria-hidden
-      >
-        <SunIcon size={18} />
-      </motion.span>
-    </button>
+        {/* Both icons stay mounted and cross-fade in place, so a quick
+            double-toggle interrupts mid-animation instead of restarting. */}
+        <m.span
+          initial={false}
+          animate={mode === "dark" ? SHOWN : HIDDEN}
+          transition={ICON_SPRING}
+          className="flex"
+          aria-hidden
+        >
+          <MoonIcon size={18} />
+        </m.span>
+        <m.span
+          initial={false}
+          animate={mode === "light" ? SHOWN : HIDDEN}
+          transition={ICON_SPRING}
+          className="absolute flex"
+          aria-hidden
+        >
+          <SunIcon size={18} />
+        </m.span>
+      </button>
+    </LazyMotion>
   );
 }
