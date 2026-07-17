@@ -72,13 +72,15 @@ export function MoveToDialog({
           />
         </div>
         <div className="mt-3">
-          <Breadcrumbs>
-            {/* Wraps Breadcrumbs.Link's real <a href="#"> (display:contents,
-                no box of its own) — keyboard users reach and activate it via
-                that anchor, and the click bubbles up to this span, so no
-                separate role/tabIndex is needed here. */}
+          <Breadcrumbs className="min-w-0 overflow-hidden">
+            {/* Wraps Breadcrumbs.Link's real <a href="#"> — keyboard users
+                reach and activate it via that anchor, and the click bubbles
+                up to this span, so no separate role/tabIndex is needed here.
+                Home never shrinks — without shrink-0, one long folder name
+                crushed its label to a sliver. Ancestors truncate first
+                (min-w-0 + a cap), the current folder shrinks last. */}
             <span
-              className="contents"
+              className="flex shrink-0"
               onClick={(e) => {
                 e.preventDefault();
                 setPrefix("");
@@ -95,12 +97,15 @@ export function MoveToDialog({
                 <span key={segPrefix} className="contents">
                   <Breadcrumbs.Separator />
                   {isLast ? (
-                    <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
+                    <span className="flex min-w-0 max-w-[55%] shrink-0" title={segment}>
+                      <Breadcrumbs.Current>{segment}</Breadcrumbs.Current>
+                    </span>
                   ) : (
                     // Same wrapper-around-a-real-anchor pattern as the Home
                     // crumb above.
                     <span
-                      className="contents"
+                      className="flex min-w-0 max-w-[35%]"
+                      title={segment}
                       onClick={(e) => {
                         e.preventDefault();
                         setPrefix(segPrefix);
