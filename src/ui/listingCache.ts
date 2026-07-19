@@ -149,7 +149,7 @@ export function fetchFolderInfo(
 }
 
 /** Drops a single cached folder-info entry — used by invalidateForKey below. */
-export function invalidateFolderInfo(connectionId: string, folderKey: string): void {
+function invalidateFolderInfo(connectionId: string, folderKey: string): void {
   folderInfos.delete(cacheKey(connectionId, folderKey));
 }
 

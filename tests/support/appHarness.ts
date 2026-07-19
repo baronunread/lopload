@@ -43,7 +43,7 @@ const CONNECTION_ID = "test-connection";
  * everything the app does now involves real I/O, so almost nothing is true
  * on the next tick.
  */
-export async function waitFor(
+async function waitFor(
   check: () => void | Promise<void>,
   timeoutMs = 15_000,
 ): Promise<void> {

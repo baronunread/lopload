@@ -36,7 +36,7 @@ export function canTransition(from: TransferState, to: TransferState): boolean {
   return STATE_TRANSITIONS[from.kind].includes(to.kind);
 }
 
-export class InvalidTransitionError extends Error {
+class InvalidTransitionError extends Error {
   constructor(from: TransferState, to: TransferState) {
     super(`Invalid transfer state transition: ${from.kind} -> ${to.kind}`);
     this.name = "InvalidTransitionError";
@@ -123,13 +123,6 @@ export class TransferEngine {
 
   listTransfers(): Transfer[] {
     return Array.from(this.transfers.values());
-  }
-
-  hasUnacknowledgedFailures(): boolean {
-    for (const t of this.transfers.values()) {
-      if (t.state.kind === "failed" && !this.acknowledged.has(t.id)) return true;
-    }
-    return false;
   }
 
   async enqueue(files: EnqueueFile[]): Promise<Transfer[]> {

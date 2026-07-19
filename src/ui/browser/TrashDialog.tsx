@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, LazyMotion, domMax, m } from "motion/react";
 import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
 import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { useServices, type CopyProgress, type TrashItem } from "../services";
 import { formatBytes, formatDate } from "../format";
-import { SOLID_DANGER_BUTTON_STYLE, SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
+import { SOLID_DANGER_TEXT_STYLE } from "../dangerButton";
+import { ConfirmDialog } from "../ConfirmDialog";
 
 export interface TrashDialogProps {
   connectionId: string;
@@ -33,7 +34,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
   /** Per-row "N of M items" readout for a restore or delete-now in flight,
    * fed directly by the service call's onProgress rather than the global
    * move stream — a row only needs its own progress, not everyone else's. */
@@ -70,6 +70,14 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 
+  const lastPendingRef = useRef<PendingAction | null>(null);
+  const dialogPending = pending ?? lastPendingRef.current;
+
+  function setPendingDialog(action: PendingAction) {
+    lastPendingRef.current = action;
+    setPending(action);
+  }
+
   // Restore and delete-now deliberately do NOT remove the row optimistically
   // before the call settles, unlike the bulk/context-menu delete-to-trash
   // flows in RemoteBrowser: those are near-instant, but a big folder restore
@@ -97,7 +105,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   async function confirmPending() {
     if (!pending) return;
     const current = pending;
-    setConfirming(true);
     setPending(null);
 
     if (current.kind === "delete-now") {
@@ -113,7 +120,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
           description: err instanceof Error ? err.message : "Something went wrong.",
         });
       } finally {
-        setConfirming(false);
         setDeletingId(null);
         setItemProgress(item.id, undefined);
       }
@@ -130,7 +136,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
         description: err instanceof Error ? err.message : "Something went wrong.",
       });
     } finally {
-      setConfirming(false);
       setEmptyProgress(null);
     }
   }
@@ -212,7 +217,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                         size="sm"
                         loading={deletingId === item.id}
                         disabled={busyId === item.id}
-                        onClick={() => setPending({ kind: "delete-now", item })}
+                        onClick={() => setPendingDialog({ kind: "delete-now", item })}
                       >
                         Delete now
                       </Button>
@@ -228,7 +233,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                 variant="secondary-destructive"
                 style={SOLID_DANGER_TEXT_STYLE}
                 loading={emptyProgress !== null}
-                onClick={() => setPending({ kind: "empty" })}
+                onClick={() => setPendingDialog({ kind: "empty" })}
               >
                 Empty trash
               </Button>
@@ -242,46 +247,18 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
         </Dialog>
       </Dialog.Root>
 
-      <Dialog.Root
+      <ConfirmDialog
         open={pending !== null}
         onOpenChange={(open) => !open && setPending(null)}
-        role="alertdialog"
-      >
-        {pending && (
-          <Dialog className="p-6">
-            <div className="flex items-center gap-3">
-              <Dialog.Title className="m-0">
-                {pending.kind === "empty"
-                  ? "Empty trash?"
-                  : `Delete ${displayName(pending.item.originalKey)} now?`}
-              </Dialog.Title>
-              <Dialog.Close
-                render={(p) => (
-                  <Button
-                    variant="ghost"
-                    shape="square"
-                    aria-label="Close"
-                    icon={XIcon}
-                    className="ml-auto"
-                    {...p}
-                  />
-                )}
-              />
-            </div>
-            <Dialog.Description>This can't be undone.</Dialog.Description>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="destructive"
-                style={SOLID_DANGER_BUTTON_STYLE}
-                loading={confirming}
-                onClick={() => void confirmPending()}
-              >
-                {pending.kind === "empty" ? "Empty trash" : "Delete now"}
-              </Button>
-            </div>
-          </Dialog>
-        )}
-      </Dialog.Root>
+        title={
+          dialogPending?.kind === "empty"
+            ? "Empty trash?"
+            : `Delete ${dialogPending ? displayName(dialogPending.item.originalKey) : ""} now?`
+        }
+        description="This can't be undone."
+        confirmLabel={dialogPending?.kind === "empty" ? "Empty trash" : "Delete now"}
+        onConfirm={() => void confirmPending()}
+      />
     </LazyMotion>
   );
 }

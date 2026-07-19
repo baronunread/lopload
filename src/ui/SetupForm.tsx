@@ -18,7 +18,7 @@ export interface SetupFormProps {
 }
 
 /** Default floor for how long "Testing…" stays visible — see SetupFormProps.minTestDurationMs. */
-export const MIN_TEST_DURATION_MS = 800;
+const MIN_TEST_DURATION_MS = 800;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
