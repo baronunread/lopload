@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Dialog } from "@cloudflare/kumo";
 import { TrashIcon, XIcon } from "@phosphor-icons/react";
 import type { Connection } from "../lib/types";
@@ -24,12 +24,11 @@ export function ManageConnectionsDialog({
 }: ManageConnectionsDialogProps) {
   const services = useServices();
   const [pending, setPending] = useState<Connection | null>(null);
-  const [lastPending, setLastPending] = useState<Connection | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    if (pending) setLastPending(pending);
-  }, [pending]);
+  const lastPendingRef = useRef<Connection | null>(null);
+  if (pending) lastPendingRef.current = pending;
+  const dialogPending = pending ?? lastPendingRef.current;
 
   async function confirmDelete() {
     if (!pending) return;
@@ -42,8 +41,6 @@ export function ManageConnectionsDialog({
       setDeleting(false);
     }
   }
-
-  const dialogPending = pending ?? lastPending;
 
   return (
     <>

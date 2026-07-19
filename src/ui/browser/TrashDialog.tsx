@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, LazyMotion, domMax, m } from "motion/react";
 import { Button, Dialog, useKumoToastManager } from "@cloudflare/kumo";
 import { TrashSimpleIcon, XIcon } from "@phosphor-icons/react";
@@ -32,7 +32,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   const [items, setItems] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingAction | null>(null);
-  const [lastPending, setLastPending] = useState<PendingAction | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   /** Per-row "N of M items" readout for a restore or delete-now in flight,
@@ -71,9 +70,9 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 
-  useEffect(() => {
-    if (pending) setLastPending(pending);
-  }, [pending]);
+  const lastPendingRef = useRef<PendingAction | null>(null);
+  if (pending) lastPendingRef.current = pending;
+  const dialogPending = pending ?? lastPendingRef.current;
 
   // Restore and delete-now deliberately do NOT remove the row optimistically
   // before the call settles, unlike the bulk/context-menu delete-to-trash
@@ -136,8 +135,6 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
       setEmptyProgress(null);
     }
   }
-
-  const dialogPending = pending ?? lastPending;
 
   return (
     <LazyMotion features={domMax}>
