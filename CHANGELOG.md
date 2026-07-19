@@ -2,6 +2,25 @@
 
 All notable changes to Lopload are documented here. Release binaries and full notes live on the [releases page](https://github.com/baronunread/lopload/releases).
 
+## [0.2.0] — 2026-07-19
+
+Faster browsing, faster trash, and a lot of UI polish.
+
+- Dragging files onto the browser now shows an animated overlay that names the destination folder and highlights the exact folder row under the cursor, so it's clear where a drop will land.
+- Navigation renders instantly from a session cache while a silent revalidate refreshes listings and folder stats in the background.
+- Trash, restore, and permanent delete run much faster with bounded concurrency, stream progress through the transfer widget and Trash dialog, and write the Trash folder marker before children so Trash never shows loose files mid-operation.
+- Settings is reorganized into a wider dialog with a sidebar (General, Transfers, Updates, Maintenance) and clearer descriptions.
+- Long breadcrumbs collapse into Home + a "…" dropdown of hidden ancestors + the last two segments, so the toolbar actions stay visible.
+- Right-clicked rows stay highlighted and hover is suppressed while a context menu is open.
+- Thumbnails render a fixed icon from first paint and cross-fade in the image, so rows never shift as previews load; preview URLs are cached for the session.
+- Files get per-type icons in the listing fallback and drag ghost.
+- The native webview context menu is suppressed in release builds.
+- Dialogs at small widths now fill the dialog frame, so forms like Add storage actually get the intended two-column layout.
+- Date formats use numeric day/month/year to avoid ambiguous localized month abbreviations.
+- The portable `.exe` no longer shows the auto-update toggle or runs periodic update checks — the bundled updater is tied to the installer.
+- Bucket listings stay stable during transfers: a refresh that fails after a successful load keeps the existing rows instead of blanking the table.
+- Transfer failures now reach the log file reliably, and DEBUG noise is dropped from the file sink so WARN/ERROR lines are easier to find.
+
 ## [0.1.3] — 2026-07-15
 
 - Fixed: storage connection dropdown no longer shows unnecessary scrollbars on Windows and Linux.
