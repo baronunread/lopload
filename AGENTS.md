@@ -9,7 +9,7 @@ bun install
 bun run tauri dev       # desktop app with hot-reload
 bun run dev              # Vite only, browser tab — shows a "requires the desktop app" notice
 bun run check            # typecheck + the whole suite — CI gates on this
-bun run selftest         # the scenarios, inside the real Tauri binary
+bun run selftest         # the scenarios, inside the real Tauri binary (desktop Linux/macOS/Windows — needs OS keychain)
 ```
 
 Tests need Docker running (a real MinIO — see Testing below).
@@ -79,10 +79,13 @@ bun run selftest           # the REAL Tauri binary → real Rust IPC → MinIO.
 bun run test:remote        # the same scenarios → a real R2/S3 bucket.
 ```
 
+> **Linux note:** `bun run selftest` needs the OS keychain (Secret Service / gnome-keyring).
+> Without a running D-Bus session bus and `org.freedesktop.secrets` provider,
+> the selftest will fail. Run it on a desktop Linux, macOS, or Windows machine.
+
 `test:remote` needs a `.env.remote` (see `.env.remote.example`) and is run
 manually, on demand. `bun run selftest` honours the same `LOPLOAD_TEST_REMOTE=1`
-gate — that combination (real binary, real bucket) is what tag CI runs before
-every release (`.github/workflows/build.yml`). The remote path exists because
+gate, pointed at a real bucket. The remote path exists because
 MinIO is an excellent S3 impersonator right up until it isn't — checksum middleware, ETag formats on multipart, redirects — and those
 bugs are invisible to a local-only suite. It confines itself to
 `lopload-test/<run>/` and deletes that prefix when it's done; it cannot touch a

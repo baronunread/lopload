@@ -31,7 +31,8 @@ and run in both places:
   so wiping state between scenarios never touches the connections the real
   app has saved. Exit code comes from the
   `SELFTEST_RESULT PASS|FAIL` sentinel. Budget ~10 min cold (cargo build),
-  ~1–2 min warm.
+  ~1–2 min warm. Linux needs a running Secret Service provider
+  (gnome-keyring / KWallet).
 
 - **Against a real provider (R2):** `bun run test:remote` — Runner A pointed
   at the bucket in `.env.remote`; the suite is a guest there, scoped under
@@ -47,7 +48,7 @@ and run in both places:
    with `ctx.expect` / `ctx.waitFor` and `ctx.bucket` (what really landed).
 2. `bun test tests/app.test.ts` until green.
 3. `bun run selftest` to prove it in the real binary — this is what replaces
-   "test it by hand against a real bucket".
+   "test it by hand against a real bucket" (needs OS keychain; skip on headless Linux without Secret Service).
 
 Fault injection (network errors, S3 error codes) goes through the scenario's
 `wrapFetch` + `nodeOnly: true` — the Node runner owns fetch; the in-app

@@ -19,13 +19,14 @@ Everything uses `bun` — never `npm`/`npx`/`node`.
 
 ```sh
 bun run check     # typecheck + the whole suite — must pass, CI gates on this
-bun run selftest  # the same scenarios, inside the real Tauri binary
+bun run selftest  # the same scenarios, inside the real Tauri binary (macOS/Linux/Windows — needs OS keychain)
 ```
 
 Tests talk to a real MinIO, so Docker needs to be running. The container is
 reused between runs, so you pay its ~2s startup once. `bun run selftest` boots
 the actual app and drives it — that's the one that covers the Rust/IPC path, and
-it's worth running before anything that touches transfers.
+it's worth running before anything that touches transfers. On Linux it needs a
+running Secret Service provider (gnome-keyring / KWallet).
 
 - Branch off `main`; PRs require passing CI and one approving review.
 - Keep PRs focused — one change per PR.

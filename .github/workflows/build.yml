@@ -16,76 +16,8 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  # Runner B: the scenario suite inside the real Tauri binary (scripts/
-  # selftest.ts) — real webview, real Rust IPC — pointed at the real bucket
-  # rather than MinIO. Between this and the ci job (Node host → MinIO), a tag
-  # exercises both halves of the matrix; MinIO is an excellent S3 impersonator
-  # right up until it isn't, and provider-shaped bugs (checksum middleware,
-  # multipart ETags, redirects) only show up here. Everything the run touches
-  # lives under lopload-test/<run>/ and that prefix is the only thing it can
-  # delete (tests/support/bucketProbe.ts). The runner is headless, so the app
-  # runs under Xvfb.
-  selftest:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev \
-            xvfb
-
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
-
-      # scripts/selftest.ts gives `tauri dev` a 10-minute budget that includes
-      # compilation; a cold debug build alone can blow that on a 2-core runner.
-      # Build here first so the selftest's timer only covers the actual run.
-      - name: Pre-build debug binary
-        working-directory: src-tauri
-        run: cargo build
-
-      - name: Selftest
-        env:
-          # WebKitGTK's GPU paths don't exist under Xvfb; force the software
-          # renderer so the webview paints instead of staying blank.
-          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
-          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
-          # The REMOTE flag is a deliberate gate: credentials alone must never
-          # redirect a run at real storage (tests/support/storage.ts).
-          LOPLOAD_TEST_REMOTE: "1"
-          LOPLOAD_TEST_ENDPOINT: ${{ secrets.LOPLOAD_TEST_ENDPOINT }}
-          LOPLOAD_TEST_BUCKET: ${{ secrets.LOPLOAD_TEST_BUCKET }}
-          LOPLOAD_TEST_ACCESS_KEY: ${{ secrets.LOPLOAD_TEST_ACCESS_KEY }}
-          LOPLOAD_TEST_SECRET_KEY: ${{ secrets.LOPLOAD_TEST_SECRET_KEY }}
-          LOPLOAD_TEST_REGION: ${{ secrets.LOPLOAD_TEST_REGION }}
-        run: xvfb-run -a bun run selftest
-
   build:
-    needs: [ci, selftest]
+    needs: [ci]
     strategy:
       fail-fast: false
       matrix:
