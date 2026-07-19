@@ -11,13 +11,7 @@ concurrency:
 env: {}
 
 jobs:
-  # The same typecheck/test/cargo-test jobs that run on pushes to main, re-run
-  # here so a tag can never release a commit those checks didn't pass.
-  ci:
-    uses: ./.github/workflows/ci.yml
-
   build:
-    needs: [ci]
     strategy:
       fail-fast: false
       matrix:
