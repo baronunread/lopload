@@ -71,8 +71,12 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   }, [connectionId]);
 
   const lastPendingRef = useRef<PendingAction | null>(null);
-  if (pending) lastPendingRef.current = pending;
   const dialogPending = pending ?? lastPendingRef.current;
+
+  function setPendingDialog(action: PendingAction) {
+    lastPendingRef.current = action;
+    setPending(action);
+  }
 
   // Restore and delete-now deliberately do NOT remove the row optimistically
   // before the call settles, unlike the bulk/context-menu delete-to-trash
@@ -213,7 +217,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                         size="sm"
                         loading={deletingId === item.id}
                         disabled={busyId === item.id}
-                        onClick={() => setPending({ kind: "delete-now", item })}
+                        onClick={() => setPendingDialog({ kind: "delete-now", item })}
                       >
                         Delete now
                       </Button>
@@ -229,7 +233,7 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
                 variant="secondary-destructive"
                 style={SOLID_DANGER_TEXT_STYLE}
                 loading={emptyProgress !== null}
-                onClick={() => setPending({ kind: "empty" })}
+                onClick={() => setPendingDialog({ kind: "empty" })}
               >
                 Empty trash
               </Button>

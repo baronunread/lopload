@@ -27,8 +27,12 @@ export function ManageConnectionsDialog({
   const [deleting, setDeleting] = useState(false);
 
   const lastPendingRef = useRef<Connection | null>(null);
-  if (pending) lastPendingRef.current = pending;
   const dialogPending = pending ?? lastPendingRef.current;
+
+  function setPendingDialog(conn: Connection) {
+    lastPendingRef.current = conn;
+    setPending(conn);
+  }
 
   async function confirmDelete() {
     if (!pending) return;
@@ -79,7 +83,7 @@ export function ManageConnectionsDialog({
                     style={SOLID_DANGER_TEXT_STYLE}
                     icon={TrashIcon}
                     aria-label={`Remove ${conn.name}`}
-                    onClick={() => setPending(conn)}
+                    onClick={() => setPendingDialog(conn)}
                   />
                 </li>
               ))}
