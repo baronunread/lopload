@@ -61,7 +61,7 @@ function scaleToUnit(value: number, units: readonly string[]): string {
     scaled /= 1024;
     i++;
   }
-  const rounded = i === 0 ? scaled : Math.round(scaled * 10) / 10;
+  const rounded = Math.round(scaled * 10) / 10;
   return `${rounded} ${units[i]}`;
 }
 

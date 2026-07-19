@@ -33,10 +33,16 @@ const CONTAINER_NAME = "lopload-test-minio";
 const MINIO_PORT = 9400;
 const MINIO_ENDPOINT = `http://127.0.0.1:${MINIO_PORT}`;
 const MINIO_REGION = "us-east-1";
-const MINIO_CREDENTIALS: Credentials = {
-  accessKey: "minioadmin",
-  secretKey: "minioadmin",
-};
+
+/** MinIO root credentials for the local container. Overridable via env so the
+ * well-known test defaults never have to be the only source; the defaults are
+ * MinIO's standard root user and only apply to the localhost test container. */
+function minioCredentials(): Credentials {
+  return {
+    accessKey: process.env.LOPLOAD_MINIO_ACCESS_KEY || "minioadmin",
+    secretKey: process.env.LOPLOAD_MINIO_SECRET_KEY || "minioadmin",
+  };
+}
 
 /** Everything a remote run touches lives under this. Nothing outside it is ever
  * read, written, or deleted. */
@@ -170,9 +176,9 @@ export function ensureMinio(): Promise<void> {
         "-p",
         `${MINIO_PORT}:9000`,
         "-e",
-        `MINIO_ROOT_USER=${MINIO_CREDENTIALS.accessKey}`,
+        `MINIO_ROOT_USER=${minioCredentials().accessKey}`,
         "-e",
-        `MINIO_ROOT_PASSWORD=${MINIO_CREDENTIALS.secretKey}`,
+        `MINIO_ROOT_PASSWORD=${minioCredentials().secretKey}`,
         "minio/minio",
         "server",
         "/data",
@@ -223,9 +229,10 @@ export async function freshBucket(): Promise<Bucket> {
 
   const name = `t-${runId()}`;
   const connection = { endpoint: MINIO_ENDPOINT, region: MINIO_REGION, bucket: name };
-  const client = createS3Client(connection, MINIO_CREDENTIALS, nativeFetch);
+  const credentials = minioCredentials();
+  const client = createS3Client(connection, credentials, nativeFetch);
 
   await client.send(new CreateBucketCommand({ Bucket: name }));
 
-  return { name, connection, credentials: MINIO_CREDENTIALS, client, prefix: "" };
+  return { name, connection, credentials, client, prefix: "" };
 }

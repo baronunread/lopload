@@ -8,7 +8,7 @@ export interface ConfirmDialogProps {
   title: string;
   description: string;
   confirmLabel: string;
-  loading: boolean;
+  loading?: boolean;
   onConfirm: () => void;
 }
 
@@ -27,36 +27,34 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange} role="alertdialog">
-      {open && (
-        <Dialog className="p-6">
-          <div className="flex items-center gap-3">
-            <Dialog.Title className="m-0">{title}</Dialog.Title>
-            <Dialog.Close
-              render={(p) => (
-                <Button
-                  variant="ghost"
-                  shape="square"
-                  aria-label="Close"
-                  icon={XIcon}
-                  className="ml-auto"
-                  {...p}
-                />
-              )}
-            />
-          </div>
-          <Dialog.Description>{description}</Dialog.Description>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button
-              variant="destructive"
-              style={SOLID_DANGER_BUTTON_STYLE}
-              loading={loading}
-              onClick={onConfirm}
-            >
-              {confirmLabel}
-            </Button>
-          </div>
-        </Dialog>
-      )}
+      <Dialog className="p-6">
+        <div className="flex items-center gap-3">
+          <Dialog.Title className="m-0">{title}</Dialog.Title>
+          <Dialog.Close
+            render={(p) => (
+              <Button
+                variant="ghost"
+                shape="square"
+                aria-label="Close"
+                icon={XIcon}
+                className="ml-auto"
+                {...p}
+              />
+            )}
+          />
+        </div>
+        <Dialog.Description>{description}</Dialog.Description>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button
+            variant="destructive"
+            style={SOLID_DANGER_BUTTON_STYLE}
+            loading={loading}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </Button>
+        </div>
+      </Dialog>
     </Dialog.Root>
   );
 }

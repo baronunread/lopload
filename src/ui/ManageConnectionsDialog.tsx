@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Dialog } from "@cloudflare/kumo";
 import { TrashIcon, XIcon } from "@phosphor-icons/react";
 import type { Connection } from "../lib/types";
@@ -24,7 +24,12 @@ export function ManageConnectionsDialog({
 }: ManageConnectionsDialogProps) {
   const services = useServices();
   const [pending, setPending] = useState<Connection | null>(null);
+  const [lastPending, setLastPending] = useState<Connection | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (pending) setLastPending(pending);
+  }, [pending]);
 
   async function confirmDelete() {
     if (!pending) return;
@@ -37,6 +42,8 @@ export function ManageConnectionsDialog({
       setDeleting(false);
     }
   }
+
+  const dialogPending = pending ?? lastPending;
 
   return (
     <>
@@ -88,7 +95,7 @@ export function ManageConnectionsDialog({
       <ConfirmDialog
         open={pending !== null}
         onOpenChange={(open) => !open && setPending(null)}
-        title={`Remove ${pending?.name}?`}
+        title={`Remove ${dialogPending?.name ?? "this connection"}?`}
         description="This only removes the connection from Lopload - nothing in your storage is deleted. You can add it again later with the same details."
         confirmLabel="Remove"
         loading={deleting}
