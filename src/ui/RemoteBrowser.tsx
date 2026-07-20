@@ -574,21 +574,24 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
       (prev) => [...prev, ...deleted.filter((d) => !prev.some((e) => e.key === d.key))],
     );
     selection.clear();
-    try {
-      const batchTotal = deleted.length;
-      await mapWithConcurrency(deleted, BULK_OP_CONCURRENCY, (entry) =>
-        services.browser.delete(connectionId, entry.key, batchTotal),
-      );
+    let anyFailed = false;
+    const batchTotal = deleted.length;
+    void mapWithConcurrency(deleted, BULK_OP_CONCURRENCY, async (entry) => {
+      try {
+        await services.browser.delete(connectionId, entry.key, batchTotal);
+      } catch (err) {
+        anyFailed = true;
+        toasts.add({
+          variant: "error",
+          title: "Couldn't move to Trash",
+          description: err instanceof Error ? err.message : "Something went wrong.",
+        });
+      }
+    }).then(() => {
+      if (anyFailed) rollback();
       for (const entry of deleted) invalidateForKey(connectionId, entry.key);
-      await refreshSilently();
-    } catch (err) {
-      rollback();
-      toasts.add({
-        variant: "error",
-        title: "Couldn't move to Trash",
-        description: err instanceof Error ? err.message : "Something went wrong.",
-      });
-    }
+      void refreshSilently();
+    });
   }
 
   function contextItemsFor(entry?: RemoteEntry): ContextMenuItem[] {

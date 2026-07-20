@@ -452,18 +452,25 @@ class LoploadServices implements AppServices {
     delete: async (connectionId: string, key: string, batchTotal?: number): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       const deletedAtMs = Date.now();
-      if (isFolderKey(key)) {
-        await this.runTracked(
-          connectionId,
-          key,
-          key,
-          "trash",
-          (emit) => s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs, emit),
-          batchTotal,
-        );
-      } else {
-        await s3MoveFileToTrash(client, conn.bucket, key, deletedAtMs);
-      }
+      await this.runTracked(
+        connectionId,
+        key,
+        key,
+        "trash",
+        async (emit) => {
+          if (isFolderKey(key)) {
+            await s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs, emit);
+          } else {
+            // s3MoveFileToTrash has no sub-object progress to report — a single
+            // file is one item, so runTracked's completion event (which copies
+            // totalItems into copiedItems) needs totalItems set here or the
+            // widget would show "0 items moved" instead of "1".
+            emit({ copiedBytes: 0, totalBytes: 0, copiedItems: 0, totalItems: 1 });
+            await s3MoveFileToTrash(client, conn.bucket, key, deletedAtMs);
+          }
+        },
+        batchTotal,
+      );
     },
     copyLink: async (connectionId: string, key: string, expiresInSeconds: number): Promise<string> => {
       const { client, conn } = await this.getClient(connectionId);

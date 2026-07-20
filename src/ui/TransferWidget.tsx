@@ -384,8 +384,10 @@ function widgetTitle(p: TitleParts): string {
     // larger total rather than a precise combined one — add a batchId if that
     // ever comes up in practice.
     const batchTotal = Math.max(0, ...p.movingMoves.map((m) => m.batchTotal ?? 0));
+    // batchTotal > n and n >= 1 (the guard above) mean batchTotal is always
+    // at least 2 here, so no singular case to handle.
     return batchTotal > n
-      ? `${moveVerb} ${n} of ${batchTotal} item${batchTotal === 1 ? "" : "s"}…`
+      ? `${moveVerb} ${n} of ${batchTotal} items…`
       : `${moveVerb} ${n} item${n === 1 ? "" : "s"}…`;
   }
   if (p.inFlight.length > 0) {
