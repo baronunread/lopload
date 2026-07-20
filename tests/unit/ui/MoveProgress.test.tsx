@@ -84,6 +84,38 @@ describe("move progress in the transfer widget", () => {
   );
 
   test(
+    "shows the real batch size next to the count of moves actually in flight",
+    async () => {
+      const harness = await createServiceHarness({
+        wrapFetch: (inner) =>
+          faultyFetch(inner, [
+            { urlContains: "Archive", method: "PUT", action: { kind: "stall", ms: 10_000 } },
+          ]),
+      });
+      try {
+        await saveConnection(harness);
+        for (const folder of ["FolderA", "FolderB"]) {
+          await harness.bucket.put(`${folder}/f0.bin`, new Uint8Array([0]));
+        }
+
+        renderWidget(harness);
+
+        // Simulates a bulk move of 5 items where only these 2 are actually in
+        // flight — batchTotal (5) is passed straight through the way
+        // RemoteBrowser's handleMove does, ahead of the concurrency-limited
+        // pool starting the rest.
+        void harness.services.browser.move(CONN, "FolderA/", "ArchiveA/", undefined, 5);
+        void harness.services.browser.move(CONN, "FolderB/", "ArchiveB/", undefined, 5);
+
+        await screen.findByText("Moving 2 of 5 items…");
+      } finally {
+        await harness.dispose();
+      }
+    },
+    15_000,
+  );
+
+  test(
     "summarizes once every move has landed",
     async () => {
       const harness = await createServiceHarness({

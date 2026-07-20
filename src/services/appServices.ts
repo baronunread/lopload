@@ -281,6 +281,7 @@ class LoploadServices implements AppServices {
     toKey: string,
     kind: MoveProgress["kind"],
     fn: (emit: (progress: CopyProgress) => void) => Promise<void>,
+    batchTotal?: number,
   ): Promise<void> {
     const moveId = crypto.randomUUID();
     const emit = (partial: Partial<MoveProgress>) => {
@@ -302,6 +303,7 @@ class LoploadServices implements AppServices {
       copiedItems: 0,
       totalItems: 0,
       status: "moving",
+      batchTotal,
     };
     this.activeMoves.set(moveId, initial);
     for (const fn of this.moveSubscribers) fn(initial);
@@ -421,30 +423,43 @@ class LoploadServices implements AppServices {
       key: string,
       toKey: string,
       onProgress?: (progress: CopyProgress) => void,
+      batchTotal?: number,
     ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
-      await this.runTracked(connectionId, key, toKey, "move", async (emit) => {
-        const progress = (p: CopyProgress) => {
-          emit(p);
-          onProgress?.(p);
-        };
-        if (isFolderKey(key)) {
-          await s3RenameFolder(client, conn.bucket, key, toKey, progress);
-        } else {
-          await s3RenameFile(client, conn.bucket, key, toKey, progress);
-        }
-      });
+      await this.runTracked(
+        connectionId,
+        key,
+        toKey,
+        "move",
+        async (emit) => {
+          const progress = (p: CopyProgress) => {
+            emit(p);
+            onProgress?.(p);
+          };
+          if (isFolderKey(key)) {
+            await s3RenameFolder(client, conn.bucket, key, toKey, progress);
+          } else {
+            await s3RenameFile(client, conn.bucket, key, toKey, progress);
+          }
+        },
+        batchTotal,
+      );
     },
     subscribeMoves: (cb: (event: MoveProgress) => void): (() => void) => {
       this.moveSubscribers.add(cb);
       return () => this.moveSubscribers.delete(cb);
     },
-    delete: async (connectionId: string, key: string): Promise<void> => {
+    delete: async (connectionId: string, key: string, batchTotal?: number): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       const deletedAtMs = Date.now();
       if (isFolderKey(key)) {
-        await this.runTracked(connectionId, key, key, "trash", (emit) =>
-          s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs, emit),
+        await this.runTracked(
+          connectionId,
+          key,
+          key,
+          "trash",
+          (emit) => s3MoveFolderToTrash(client, conn.bucket, key, deletedAtMs, emit),
+          batchTotal,
         );
       } else {
         await s3MoveFileToTrash(client, conn.bucket, key, deletedAtMs);
