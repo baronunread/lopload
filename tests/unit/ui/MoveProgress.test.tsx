@@ -1,7 +1,7 @@
 import "../../support/noActEnv";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { TransferWidget } from "../../../src/ui/TransferWidget";
 import { MoveProgressProvider } from "../../../src/ui/browser/MoveProgressContext";
@@ -81,6 +81,41 @@ describe("move progress in the transfer widget", () => {
       }
     },
     30_000,
+  );
+
+  test(
+    "the broom sweeps away finished rows but leaves in-flight ones",
+    async () => {
+      const harness = await createServiceHarness({
+        wrapFetch: (inner) =>
+          faultyFetch(inner, [
+            { urlContains: "ArchiveB", method: "PUT", action: { kind: "stall", ms: 10_000 } },
+          ]),
+      });
+      try {
+        await saveConnection(harness);
+        for (const folder of ["FolderA", "FolderB"]) {
+          await harness.bucket.put(`${folder}/f0.bin`, new Uint8Array([0]));
+        }
+
+        renderWidget(harness);
+
+        // FolderA lands, FolderB stays stalled in flight.
+        await harness.services.browser.move(CONN, "FolderA/", "ArchiveA/");
+        void harness.services.browser.move(CONN, "FolderB/", "ArchiveB/");
+
+        await screen.findByText("ArchiveA");
+        await screen.findByText("ArchiveB");
+
+        fireEvent.click(screen.getByLabelText("Clear finished"));
+
+        await waitFor(() => expect(screen.queryByText("ArchiveA")).not.toBeInTheDocument());
+        expect(screen.getByText("ArchiveB")).toBeInTheDocument();
+      } finally {
+        await harness.dispose();
+      }
+    },
+    15_000,
   );
 
   test(
