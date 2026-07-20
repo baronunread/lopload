@@ -2,6 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { Badge, Meter } from "@cloudflare/kumo";
 import { LazyMotion, m, domAnimation } from "motion/react";
 import {
+  BroomIcon,
   CaretDownIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -449,7 +450,7 @@ export function TransferWidget({
   liftedForUpdateBanner,
 }: TransferWidgetProps) {
   const services = useServices();
-  const { moves: allMoves, dismissMove } = useMoveProgress();
+  const { moves: allMoves, dismissMove, clearCompleted } = useMoveProgress();
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState(false);
@@ -518,6 +519,21 @@ export function TransferWidget({
     });
     for (const t of visibleTransfers) void services.engine.dismiss(t.id);
     for (const m of visibleMoves) dismissMove(m.moveId);
+  }
+
+  // Sweeps away only the rows that are done with (finished or failed) and
+  // leaves anything still running, unlike clearAll's close button which wipes
+  // everything. Settled transfers are anything not in an in-flight kind.
+  const settledTransfers = visibleTransfers.filter((t) => !IN_FLIGHT_KINDS.has(t.state.kind));
+  const hasProcessed = settledTransfers.length > 0 || visibleMoves.some((m) => m.status !== "moving");
+  function clearProcessed() {
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      for (const t of settledTransfers) next.add(t.id);
+      return next;
+    });
+    for (const t of settledTransfers) void services.engine.dismiss(t.id);
+    clearCompleted();
   }
 
   // Failed count feeds the dock/taskbar badge, per spec. Keyed on the count
@@ -592,6 +608,17 @@ export function TransferWidget({
             <span className="truncate tabular-nums">{title}</span>
           </button>
           <div className="flex flex-shrink-0 items-center gap-2">
+            {hasProcessed && (
+              <button
+                type="button"
+                aria-label="Clear finished"
+                title="Clear finished"
+                className="relative flex h-8 w-8 items-center justify-center rounded-full text-kumo-subtle transition-transform after:absolute after:-inset-1 hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96]"
+                onClick={clearProcessed}
+              >
+                <BroomIcon size={16} />
+              </button>
+            )}
             <button
               type="button"
               aria-label={collapsed ? "Expand transfers" : "Collapse transfers"}
