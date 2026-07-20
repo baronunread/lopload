@@ -84,6 +84,41 @@ describe("move progress in the transfer widget", () => {
   );
 
   test(
+    "counts up the finished items toward the batch total, not the in-flight ones",
+    async () => {
+      const harness = await createServiceHarness({
+        wrapFetch: (inner) =>
+          faultyFetch(inner, [
+            // Only FolderB's copy stalls, so FolderA runs to completion while
+            // FolderB stays in flight.
+            { urlContains: "ArchiveB", method: "PUT", action: { kind: "stall", ms: 10_000 } },
+          ]),
+      });
+      try {
+        await saveConnection(harness);
+        for (const folder of ["FolderA", "FolderB"]) {
+          await harness.bucket.put(`${folder}/f0.bin`, new Uint8Array([0]));
+        }
+
+        renderWidget(harness);
+
+        // Simulates a bulk move of 5 items — batchTotal (5) is passed straight
+        // through the way RemoteBrowser's handleMove does, ahead of the
+        // concurrency-limited pool starting the rest. One completes and one is
+        // still in flight, so the title shows "1 of 5" — only the finished
+        // item counts, not the one still processing.
+        await harness.services.browser.move(CONN, "FolderA/", "ArchiveA/", undefined, 5);
+        void harness.services.browser.move(CONN, "FolderB/", "ArchiveB/", undefined, 5);
+
+        await screen.findByText("Moved 1 of 5 items…");
+      } finally {
+        await harness.dispose();
+      }
+    },
+    15_000,
+  );
+
+  test(
     "the broom sweeps away finished rows but leaves in-flight ones",
     async () => {
       const harness = await createServiceHarness({
