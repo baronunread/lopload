@@ -9,7 +9,7 @@
 // What each member replaces, and why it has to be replaced at all:
 //   fetch     - the Rust fast path needs a webview; native fetch is the same
 //               protocol over the same wire (the Rust path is covered instead
-//               by the in-app self-test and by cargo test).
+//               by the in-app self-test and by cinder test).
 //   keychain  - the OS keychain prompts, and would pollute the real login
 //               keychain with test entries.
 //   stores    - SQLite here is @tauri-apps/plugin-sql, an IPC call.

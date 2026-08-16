@@ -4,12 +4,15 @@ Thanks for your interest! Bug reports, feature requests, and PRs are all welcome
 
 ## Development setup
 
-You'll need [Bun](https://bun.sh) and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform (Rust toolchain, plus platform WebView deps on Linux).
+You'll need [Bun](https://bun.sh), [Cinder](https://github.com/CapSoftware/cinder), and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform (Rust toolchain, plus platform WebView deps on Linux). Cinder currently has no stable release, so bootstrap the pinned revision once with Cargo:
 
 ```sh
+cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 bun install
 bun run tauri dev        # desktop app with hot-reload
 ```
+
+Tauri uses Cinder as its Rust runner. Cargo remains the source of truth underneath it, and Cinder safely delegates unsupported commands and release builds back to Cargo.
 
 Everything uses `bun` — never `npm`/`npx`/`node`.
 

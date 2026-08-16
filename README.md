@@ -32,7 +32,10 @@
 
 ### Quick start
 
+Install [Cinder](https://github.com/CapSoftware/cinder) once after the Tauri prerequisites. Cinder is not yet distributed as a stable release, so Lopload pins the revision it uses:
+
 ```bash
+cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 bun install
 bun run tauri dev
 ```

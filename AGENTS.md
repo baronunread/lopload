@@ -5,6 +5,7 @@ Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
 ## Quick start
 
 ```sh
+cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder  # one-time bootstrap
 bun install
 bun run tauri dev       # desktop app with hot-reload
 bun run dev              # Vite only, browser tab — shows a "requires the desktop app" notice
@@ -111,7 +112,7 @@ that silently passes without its storage backend is worse than no suite at all.
 `tests/unit/` is now only genuinely pure functions (error classification, MD5,
 tuning, update policy, sort/filter, trash key parsing). No mocks, no I/O.
 
-Rust tests: `cd src-tauri && cargo test` (keychain tests that touch the real OS
+Rust tests: `cd src-tauri && cinder test` (keychain tests that touch the real OS
 keychain are `#[ignore]`). These run in CI.
 
 ## Building for production

@@ -34,6 +34,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Cinder
+        run: cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
+
       # Caches ~/.cargo and src-tauri/target across runs. Tag builds restore
       # caches saved on the default branch, so warm the cache by running this
       # workflow via workflow_dispatch on main after big dependency changes.

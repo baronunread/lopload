@@ -53,6 +53,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Cinder
+        run: cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
+
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -66,6 +69,6 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: cargo test
+      - name: Cinder test
         working-directory: src-tauri
-        run: cargo test
+        run: cinder test
