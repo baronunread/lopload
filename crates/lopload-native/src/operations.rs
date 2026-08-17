@@ -26,6 +26,21 @@ pub struct TrashItem {
 struct ObjectRef {
     key: String,
     size: u64,
+    modified: Option<i64>,
+}
+
+pub fn folder_info(
+    connection: &StorageConnection,
+    prefix: &str,
+) -> Result<(u64, Option<i64>), String> {
+    let client = s3::client(connection)?;
+    s3::runtime()?.block_on(async {
+        let objects = list_objects(&client, connection, prefix).await?;
+        Ok((
+            objects.iter().map(|object| object.size).sum(),
+            objects.iter().filter_map(|object| object.modified).max(),
+        ))
+    })
 }
 
 pub fn rename_file(
@@ -282,6 +297,7 @@ async fn copy_key(
         &ObjectRef {
             key: from_key.to_string(),
             size,
+            modified: None,
         },
         to_key,
     )
@@ -437,6 +453,7 @@ async fn list_objects(
                         .size()
                         .and_then(|size| u64::try_from(size).ok())
                         .unwrap_or_default(),
+                    modified: object.last_modified().map(|date| date.secs() * 1000),
                 });
             }
         }

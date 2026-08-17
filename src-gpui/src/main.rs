@@ -13,8 +13,8 @@ use lopload_native::{
     NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
     list_connections,
     operations::{
-        TrashItem, delete_trash_item, empty_trash, list_trash, move_to_trash, rename_file,
-        rename_folder, restore_trash_item, share_link,
+        TrashItem, delete_trash_item, empty_trash, folder_info, list_trash, move_to_trash,
+        rename_file, rename_folder, restore_trash_item, share_link,
     },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
@@ -75,6 +75,8 @@ struct LoploadApp {
     pending_delete: Option<TrashItem>,
     confirm_empty_trash: bool,
     operation_status: Option<String>,
+    info_entry: Option<RemoteEntry>,
+    info_loading: bool,
     tuning: TransferTuning,
     auto_update_enabled: bool,
     default_download_dir: Option<String>,
@@ -135,6 +137,8 @@ impl LoploadApp {
             pending_delete: None,
             confirm_empty_trash: false,
             operation_status: None,
+            info_entry: None,
+            info_loading: false,
             tuning,
             auto_update_enabled,
             default_download_dir,
@@ -393,6 +397,40 @@ impl LoploadApp {
                         Ok(link) => {
                             cx.write_to_clipboard(ClipboardItem::new_string(link));
                             this.operation_status = Some("Link copied — valid for 24 hours".into());
+                        }
+                        Err(error) => this.operation_status = Some(error),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn show_info(&mut self, mut entry: RemoteEntry, cx: &mut Context<Self>) {
+        self.info_entry = Some(entry.clone());
+        if !matches!(entry.kind, RemoteEntryKind::Folder) {
+            cx.notify();
+            return;
+        }
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        self.info_loading = true;
+        let prefix = entry.key.clone();
+        let operation = cx
+            .background_executor()
+            .spawn(async move { folder_info(&connection, &prefix) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.info_loading = false;
+                    match result {
+                        Ok((size, modified)) => {
+                            entry.size = Some(size);
+                            entry.last_modified = modified;
+                            this.info_entry = Some(entry);
                         }
                         Err(error) => this.operation_status = Some(error),
                     }
@@ -1204,6 +1242,7 @@ impl LoploadApp {
         let pending_trash = self.pending_trash.clone();
         let pending_rename = self.pending_rename.clone();
         let operation_status = self.operation_status.clone();
+        let info_entry = self.info_entry.clone();
         let status = match &self.browser_status {
             BrowserStatus::Idle if entries.is_empty() => Some("This folder is empty".to_string()),
             BrowserStatus::Idle => None,
@@ -1345,6 +1384,58 @@ impl LoploadApp {
                         .bg(rgb(0xfff4d8))
                         .text_color(rgb(0x6e5520))
                         .child(status),
+                )
+            })
+            .when_some(info_entry, |browser, entry| {
+                browser.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_4()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(rgb(0xe3def2))
+                        .bg(rgb(0xffffff))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child(entry.name))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(0x766d91))
+                                        .child(format!("Location: Home / {}", entry.key)),
+                                ),
+                        )
+                        .child(div().text_sm().child(if self.info_loading {
+                            "Calculating…".into()
+                        } else {
+                            entry.size.map(format_bytes).unwrap_or_else(|| "—".into())
+                        }))
+                        .child(
+                            div().text_sm().child(
+                                entry
+                                    .last_modified
+                                    .map(format_date)
+                                    .unwrap_or_else(|| "—".into()),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .id("close-info")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(0xd4cee8))
+                                .px_3()
+                                .py_2()
+                                .child("Close")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.info_entry = None;
+                                    cx.notify();
+                                })),
+                        ),
                 )
             })
             .when_some(pending_trash, |browser, entry| {
@@ -1658,6 +1749,7 @@ impl LoploadApp {
                         let shareable = entry.clone();
                         let trashable = entry.clone();
                         let renameable = entry.clone();
+                        let inspectable = entry.clone();
                         div()
                             .id(("entry", index))
                             .flex()
@@ -1675,6 +1767,21 @@ impl LoploadApp {
                                 "·"
                             }))
                             .child(div().flex_1().child(entry.name))
+                            .child(
+                                div()
+                                    .id(("info-entry", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_3()
+                                    .py_1()
+                                    .child("Info")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.show_info(inspectable.clone(), cx);
+                                    })),
+                            )
                             .child(
                                 div()
                                     .text_sm()
