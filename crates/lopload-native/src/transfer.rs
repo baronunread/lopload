@@ -896,9 +896,9 @@ fn persist(transfer: &Transfer) -> Result<(), String> {
     open_database()?
         .execute(
             "INSERT INTO transfers
-             (id, connection_id, remote_key, local_path, size, part_size, upload_id,
+             (id, connection_id, key, remote_key, local_path, size, part_size, upload_id,
               direction, state, error_class, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET state = excluded.state,
                upload_id = excluded.upload_id, error_class = excluded.error_class,
                updated_at = excluded.updated_at",

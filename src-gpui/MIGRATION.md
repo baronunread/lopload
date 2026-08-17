@@ -11,6 +11,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Native Home → Add storage navigation and application state
 - Native connection form with masked secret entry and validation
 - SQLite connection metadata with credentials stored only in the OS keychain
+- In-place reuse of the shipped Tauri metadata database, including lossless `key`/`remote_key` transfer-schema migration
 - Shared native keychain crate used by both the GPUI and Tauri targets
 - Complete native connection schema, connection removal, and last-folder persistence
 - Connection editing, optional credential replacement, and live connection testing

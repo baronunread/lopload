@@ -8,8 +8,8 @@ pub mod settings;
 #[cfg(feature = "s3")]
 pub mod transfer;
 
-#[cfg(feature = "storage")]
-use directories::ProjectDirs;
+#[cfg(all(feature = "storage", not(test)))]
+use directories::BaseDirs;
 #[cfg(feature = "storage")]
 use rusqlite::{Connection as Database, params};
 #[cfg(feature = "storage")]
@@ -90,7 +90,7 @@ pub fn list_connections() -> Result<Vec<StorageConnection>, String> {
     let database = open_database()?;
     let mut statement = database
         .prepare(
-            "SELECT id, name, endpoint, bucket, region, last_prefix, created_at
+            "SELECT id, name, endpoint, bucket, COALESCE(region, 'auto'), last_prefix, created_at
              FROM connections ORDER BY created_at, name COLLATE NOCASE",
         )
         .map_err(|error| error.to_string())?;
@@ -228,7 +228,7 @@ fn connection_by_id(
 ) -> Result<Option<StorageConnection>, String> {
     let mut statement = database
         .prepare(
-            "SELECT id, name, endpoint, bucket, region, last_prefix, created_at
+            "SELECT id, name, endpoint, bucket, COALESCE(region, 'auto'), last_prefix, created_at
              FROM connections WHERE id = ?1",
         )
         .map_err(|error| error.to_string())?;
@@ -273,11 +273,17 @@ fn insert_connection(connection: &StorageConnection) -> Result<(), String> {
 
 #[cfg(feature = "storage")]
 fn open_database() -> Result<Database, String> {
-    let project = ProjectDirs::from("com", "Lopload", "Lopload")
-        .ok_or_else(|| "Could not find the application data directory".to_string())?;
-    fs::create_dir_all(project.data_dir()).map_err(|error| error.to_string())?;
-    let database = Database::open(project.data_dir().join("lopload-gpui.sqlite"))
-        .map_err(|error| error.to_string())?;
+    let path = database_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let database = Database::open(path).map_err(|error| error.to_string())?;
+    migrate_database(&database)?;
+    Ok(database)
+}
+
+#[cfg(feature = "storage")]
+fn migrate_database(database: &Database) -> Result<(), String> {
     database
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS connections (
@@ -292,6 +298,7 @@ fn open_database() -> Result<Database, String> {
             CREATE TABLE IF NOT EXISTS transfers (
                 id TEXT PRIMARY KEY,
                 connection_id TEXT NOT NULL,
+                key TEXT NOT NULL DEFAULT '',
                 remote_key TEXT NOT NULL,
                 local_path TEXT NOT NULL,
                 size INTEGER NOT NULL,
@@ -326,8 +333,48 @@ fn open_database() -> Result<Database, String> {
         "part_size",
         "INTEGER NOT NULL DEFAULT 8388608",
     )?;
+    ensure_table_column(&database, "transfers", "key", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_table_column(
+        &database,
+        "transfers",
+        "remote_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     ensure_table_column(&database, "transfers", "upload_id", "TEXT")?;
-    Ok(database)
+    ensure_table_column(
+        &database,
+        "transfers",
+        "direction",
+        "TEXT NOT NULL DEFAULT 'upload'",
+    )?;
+    database
+        .execute(
+            "UPDATE transfers SET remote_key = key WHERE remote_key = '' AND key != ''",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    database
+        .execute(
+            "UPDATE transfers SET key = remote_key WHERE key = '' AND remote_key != ''",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn database_path() -> Result<std::path::PathBuf, String> {
+    let base = BaseDirs::new()
+        .ok_or_else(|| "Could not find the application data directory".to_string())?;
+    Ok(base.data_dir().join("com.lopload").join("lopload.db"))
+}
+
+#[cfg(test)]
+fn database_path() -> Result<std::path::PathBuf, String> {
+    Ok(std::env::temp_dir().join(format!(
+        "lopload-native-tests-{}.sqlite",
+        std::process::id()
+    )))
 }
 
 #[cfg(feature = "storage")]
@@ -393,5 +440,50 @@ mod tests {
             update_connection(input).unwrap_err(),
             "Enter both credential fields or leave both blank"
         );
+    }
+
+    #[test]
+    fn migrates_tauri_transfer_keys_without_losing_resume_state() {
+        let database = Database::open_in_memory().unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE connections (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, endpoint TEXT NOT NULL,
+                    bucket TEXT NOT NULL, region TEXT, last_prefix TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE transfers (
+                    id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, key TEXT NOT NULL,
+                    local_path TEXT NOT NULL, size INTEGER NOT NULL, part_size INTEGER NOT NULL,
+                    upload_id TEXT, state TEXT NOT NULL, error_class TEXT,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                    direction TEXT NOT NULL DEFAULT 'upload'
+                );
+                INSERT INTO transfers VALUES (
+                    'transfer', 'connection', 'folder/file.bin', '/tmp/file.bin',
+                    10, 8388608, 'upload-id', 'failed', 'connection-dropped',
+                    1, 2, 'upload'
+                );",
+            )
+            .unwrap();
+
+        migrate_database(&database).unwrap();
+
+        let (key, remote_key, upload_id) = database
+            .query_row(
+                "SELECT key, remote_key, upload_id FROM transfers WHERE id = 'transfer'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(key, "folder/file.bin");
+        assert_eq!(remote_key, key);
+        assert_eq!(upload_id.as_deref(), Some("upload-id"));
     }
 }
