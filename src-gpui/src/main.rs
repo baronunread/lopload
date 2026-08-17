@@ -1,8 +1,8 @@
 use chrono::{Local, TimeZone};
 use gpui::{
     App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, ExternalPaths,
-    FontWeight, Image, ImageFormat, Render, Subscription, Window, WindowBounds, WindowOptions, div,
-    img, prelude::*, px, rgb, size,
+    FontWeight, Image, ImageFormat, Render, Rgba, Subscription, Window, WindowAppearance,
+    WindowBounds, WindowOptions, div, img, prelude::*, px, rgb, size,
 };
 use gpui_component::{
     Root,
@@ -37,8 +37,11 @@ use notify_rust::Notification;
 use std::{
     collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
     time::Instant,
 };
+
+static DARK_APPEARANCE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
@@ -88,10 +91,10 @@ impl Render for DraggedEntries {
         };
         div()
             .rounded_lg()
-            .bg(rgb(0x5c4f8f))
+            .bg(accent_color())
             .px_3()
             .py_2()
-            .text_color(rgb(0xffffff))
+            .text_color(on_accent_color())
             .child(label)
     }
 }
@@ -169,6 +172,11 @@ impl LoploadApp {
                 cx.notify();
             }
         });
+        let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
+            DARK_APPEARANCE.store(is_dark_appearance(window), AtomicOrdering::Relaxed);
+            cx.notify();
+        });
+        DARK_APPEARANCE.store(is_dark_appearance(window), AtomicOrdering::Relaxed);
         let first_run = connections.is_empty();
         Self {
             screen: initial_screen(first_run),
@@ -227,7 +235,7 @@ impl LoploadApp {
             new_folder_open: false,
             home_error,
             celebration_connection: None,
-            _subscriptions: vec![filter_subscription],
+            _subscriptions: vec![filter_subscription, appearance_subscription],
         }
     }
 
@@ -1449,11 +1457,11 @@ impl LoploadApp {
                 )
                 .child(
                     div()
-                        .text_color(rgb(0x766d91))
+                        .text_color(subtle_color())
                         .child("Choose a connection or add another one."),
                 )
                 .when_some(self.home_error.clone(), |panel, error| {
-                    panel.child(div().text_sm().text_color(rgb(0xa33b53)).child(error))
+                    panel.child(div().text_sm().text_color(danger_color()).child(error))
                 })
                 .children(
                     connections
@@ -1469,8 +1477,8 @@ impl LoploadApp {
                                 .justify_between()
                                 .rounded_xl()
                                 .border_1()
-                                .border_color(rgb(0xe3def2))
-                                .bg(rgb(0xffffff))
+                                .border_color(border_color())
+                                .bg(surface_color())
                                 .p_4()
                                 .child(
                                     div()
@@ -1483,7 +1491,7 @@ impl LoploadApp {
                                                 .cursor_pointer()
                                                 .rounded_lg()
                                                 .border_1()
-                                                .border_color(rgb(0xd4cee8))
+                                                .border_color(strong_border_color())
                                                 .px_3()
                                                 .py_2()
                                                 .child("Edit")
@@ -1505,7 +1513,7 @@ impl LoploadApp {
                                         .child(
                                             div()
                                                 .text_sm()
-                                                .text_color(rgb(0x766d91))
+                                                .text_color(subtle_color())
                                                 .child(connection.bucket),
                                         ),
                                 )
@@ -1518,7 +1526,7 @@ impl LoploadApp {
                                                 .id(("open-connection", index))
                                                 .cursor_pointer()
                                                 .rounded_lg()
-                                                .bg(rgb(0xeeeafa))
+                                                .bg(tint_color())
                                                 .px_3()
                                                 .py_2()
                                                 .child("Open")
@@ -1532,10 +1540,10 @@ impl LoploadApp {
                                                 .cursor_pointer()
                                                 .rounded_lg()
                                                 .border_1()
-                                                .border_color(rgb(0xe9b9c4))
+                                                .border_color(danger_border_color())
                                                 .px_3()
                                                 .py_2()
-                                                .text_color(rgb(0xa33b53))
+                                                .text_color(danger_color())
                                                 .child("Remove")
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     match delete_connection(&connection.id) {
@@ -1562,10 +1570,10 @@ impl LoploadApp {
                         .id("add-storage")
                         .cursor_pointer()
                         .rounded_lg()
-                        .bg(rgb(0x5c4f8f))
+                        .bg(accent_color())
                         .px_4()
                         .py_2()
-                        .text_color(rgb(0xffffff))
+                        .text_color(on_accent_color())
                         .child("Add storage")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.begin_add_connection(window, cx);
@@ -1591,8 +1599,8 @@ impl LoploadApp {
                     .w(px(560.0))
                     .rounded_xl()
                     .border_1()
-                    .border_color(rgb(0xe3def2))
-                    .bg(rgb(0xffffff))
+                    .border_color(border_color())
+                    .bg(surface_color())
                     .p_8()
                     .child(div().text_2xl().child("✨"))
                     .child(
@@ -1603,7 +1611,7 @@ impl LoploadApp {
                     )
                     .child(
                         div()
-                            .text_color(rgb(0x766d91))
+                            .text_color(subtle_color())
                             .text_center()
                             .child("You can upload, organize, and download files now."),
                     )
@@ -1612,10 +1620,10 @@ impl LoploadApp {
                             .id("start-browsing")
                             .cursor_pointer()
                             .rounded_lg()
-                            .bg(rgb(0x5c4f8f))
+                            .bg(accent_color())
                             .px_5()
                             .py_2()
-                            .text_color(rgb(0xffffff))
+                            .text_color(on_accent_color())
                             .child("Start browsing")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(connection) = connection.clone() {
@@ -1644,8 +1652,8 @@ impl LoploadApp {
                     .p_8()
                     .rounded_xl()
                     .border_1()
-                    .border_color(rgb(0xe3def2))
-                    .bg(rgb(0xffffff))
+                    .border_color(border_color())
+                    .bg(surface_color())
                     .shadow_lg()
                     .child(
                         div()
@@ -1655,7 +1663,7 @@ impl LoploadApp {
                     )
                     .child(
                         div()
-                            .text_color(rgb(0x766d91))
+                            .text_color(subtle_color())
                             .child(if editing {
                                 "Leave both credential fields blank to keep the credentials already in your OS keychain."
                             } else {
@@ -1695,10 +1703,10 @@ impl LoploadApp {
                             ),
                     )
                     .when_some(self.form_error.clone(), |panel, error| {
-                        panel.child(div().text_sm().text_color(rgb(0xa33b53)).child(error))
+                        panel.child(div().text_sm().text_color(danger_color()).child(error))
                     })
                     .when_some(self.connection_test_status.clone(), |panel, status| {
-                        panel.child(div().text_sm().text_color(rgb(0x5c4f8f)).child(status))
+                        panel.child(div().text_sm().text_color(accent_color()).child(status))
                     })
                     .child(
                         div()
@@ -1710,7 +1718,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_4()
                                     .py_2()
                                     .child("Back")
@@ -1726,7 +1734,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_4()
                                     .py_2()
                                     .child(if self.testing_connection {
@@ -1745,10 +1753,10 @@ impl LoploadApp {
                                     .id("save-storage")
                                     .cursor_pointer()
                                     .rounded_lg()
-                                    .bg(rgb(0x5c4f8f))
+                                    .bg(accent_color())
                                     .px_4()
                                     .py_2()
-                                    .text_color(rgb(0xffffff))
+                                    .text_color(on_accent_color())
                                     .child("Save storage")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         let name = this.name.read(cx).value().to_string();
@@ -1880,7 +1888,7 @@ impl LoploadApp {
             .flex()
             .flex_col()
             .min_h_0()
-            .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgb(0xeeeafa)))
+            .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(tint_color()))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.start_upload_paths(paths.paths().to_vec(), cx);
             }))
@@ -1892,14 +1900,14 @@ impl LoploadApp {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(rgb(0xe3def2))
+                    .border_color(border_color())
                     .child(
                         div()
                             .id("all-storage")
                             .cursor_pointer()
                             .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0xd4cee8))
+                            .border_color(strong_border_color())
                             .px_3()
                             .py_2()
                             .child("All storage")
@@ -1915,7 +1923,7 @@ impl LoploadApp {
                             .cursor_pointer()
                             .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0xd4cee8))
+                            .border_color(strong_border_color())
                             .px_3()
                             .py_2()
                             .child("Trash")
@@ -1934,7 +1942,7 @@ impl LoploadApp {
                                 .cursor_pointer()
                                 .rounded_lg()
                                 .border_1()
-                                .border_color(rgb(0xd4cee8))
+                                .border_color(strong_border_color())
                                 .px_3()
                                 .py_2()
                                 .child("Up")
@@ -1944,7 +1952,7 @@ impl LoploadApp {
                                     })
                                 })
                                 .drag_over::<DraggedEntries>(|style, _, _, _| {
-                                    style.bg(rgb(0xded7f5)).border_color(rgb(0x5c4f8f))
+                                    style.bg(strong_tint_color()).border_color(accent_color())
                                 })
                                 .on_drop(cx.listener(move |this, drag: &DraggedEntries, _, cx| {
                                     cx.stop_propagation();
@@ -1965,7 +1973,7 @@ impl LoploadApp {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(connection_name),
                             )
-                            .child(div().text_sm().text_color(rgb(0x766d91)).child(
+                            .child(div().text_sm().text_color(subtle_color()).child(
                                 if prefix.is_empty() {
                                     "Home".to_string()
                                 } else {
@@ -1988,7 +1996,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_3()
                                     .py_2()
                                     .child("Download")
@@ -2002,7 +2010,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_3()
                                     .py_2()
                                     .child("Move")
@@ -2016,10 +2024,10 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xe9b9c4))
+                                    .border_color(danger_border_color())
                                     .px_3()
                                     .py_2()
-                                    .text_color(rgb(0xa33b53))
+                                    .text_color(danger_color())
                                     .child("Trash")
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.prepare_bulk_trash(cx)),
@@ -2043,10 +2051,10 @@ impl LoploadApp {
                             .id("upload-files")
                             .cursor_pointer()
                             .rounded_lg()
-                            .bg(rgb(0x5c4f8f))
+                            .bg(accent_color())
                             .px_3()
                             .py_2()
-                            .text_color(rgb(0xffffff))
+                            .text_color(on_accent_color())
                             .child("Upload files")
                             .on_click(cx.listener(|this, _, _, cx| this.start_upload(cx))),
                     )
@@ -2056,7 +2064,7 @@ impl LoploadApp {
                             .cursor_pointer()
                             .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0xd4cee8))
+                            .border_color(strong_border_color())
                             .px_3()
                             .py_2()
                             .child("New folder")
@@ -2071,7 +2079,7 @@ impl LoploadApp {
                             .id("refresh")
                             .cursor_pointer()
                             .rounded_lg()
-                            .bg(rgb(0xeeeafa))
+                            .bg(tint_color())
                             .px_3()
                             .py_2()
                             .child("Refresh")
@@ -2085,8 +2093,8 @@ impl LoploadApp {
                     div()
                         .px_6()
                         .py_2()
-                        .bg(rgb(0xfff4d8))
-                        .text_color(rgb(0x6e5520))
+                        .bg(warning_surface_color())
+                        .text_color(warning_text_color())
                         .child(status),
                 )
             })
@@ -2099,8 +2107,8 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe3def2))
-                        .bg(rgb(0xffffff))
+                        .border_color(border_color())
+                        .bg(surface_color())
                         .child(
                             div()
                                 .flex_1()
@@ -2108,7 +2116,7 @@ impl LoploadApp {
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(rgb(0x766d91))
+                                        .text_color(subtle_color())
                                         .child(format!("Location: Home / {}", entry.key)),
                                 ),
                         )
@@ -2131,7 +2139,7 @@ impl LoploadApp {
                                 .cursor_pointer()
                                 .rounded_lg()
                                 .border_1()
-                                .border_color(rgb(0xd4cee8))
+                                .border_color(strong_border_color())
                                 .px_3()
                                 .py_2()
                                 .child("Close")
@@ -2151,8 +2159,8 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe9b9c4))
-                        .bg(rgb(0xffedf1))
+                        .border_color(danger_border_color())
+                        .bg(danger_surface_color())
                         .child(div().flex_1().child(format!(
                             "Move {pending_bulk_count} selected items to Trash?"
                         )))
@@ -2173,10 +2181,10 @@ impl LoploadApp {
                                 .id("confirm-bulk-trash")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0xa33b53))
+                                .bg(danger_color())
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Move to Trash")
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.confirm_bulk_trash(cx)),
@@ -2193,8 +2201,8 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe3def2))
-                        .bg(rgb(0xffffff))
+                        .border_color(border_color())
+                        .bg(surface_color())
                         .child(
                             div()
                                 .flex()
@@ -2234,7 +2242,7 @@ impl LoploadApp {
                                             .id(("move-destination", index))
                                             .cursor_pointer()
                                             .rounded_lg()
-                                            .bg(rgb(0xeeeafa))
+                                            .bg(tint_color())
                                             .px_3()
                                             .py_2()
                                             .child(if destination.is_empty() {
@@ -2262,8 +2270,8 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe9b9c4))
-                        .bg(rgb(0xffedf1))
+                        .border_color(danger_border_color())
+                        .bg(danger_surface_color())
                         .child(
                             div()
                                 .flex_1()
@@ -2275,7 +2283,7 @@ impl LoploadApp {
                                 .cursor_pointer()
                                 .rounded_lg()
                                 .border_1()
-                                .border_color(rgb(0xd4cee8))
+                                .border_color(strong_border_color())
                                 .px_3()
                                 .py_2()
                                 .child("Cancel")
@@ -2289,10 +2297,10 @@ impl LoploadApp {
                                 .id("confirm-trash")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0xa33b53))
+                                .bg(danger_color())
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Move to Trash")
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.confirm_move_to_trash(cx)),
@@ -2309,7 +2317,7 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe3def2))
+                        .border_color(border_color())
                         .child(
                             div()
                                 .flex_1()
@@ -2318,7 +2326,7 @@ impl LoploadApp {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(rgb(0x766d91))
+                                .text_color(subtle_color())
                                 .child(format!("Current: {}", entry.name)),
                         )
                         .child(
@@ -2327,7 +2335,7 @@ impl LoploadApp {
                                 .cursor_pointer()
                                 .rounded_lg()
                                 .border_1()
-                                .border_color(rgb(0xd4cee8))
+                                .border_color(strong_border_color())
                                 .px_3()
                                 .py_2()
                                 .child("Cancel")
@@ -2341,10 +2349,10 @@ impl LoploadApp {
                                 .id("confirm-rename")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0x5c4f8f))
+                                .bg(accent_color())
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Rename")
                                 .on_click(cx.listener(|this, _, _, cx| this.submit_rename(cx))),
                         ),
@@ -2359,7 +2367,7 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe3def2))
+                        .border_color(border_color())
                         .child(
                             div()
                                 .flex()
@@ -2376,7 +2384,7 @@ impl LoploadApp {
                                         .cursor_pointer()
                                         .rounded_lg()
                                         .border_1()
-                                        .border_color(rgb(0xd4cee8))
+                                        .border_color(strong_border_color())
                                         .px_3()
                                         .py_1()
                                         .child(if transfers_collapsed { "Show" } else { "Hide" })
@@ -2412,12 +2420,12 @@ impl LoploadApp {
                                         .items_center()
                                         .gap_3()
                                         .rounded_lg()
-                                        .bg(rgb(0xeeeafa))
+                                        .bg(tint_color())
                                         .px_3()
                                         .py_2()
                                         .child(
                                             div().flex_1().child(transfer_name(&transfer)).child(
-                                                div().text_sm().text_color(rgb(0x766d91)).child(
+                                                div().text_sm().text_color(subtle_color()).child(
                                                     transfer_state_label(&transfer.state, speed),
                                                 ),
                                             ),
@@ -2430,7 +2438,7 @@ impl LoploadApp {
                                                     .cursor_pointer()
                                                     .rounded_lg()
                                                     .border_1()
-                                                    .border_color(rgb(0xd4cee8))
+                                                    .border_color(strong_border_color())
                                                     .px_3()
                                                     .py_1()
                                                     .child("Cancel")
@@ -2448,10 +2456,10 @@ impl LoploadApp {
                                                     .id(("retry-transfer", index))
                                                     .cursor_pointer()
                                                     .rounded_lg()
-                                                    .bg(rgb(0x5c4f8f))
+                                                    .bg(accent_color())
                                                     .px_3()
                                                     .py_1()
-                                                    .text_color(rgb(0xffffff))
+                                                    .text_color(on_accent_color())
                                                     .child("Retry")
                                                     .on_click(cx.listener(
                                                         move |this, _, _, cx| {
@@ -2482,7 +2490,7 @@ impl LoploadApp {
                                                     .cursor_pointer()
                                                     .rounded_lg()
                                                     .border_1()
-                                                    .border_color(rgb(0xd4cee8))
+                                                    .border_color(strong_border_color())
                                                     .px_3()
                                                     .py_1()
                                                     .child("Dismiss")
@@ -2519,7 +2527,7 @@ impl LoploadApp {
                         .px_6()
                         .py_4()
                         .border_b_1()
-                        .border_color(rgb(0xe3def2))
+                        .border_color(border_color())
                         .child(
                             div().flex_1().child(field(
                                 "Folder name",
@@ -2531,15 +2539,15 @@ impl LoploadApp {
                                 .id("create-folder")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0x5c4f8f))
+                                .bg(accent_color())
                                 .px_4()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Create")
                                 .on_click(cx.listener(|this, _, _, cx| this.submit_folder(cx))),
                         )
                         .when_some(self.folder_error.clone(), |row, error| {
-                            row.child(div().text_sm().text_color(rgb(0xa33b53)).child(error))
+                            row.child(div().text_sm().text_color(danger_color()).child(error))
                         }),
                 )
             })
@@ -2555,7 +2563,7 @@ impl LoploadApp {
                             .items_center()
                             .gap_3()
                             .border_b_1()
-                            .border_color(rgb(0xd4cee8))
+                            .border_color(strong_border_color())
                             .px_4()
                             .py_2()
                             .text_sm()
@@ -2597,7 +2605,7 @@ impl LoploadApp {
                             div()
                                 .p_6()
                                 .text_center()
-                                .text_color(rgb(0x766d91))
+                                .text_color(subtle_color())
                                 .child(message),
                         )
                     })
@@ -2608,10 +2616,10 @@ impl LoploadApp {
                                 .id("reenter-credentials")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0x5c4f8f))
+                                .bg(accent_color())
                                 .px_4()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Re-enter credentials")
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     if let Some(connection) = connection.clone() {
@@ -2646,8 +2654,8 @@ impl LoploadApp {
                             .items_center()
                             .gap_3()
                             .border_b_1()
-                            .border_color(rgb(0xeeeafa))
-                            .bg(rgb(0xffffff))
+                            .border_color(tint_color())
+                            .bg(surface_color())
                             .px_4()
                             .py_3()
                             .on_drag(
@@ -2671,7 +2679,7 @@ impl LoploadApp {
                                                 .size(px(40.0))
                                                 .rounded_lg()
                                                 .border_1()
-                                                .border_color(rgb(0xd4cee8)),
+                                                .border_color(strong_border_color()),
                                         )
                                     })
                                     .when(!has_preview, |cell| {
@@ -2690,7 +2698,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_3()
                                     .py_1()
                                     .child("Move")
@@ -2705,7 +2713,11 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(if selected { 0x5c4f8f } else { 0xd4cee8 }))
+                                    .border_color(if selected {
+                                        accent_color()
+                                    } else {
+                                        strong_border_color()
+                                    })
                                     .px_2()
                                     .py_1()
                                     .child(if selected { "Selected" } else { "Select" })
@@ -2721,7 +2733,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_3()
                                     .py_1()
                                     .child("Info")
@@ -2733,13 +2745,17 @@ impl LoploadApp {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(0x766d91))
+                                    .text_color(subtle_color())
                                     .child(entry.size.map(format_bytes).unwrap_or_default()),
                             )
                             .child(
-                                div().w(px(90.0)).text_sm().text_color(rgb(0x766d91)).child(
-                                    entry.last_modified.map(format_date).unwrap_or_default(),
-                                ),
+                                div()
+                                    .w(px(90.0))
+                                    .text_sm()
+                                    .text_color(subtle_color())
+                                    .child(
+                                        entry.last_modified.map(format_date).unwrap_or_default(),
+                                    ),
                             )
                             .when(!folder, |row| {
                                 row.child(
@@ -2748,7 +2764,7 @@ impl LoploadApp {
                                         .cursor_pointer()
                                         .rounded_lg()
                                         .border_1()
-                                        .border_color(rgb(0xd4cee8))
+                                        .border_color(strong_border_color())
                                         .px_3()
                                         .py_1()
                                         .child("Download")
@@ -2764,7 +2780,7 @@ impl LoploadApp {
                                         .cursor_pointer()
                                         .rounded_lg()
                                         .border_1()
-                                        .border_color(rgb(0xd4cee8))
+                                        .border_color(strong_border_color())
                                         .px_3()
                                         .py_1()
                                         .child("Copy link")
@@ -2779,7 +2795,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_3()
                                     .py_1()
                                     .child("Rename")
@@ -2798,10 +2814,10 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xe9b9c4))
+                                    .border_color(danger_border_color())
                                     .px_3()
                                     .py_1()
-                                    .text_color(rgb(0xa33b53))
+                                    .text_color(danger_color())
                                     .child("Trash")
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
@@ -2816,7 +2832,7 @@ impl LoploadApp {
                                     })
                                 })
                                 .drag_over::<DraggedEntries>(|style, _, _, _| {
-                                    style.bg(rgb(0xeeeafa)).border_color(rgb(0x5c4f8f))
+                                    style.bg(tint_color()).border_color(accent_color())
                                 })
                                 .on_drop(cx.listener(move |this, drag: &DraggedEntries, _, cx| {
                                     cx.stop_propagation();
@@ -2854,14 +2870,14 @@ impl LoploadApp {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(rgb(0xe3def2))
+                    .border_color(border_color())
                     .child(
                         div()
                             .id("back-to-storage")
                             .cursor_pointer()
                             .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0xd4cee8))
+                            .border_color(strong_border_color())
                             .px_3()
                             .py_2()
                             .child("Back")
@@ -2884,10 +2900,10 @@ impl LoploadApp {
                                 .cursor_pointer()
                                 .rounded_lg()
                                 .border_1()
-                                .border_color(rgb(0xe9b9c4))
+                                .border_color(danger_border_color())
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0xa33b53))
+                                .text_color(danger_color())
                                 .child("Empty Trash")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.confirm_empty_trash = true;
@@ -2901,8 +2917,8 @@ impl LoploadApp {
                     div()
                         .px_6()
                         .py_2()
-                        .bg(rgb(0xfff4d8))
-                        .text_color(rgb(0x6e5520))
+                        .bg(warning_surface_color())
+                        .text_color(warning_text_color())
                         .child(message),
                 )
             })
@@ -2914,7 +2930,7 @@ impl LoploadApp {
                         .gap_3()
                         .px_6()
                         .py_4()
-                        .bg(rgb(0xffedf1))
+                        .bg(danger_surface_color())
                         .child(
                             div()
                                 .flex_1()
@@ -2937,10 +2953,10 @@ impl LoploadApp {
                                 .id("confirm-empty-trash")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0xa33b53))
+                                .bg(danger_color())
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Delete permanently")
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.permanently_empty_trash(cx)),
@@ -2956,7 +2972,7 @@ impl LoploadApp {
                         .gap_3()
                         .px_6()
                         .py_4()
-                        .bg(rgb(0xffedf1))
+                        .bg(danger_surface_color())
                         .child(
                             div()
                                 .flex_1()
@@ -2979,10 +2995,10 @@ impl LoploadApp {
                                 .id("confirm-delete-trash")
                                 .cursor_pointer()
                                 .rounded_lg()
-                                .bg(rgb(0xa33b53))
+                                .bg(danger_color())
                                 .px_3()
                                 .py_2()
-                                .text_color(rgb(0xffffff))
+                                .text_color(on_accent_color())
                                 .child("Delete permanently")
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.permanently_delete(cx)),
@@ -3004,7 +3020,7 @@ impl LoploadApp {
                             div()
                                 .p_6()
                                 .text_center()
-                                .text_color(rgb(0x766d91))
+                                .text_color(subtle_color())
                                 .child("Trash is empty"),
                         )
                     })
@@ -3016,8 +3032,8 @@ impl LoploadApp {
                             .items_center()
                             .gap_3()
                             .border_b_1()
-                            .border_color(rgb(0xeeeafa))
-                            .bg(rgb(0xffffff))
+                            .border_color(tint_color())
+                            .bg(surface_color())
                             .px_4()
                             .py_3()
                             .child(div().w(px(28.0)).child(if item.is_folder {
@@ -3029,7 +3045,7 @@ impl LoploadApp {
                                 div().flex_1().child(item.name).child(
                                     div()
                                         .text_sm()
-                                        .text_color(rgb(0x766d91))
+                                        .text_color(subtle_color())
                                         .child(format_bytes(item.size)),
                                 ),
                             )
@@ -3038,10 +3054,10 @@ impl LoploadApp {
                                     .id(("restore-trash", index))
                                     .cursor_pointer()
                                     .rounded_lg()
-                                    .bg(rgb(0x5c4f8f))
+                                    .bg(accent_color())
                                     .px_3()
                                     .py_2()
-                                    .text_color(rgb(0xffffff))
+                                    .text_color(on_accent_color())
                                     .child("Restore")
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.restore_from_trash(restorable.clone(), cx);
@@ -3053,10 +3069,10 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xe9b9c4))
+                                    .border_color(danger_border_color())
                                     .px_3()
                                     .py_2()
-                                    .text_color(rgb(0xa33b53))
+                                    .text_color(danger_color())
                                     .child("Delete now")
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.pending_delete = Some(deletable.clone());
@@ -3087,8 +3103,8 @@ impl LoploadApp {
                     .gap_5()
                     .rounded_xl()
                     .border_1()
-                    .border_color(rgb(0xe3def2))
-                    .bg(rgb(0xffffff))
+                    .border_color(border_color())
+                    .bg(surface_color())
                     .p_8()
                     .child(
                         div()
@@ -3106,8 +3122,8 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
-                                    .when(selected, |button| button.bg(rgb(0xeeeafa)))
+                                    .border_color(strong_border_color())
+                                    .when(selected, |button| button.bg(tint_color()))
                                     .px_4()
                                     .py_2()
                                     .child(match preset {
@@ -3121,7 +3137,7 @@ impl LoploadApp {
                             },
                         ),
                     ))
-                    .child(div().text_sm().text_color(rgb(0x766d91)).child(format!(
+                    .child(div().text_sm().text_color(subtle_color()).child(format!(
                         "{} files at once · {} upload parts · {} download connections",
                         self.tuning.concurrent_files,
                         self.tuning.upload_parts_in_flight,
@@ -3137,7 +3153,7 @@ impl LoploadApp {
                                 div()
                                     .flex_1()
                                     .text_sm()
-                                    .text_color(rgb(0x766d91))
+                                    .text_color(subtle_color())
                                     .child(download_dir),
                             )
                             .child(
@@ -3146,7 +3162,7 @@ impl LoploadApp {
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
-                                    .border_color(rgb(0xd4cee8))
+                                    .border_color(strong_border_color())
                                     .px_3()
                                     .py_2()
                                     .child("Choose folder")
@@ -3187,18 +3203,18 @@ impl LoploadApp {
                                     .id("toggle-auto-update")
                                     .cursor_pointer()
                                     .rounded_lg()
-                                    .bg(rgb(if self.auto_update_enabled {
-                                        0x5c4f8f
+                                    .bg(if self.auto_update_enabled {
+                                        accent_color()
                                     } else {
-                                        0xeeeafa
-                                    }))
+                                        tint_color()
+                                    })
                                     .px_4()
                                     .py_2()
-                                    .text_color(rgb(if self.auto_update_enabled {
-                                        0xffffff
+                                    .text_color(if self.auto_update_enabled {
+                                        on_accent_color()
                                     } else {
-                                        0x29243a
-                                    }))
+                                        text_color()
+                                    })
                                     .child(if self.auto_update_enabled {
                                         "On"
                                     } else {
@@ -3214,17 +3230,17 @@ impl LoploadApp {
                             ),
                     )
                     .when_some(self.settings_status.clone(), |panel, status| {
-                        panel.child(div().text_sm().text_color(rgb(0x5c4f8f)).child(status))
+                        panel.child(div().text_sm().text_color(accent_color()).child(status))
                     })
                     .child(
                         div()
                             .id("close-settings")
                             .cursor_pointer()
                             .rounded_lg()
-                            .bg(rgb(0x5c4f8f))
+                            .bg(accent_color())
                             .px_4()
                             .py_2()
-                            .text_color(rgb(0xffffff))
+                            .text_color(on_accent_color())
                             .child("Done")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.screen = Screen::Home;
@@ -3236,7 +3252,8 @@ impl LoploadApp {
 }
 
 impl Render for LoploadApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        DARK_APPEARANCE.store(is_dark_appearance(window), AtomicOrdering::Relaxed);
         let content = match self.screen {
             Screen::Home => self.render_home(cx).into_any_element(),
             Screen::AddStorage => self.render_add_storage(cx).into_any_element(),
@@ -3250,8 +3267,8 @@ impl Render for LoploadApp {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(0xf7f5ff))
-            .text_color(rgb(0x29243a))
+            .bg(canvas_color())
+            .text_color(text_color())
             .child(
                 div()
                     .flex()
@@ -3260,8 +3277,8 @@ impl Render for LoploadApp {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(rgb(0xe3def2))
-                    .bg(rgb(0xffffff))
+                    .border_color(border_color())
+                    .bg(surface_color())
                     .child(
                         div()
                             .text_xl()
@@ -3274,7 +3291,7 @@ impl Render for LoploadApp {
                             .cursor_pointer()
                             .rounded_lg()
                             .border_1()
-                            .border_color(rgb(0xd4cee8))
+                            .border_color(strong_border_color())
                             .px_3()
                             .py_2()
                             .child("Settings")
@@ -3296,6 +3313,81 @@ fn field(label: &'static str, input: impl IntoElement) -> impl IntoElement {
         .gap_2()
         .child(div().text_sm().child(label))
         .child(input)
+}
+
+fn is_dark_appearance(window: &Window) -> bool {
+    matches!(
+        window.appearance(),
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    )
+}
+
+fn themed_color(light: u32, dark: u32) -> Rgba {
+    rgb(if DARK_APPEARANCE.load(AtomicOrdering::Relaxed) {
+        dark
+    } else {
+        light
+    })
+}
+
+fn canvas_color() -> Rgba {
+    themed_color(0xf7f5ff, 0x181521)
+}
+
+fn surface_color() -> Rgba {
+    themed_color(0xffffff, 0x211d2e)
+}
+
+fn text_color() -> Rgba {
+    themed_color(0x29243a, 0xf4f0ff)
+}
+
+fn subtle_color() -> Rgba {
+    themed_color(0x766d91, 0xb6accd)
+}
+
+fn border_color() -> Rgba {
+    themed_color(0xe3def2, 0x3c354f)
+}
+
+fn strong_border_color() -> Rgba {
+    themed_color(0xd4cee8, 0x514865)
+}
+
+fn accent_color() -> Rgba {
+    themed_color(0x5c4f8f, 0xa998e8)
+}
+
+fn tint_color() -> Rgba {
+    themed_color(0xeeeafa, 0x322a48)
+}
+
+fn strong_tint_color() -> Rgba {
+    themed_color(0xded7f5, 0x473c66)
+}
+
+fn danger_color() -> Rgba {
+    themed_color(0xa33b53, 0xff9caf)
+}
+
+fn danger_border_color() -> Rgba {
+    themed_color(0xe9b9c4, 0x774757)
+}
+
+fn danger_surface_color() -> Rgba {
+    themed_color(0xffedf1, 0x3a202a)
+}
+
+fn warning_surface_color() -> Rgba {
+    themed_color(0xfff4d8, 0x3b301c)
+}
+
+fn warning_text_color() -> Rgba {
+    themed_color(0x6e5520, 0xf4d38a)
+}
+
+fn on_accent_color() -> Rgba {
+    rgb(0xffffff)
 }
 
 fn format_bytes(bytes: u64) -> String {
