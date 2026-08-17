@@ -9,7 +9,8 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{Read, Seek, SeekFrom},
+    fs::OpenOptions,
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -96,6 +97,47 @@ pub fn upload_file(
     upload_file_with_client(
         &client, connection, local_path, remote_key, control, on_update,
     )
+}
+
+pub fn resume_upload(
+    connection: &StorageConnection,
+    transfer: Transfer,
+    control: &TransferControl,
+    on_update: impl FnMut(Transfer),
+) -> Result<Transfer, String> {
+    let client = s3::client(connection)?;
+    resume_upload_with_client(&client, connection, transfer, control, on_update)
+}
+
+fn resume_upload_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    mut transfer: Transfer,
+    control: &TransferControl,
+    mut on_update: impl FnMut(Transfer),
+) -> Result<Transfer, String> {
+    if !matches!(transfer.direction, TransferDirection::Upload)
+        || transfer.upload_id.is_none()
+        || !matches!(
+            transfer.state,
+            TransferState::Queued
+                | TransferState::Sending { .. }
+                | TransferState::Checking
+                | TransferState::Failed { .. }
+        )
+    {
+        return Err("This transfer cannot be resumed".into());
+    }
+    transfer.state = TransferState::Queued;
+    transfer.updated_at = now()?;
+    persist(&transfer)?;
+    emit(&transfer, &mut on_update);
+    transition(
+        &mut transfer,
+        TransferState::Sending { percent: 0.0 },
+        &mut on_update,
+    )?;
+    upload_multipart(client, connection, transfer, control, on_update)
 }
 
 fn upload_file_with_client(
@@ -218,7 +260,7 @@ fn upload_multipart(
         if completed.iter().any(|part| part.part_number == part_number) {
             continue;
         }
-        ensure_not_cancelled(&transfer, control)?;
+        ensure_multipart_not_cancelled(client, connection, &transfer, &upload_id, control)?;
         let length = part_length(transfer.size, transfer.part_size, part_number);
         let offset = (part_number as u64 - 1) * transfer.part_size;
         if file.seek(SeekFrom::Start(offset)).is_err() {
@@ -244,6 +286,7 @@ fn upload_multipart(
                 return fail(transfer, classify_error(&error.to_string()), &mut on_update);
             }
         };
+        ensure_multipart_not_cancelled(client, connection, &transfer, &upload_id, control)?;
         let part = TransferPart {
             transfer_id: transfer.id.clone(),
             part_number,
@@ -263,7 +306,7 @@ fn upload_multipart(
     }
 
     completed.sort_by_key(|part| part.part_number);
-    ensure_not_cancelled(&transfer, control)?;
+    ensure_multipart_not_cancelled(client, connection, &transfer, &upload_id, control)?;
     let parts = completed
         .iter()
         .map(|part| {
@@ -363,6 +406,9 @@ fn download_file_with_client(
         TransferState::Sending { percent: 0.0 },
         &mut on_update,
     )?;
+    if expected_size >= MULTIPART_THRESHOLD {
+        return download_ranged(client, connection, transfer, control, on_update);
+    }
     let result = s3::runtime()?.block_on(async {
         let output = client
             .get_object()
@@ -403,13 +449,163 @@ fn download_file_with_client(
 
     let temporary = temporary_path(destination);
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|_| "The destination folder is unavailable")?;
+        if fs::create_dir_all(parent).is_err() {
+            return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+        }
     }
     if fs::write(&temporary, &bytes).is_err() {
         return fail(transfer, ErrorClass::StorageFull, &mut on_update);
     }
-    if fs::rename(&temporary, destination).is_err() {
+    if replace_file(&temporary, destination).is_err() {
         let _ = fs::remove_file(&temporary);
+        return fail(transfer, ErrorClass::Unknown, &mut on_update);
+    }
+    transition(&mut transfer, TransferState::Downloaded, &mut on_update)?;
+    Ok(transfer)
+}
+
+fn download_ranged(
+    client: &Client,
+    connection: &StorageConnection,
+    mut transfer: Transfer,
+    control: &TransferControl,
+    mut on_update: impl FnMut(Transfer),
+) -> Result<Transfer, String> {
+    let head = s3::runtime()?.block_on(
+        client
+            .head_object()
+            .bucket(&connection.bucket)
+            .key(&transfer.remote_key)
+            .send(),
+    );
+    let head = match head {
+        Ok(head) => head,
+        Err(error) => {
+            return fail(transfer, classify_error(&error.to_string()), &mut on_update);
+        }
+    };
+    let Some(total_size) = head
+        .content_length()
+        .and_then(|size| u64::try_from(size).ok())
+    else {
+        return fail(transfer, ErrorClass::Verification, &mut on_update);
+    };
+    if transfer.size > 0 && transfer.size != total_size {
+        return fail(transfer, ErrorClass::Verification, &mut on_update);
+    }
+    transfer.size = total_size;
+    let etag = head
+        .e_tag()
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string();
+    let temporary = temporary_path(Path::new(&transfer.local_path));
+    if let Some(parent) = temporary.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+        }
+    }
+
+    let mut completed = if fs::metadata(&temporary).map(|meta| meta.len()).ok() == Some(total_size)
+    {
+        list_parts(&transfer.id).unwrap_or_default()
+    } else {
+        clear_parts(&transfer.id)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary);
+        let Ok(file) = file else {
+            return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+        };
+        if file.set_len(total_size).is_err() {
+            return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+        }
+        Vec::new()
+    };
+    completed
+        .retain(|part| part.size == part_length(total_size, transfer.part_size, part.part_number));
+    let total_parts = total_size.div_ceil(transfer.part_size) as i32;
+    let mut bytes_done = completed.iter().map(|part| part.size).sum::<u64>();
+    transition(
+        &mut transfer,
+        TransferState::Sending {
+            percent: percent(bytes_done, total_size),
+        },
+        &mut on_update,
+    )?;
+
+    let mut file = match OpenOptions::new().write(true).open(&temporary) {
+        Ok(file) => file,
+        Err(_) => return fail(transfer, ErrorClass::StorageFull, &mut on_update),
+    };
+    for part_number in 1..=total_parts {
+        if completed.iter().any(|part| part.part_number == part_number) {
+            continue;
+        }
+        if control.is_cancelled() {
+            let _ = fs::remove_file(&temporary);
+            dismiss_transfer(&transfer.id)?;
+            return Err("Transfer cancelled".into());
+        }
+        let length = part_length(total_size, transfer.part_size, part_number);
+        let start = (part_number as u64 - 1) * transfer.part_size;
+        let end = start + length - 1;
+        let result = s3::runtime()?.block_on(async {
+            let output = client
+                .get_object()
+                .bucket(&connection.bucket)
+                .key(&transfer.remote_key)
+                .range(format!("bytes={start}-{end}"))
+                .send()
+                .await?;
+            let bytes = output.body.collect().await?.into_bytes();
+            Ok::<_, Box<dyn std::error::Error>>(bytes)
+        });
+        let bytes = match result {
+            Ok(bytes) if bytes.len() as u64 == length => bytes,
+            Ok(_) => return fail(transfer, ErrorClass::Verification, &mut on_update),
+            Err(error) => {
+                return fail(transfer, classify_error(&error.to_string()), &mut on_update);
+            }
+        };
+        if file.seek(SeekFrom::Start(start)).is_err() || file.write_all(&bytes).is_err() {
+            return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+        }
+        let part = TransferPart {
+            transfer_id: transfer.id.clone(),
+            part_number,
+            etag: String::new(),
+            size: length,
+        };
+        save_part(&part)?;
+        completed.push(part);
+        bytes_done += length;
+        transition(
+            &mut transfer,
+            TransferState::Sending {
+                percent: percent(bytes_done, total_size),
+            },
+            &mut on_update,
+        )?;
+    }
+    if file.sync_all().is_err() {
+        return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+    }
+    drop(file);
+    transition(&mut transfer, TransferState::Checking, &mut on_update)?;
+    let local_md5 = is_plain_md5(&etag)
+        .then(|| hex_digest_file(&temporary))
+        .flatten();
+    if fs::metadata(&temporary).map(|meta| meta.len()).ok() != Some(total_size)
+        || (is_plain_md5(&etag) && local_md5.as_deref() != Some(etag.to_lowercase().as_str()))
+    {
+        let _ = fs::remove_file(&temporary);
+        clear_parts(&transfer.id)?;
+        return fail(transfer, ErrorClass::Verification, &mut on_update);
+    }
+    if replace_file(&temporary, Path::new(&transfer.local_path)).is_err() {
         return fail(transfer, ErrorClass::Unknown, &mut on_update);
     }
     transition(&mut transfer, TransferState::Downloaded, &mut on_update)?;
@@ -504,6 +700,28 @@ fn ensure_not_cancelled(transfer: &Transfer, control: &TransferControl) -> Resul
     if !control.is_cancelled() {
         return Ok(());
     }
+    dismiss_transfer(&transfer.id)?;
+    Err("Transfer cancelled".into())
+}
+
+fn ensure_multipart_not_cancelled(
+    client: &Client,
+    connection: &StorageConnection,
+    transfer: &Transfer,
+    upload_id: &str,
+    control: &TransferControl,
+) -> Result<(), String> {
+    if !control.is_cancelled() {
+        return Ok(());
+    }
+    let _ = s3::runtime()?.block_on(
+        client
+            .abort_multipart_upload()
+            .bucket(&connection.bucket)
+            .key(&transfer.remote_key)
+            .upload_id(upload_id)
+            .send(),
+    );
     dismiss_transfer(&transfer.id)?;
     Err("Transfer cancelled".into())
 }
@@ -650,6 +868,16 @@ fn list_parts(transfer_id: &str) -> Result<Vec<TransferPart>, String> {
         .map_err(|error| error.to_string())
 }
 
+fn clear_parts(transfer_id: &str) -> Result<(), String> {
+    open_database()?
+        .execute(
+            "DELETE FROM transfer_parts WHERE transfer_id = ?1",
+            [transfer_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn part_length(total: u64, part_size: u64, part_number: i32) -> u64 {
     let offset = (part_number as u64 - 1) * part_size;
     part_size.min(total.saturating_sub(offset))
@@ -768,6 +996,31 @@ fn hex_digest(bytes: &[u8]) -> String {
     format!("{:x}", Md5::digest(bytes))
 }
 
+fn hex_digest_file(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Md5::new();
+    let mut buffer = vec![0; 4 * 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::rename(temporary, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if destination.exists() => {
+            fs::remove_file(destination)?;
+            fs::rename(temporary, destination).map_err(|_| error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn temporary_path(destination: &Path) -> PathBuf {
     let mut name = destination
         .file_name()
@@ -844,6 +1097,50 @@ mod tests {
             &TransferControl::default(),
             |transfer| events.push(transfer),
         );
+        let created = s3::runtime()
+            .expect("runtime")
+            .block_on(
+                client
+                    .create_multipart_upload()
+                    .bucket(&bucket)
+                    .key("resumed.bin")
+                    .send(),
+            )
+            .expect("create resumable upload");
+        let upload_id = created.upload_id().expect("upload id").to_string();
+        s3::runtime()
+            .expect("runtime")
+            .block_on(
+                client
+                    .upload_part()
+                    .bucket(&bucket)
+                    .key("resumed.bin")
+                    .upload_id(&upload_id)
+                    .part_number(1)
+                    .body(ByteStream::from(
+                        payload[..DEFAULT_PART_SIZE as usize].to_vec(),
+                    ))
+                    .send(),
+            )
+            .expect("first resumable part");
+        let mut interrupted = new_transfer(
+            &connection,
+            &source,
+            "resumed.bin",
+            payload.len() as u64,
+            TransferDirection::Upload,
+        )
+        .expect("persist interrupted transfer");
+        interrupted.upload_id = Some(upload_id);
+        interrupted.state = TransferState::Sending { percent: 20.0 };
+        persist(&interrupted).expect("persist upload id");
+        let resumed = resume_upload_with_client(
+            &client,
+            &connection,
+            interrupted,
+            &TransferControl::default(),
+            |transfer| events.push(transfer),
+        );
         let downloaded = download_file_with_client(
             &client,
             &connection,
@@ -863,6 +1160,12 @@ mod tests {
                     .key("round-trip.bin")
                     .send()
                     .await?;
+                client
+                    .delete_object()
+                    .bucket(&bucket)
+                    .key("resumed.bin")
+                    .send()
+                    .await?;
                 client.delete_bucket().bucket(&bucket).send().await?;
                 Ok::<_, Box<dyn std::error::Error>>(())
             })
@@ -879,6 +1182,10 @@ mod tests {
         assert!(matches!(
             downloaded.expect("download").state,
             TransferState::Downloaded
+        ));
+        assert!(matches!(
+            resumed.expect("resumed upload").state,
+            TransferState::Uploaded
         ));
         assert_eq!(fs::read(&destination).expect("downloaded bytes"), payload);
         fs::remove_file(destination).expect("remove download");

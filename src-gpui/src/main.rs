@@ -14,7 +14,7 @@ use lopload_native::{
     save_connection, set_last_prefix,
     transfer::{
         ErrorClass, Transfer, TransferControl, TransferDirection, TransferState, dismiss_transfer,
-        download_file, list_transfers, upload_file,
+        download_file, list_transfers, resume_upload, upload_file,
     },
     update_connection,
 };
@@ -112,6 +112,60 @@ impl LoploadApp {
         self.current_connection = Some(connection);
         self.screen = Screen::Browser;
         self.load_prefix(prefix, cx);
+        self.resume_pending_uploads(cx);
+    }
+
+    fn resume_pending_uploads(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let pending = self
+            .transfers
+            .iter()
+            .filter(|transfer| {
+                matches!(transfer.direction, TransferDirection::Upload)
+                    && transfer.upload_id.is_some()
+                    && matches!(
+                        transfer.state,
+                        TransferState::Queued
+                            | TransferState::Sending { .. }
+                            | TransferState::Checking
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for transfer in pending {
+            self.start_resume_upload(connection.clone(), transfer, cx);
+        }
+    }
+
+    fn start_resume_upload(
+        &mut self,
+        connection: StorageConnection,
+        transfer: Transfer,
+        cx: &mut Context<Self>,
+    ) {
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        let control = TransferControl::default();
+        let event_control = control.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let mut transfer_id = Some(transfer.id.clone());
+                let _ = resume_upload(&connection, transfer, &control, |updated| {
+                    transfer_id = Some(updated.id.clone());
+                    let _ = sender.send_blocking(TransferEvent::Update(
+                        updated,
+                        event_control.clone(),
+                    ));
+                });
+                if control.is_cancelled() {
+                    if let Some(id) = transfer_id {
+                        let _ = sender.send_blocking(TransferEvent::Removed(id));
+                    }
+                }
+            })
+            .detach();
     }
 
     fn record_transfer(&mut self, transfer: Transfer, cx: &mut Context<Self>) {
@@ -736,6 +790,7 @@ impl LoploadApp {
         let parent = self.parent_prefix();
         let entries = self.entries.clone();
         let transfers = self.transfers.clone();
+        let current_connection = self.current_connection.clone();
         let status = match &self.browser_status {
             BrowserStatus::Idle if entries.is_empty() => Some("This folder is empty".to_string()),
             BrowserStatus::Idle => None,
@@ -863,12 +918,18 @@ impl LoploadApp {
                         .children(transfers.into_iter().enumerate().map(|(index, transfer)| {
                             let id = transfer.id.clone();
                             let dismiss_id = id.clone();
+                            let retry_transfer = transfer.clone();
                             let active = matches!(
                                 transfer.state,
                                 TransferState::Queued
                                     | TransferState::Sending { .. }
                                     | TransferState::Checking
                             );
+                            let resumable = matches!(
+                                transfer.state,
+                                TransferState::Failed { .. }
+                            ) && transfer.upload_id.is_some();
+                            let retry_connection = current_connection.clone();
                             let control = self.transfer_controls.get(&id).cloned();
                             div()
                                 .flex()
@@ -902,6 +963,27 @@ impl LoploadApp {
                                                 control.cancel();
                                                 cx.stop_propagation();
                                             }),
+                                    )
+                                })
+                                .when(resumable && retry_connection.is_some(), |row| {
+                                    let connection = retry_connection.expect("checked above");
+                                    row.child(
+                                        div()
+                                            .id(("retry-transfer", index))
+                                            .cursor_pointer()
+                                            .rounded_lg()
+                                            .bg(rgb(0x5c4f8f))
+                                            .px_3()
+                                            .py_1()
+                                            .text_color(rgb(0xffffff))
+                                            .child("Retry")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.start_resume_upload(
+                                                    connection.clone(),
+                                                    retry_transfer.clone(),
+                                                    cx,
+                                                );
+                                            })),
                                     )
                                 })
                                 .when(!active, |row| {
