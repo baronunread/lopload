@@ -45,6 +45,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Reveal completed downloads in Finder, Explorer, or the Linux file manager
 - Restore the last-used storage and folder at startup
 - Silent 30-day Trash retention sweep at startup and every 24 hours
+- Real-MinIO native scenarios for listing, folder markers, previews, transfers, resume, moves, Trash, restore, purge, and maintenance cleanup
 
 GPUI's `runtime_shaders` feature is enabled so local development works with
 Apple Command Line Tools alone. Release builds can compile Metal shaders ahead
@@ -55,5 +56,5 @@ of time on machines with full Xcode once native packaging is introduced.
 - Guarded recursive folder drops
 - Signed auto-update download, verification, installation, and relaunch
 - Dock/taskbar failure badge if GPUI exposes a cross-platform API; the tray already carries the failure count and state
-- Scenario coverage equivalent to the current Host-seam suite
+- GPUI window-level interaction coverage equivalent to the current Host-seam UI suite
 - Platform signing and release-workflow validation on macOS, Linux, and Windows

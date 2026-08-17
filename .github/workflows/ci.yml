@@ -93,6 +93,7 @@ jobs:
           cinder test lists_real_minio_objects -- --ignored
           cinder test uploads_and_downloads_real_minio_bytes -- --ignored
           cinder test moves_real_minio_objects_without_downloading_them -- --ignored
+          cinder test trashes_restores_and_permanently_deletes_real_minio_folders -- --ignored
 
       - name: Cinder test
         working-directory: src-tauri
@@ -117,6 +118,8 @@ jobs:
         with:
           workspaces: src-gpui
 
-      - name: Cinder check
+      - name: Cinder check and test
         working-directory: src-gpui
-        run: cinder check
+        run: |
+          cinder check
+          cinder test
