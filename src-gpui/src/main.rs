@@ -33,6 +33,7 @@ use lopload_native::{
 use std::{
     collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
+    time::Instant,
 };
 
 #[derive(Clone, Copy)]
@@ -68,6 +69,11 @@ struct DraggedEntries {
     entries: Vec<RemoteEntry>,
 }
 
+struct TransferSpeedSample {
+    at: Instant,
+    bytes: u64,
+}
+
 impl Render for DraggedEntries {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let label = if self.entries.len() == 1 {
@@ -95,6 +101,9 @@ struct LoploadApp {
     load_generation: u64,
     transfers: Vec<Transfer>,
     transfer_controls: HashMap<String, TransferControl>,
+    transfer_speed_samples: HashMap<String, TransferSpeedSample>,
+    transfer_speeds: HashMap<String, u64>,
+    transfers_collapsed: bool,
     trash_items: Vec<TrashItem>,
     trash_loading: bool,
     pending_trash: Option<RemoteEntry>,
@@ -162,6 +171,9 @@ impl LoploadApp {
             load_generation: 0,
             transfers: Vec::new(),
             transfer_controls: HashMap::new(),
+            transfer_speed_samples: HashMap::new(),
+            transfer_speeds: HashMap::new(),
+            transfers_collapsed: false,
             trash_items: Vec::new(),
             trash_loading: false,
             pending_trash: None,
@@ -211,6 +223,8 @@ impl LoploadApp {
         let prefix = connection.last_prefix.clone();
         self.transfers = list_transfers(&connection.id).unwrap_or_default();
         self.transfer_controls.clear();
+        self.transfer_speed_samples.clear();
+        self.transfer_speeds.clear();
         self.current_connection = Some(connection);
         self.screen = Screen::Browser;
         self.load_prefix(prefix, cx);
@@ -293,6 +307,30 @@ impl LoploadApp {
     }
 
     fn record_transfer(&mut self, transfer: Transfer, cx: &mut Context<Self>) {
+        if let TransferState::Sending { percent } = &transfer.state {
+            let bytes = (transfer.size as f64 * f64::from(*percent) / 100.0) as u64;
+            let now = Instant::now();
+            match self.transfer_speed_samples.get(&transfer.id) {
+                Some(sample) if bytes > sample.bytes => {
+                    let elapsed = now.duration_since(sample.at).as_secs_f64();
+                    if elapsed >= 0.1 {
+                        let speed = ((bytes - sample.bytes) as f64 / elapsed) as u64;
+                        self.transfer_speeds.insert(transfer.id.clone(), speed);
+                        self.transfer_speed_samples
+                            .insert(transfer.id.clone(), TransferSpeedSample { at: now, bytes });
+                    }
+                }
+                Some(sample) if bytes == sample.bytes => {}
+                _ => {
+                    self.transfer_speed_samples
+                        .insert(transfer.id.clone(), TransferSpeedSample { at: now, bytes });
+                    self.transfer_speeds.remove(&transfer.id);
+                }
+            }
+        } else {
+            self.transfer_speed_samples.remove(&transfer.id);
+            self.transfer_speeds.remove(&transfer.id);
+        }
         if let Some(saved) = self
             .transfers
             .iter_mut()
@@ -659,6 +697,8 @@ impl LoploadApp {
                         TransferEvent::Removed(id) => {
                             this.transfers.retain(|transfer| transfer.id != id);
                             this.transfer_controls.remove(&id);
+                            this.transfer_speed_samples.remove(&id);
+                            this.transfer_speeds.remove(&id);
                             cx.notify();
                         }
                         TransferEvent::Status(status) => {
@@ -1624,6 +1664,9 @@ impl LoploadApp {
             }
         });
         let transfers = self.transfers.clone();
+        let transfer_summary = transfer_summary(&transfers);
+        let transfer_speeds = self.transfer_speeds.clone();
+        let transfers_collapsed = self.transfers_collapsed;
         let current_connection = self.current_connection.clone();
         let selected_count = self.selected_keys.len();
         let pending_bulk_count = self.pending_bulk_trash.len();
@@ -2129,110 +2172,154 @@ impl LoploadApp {
                         .py_4()
                         .border_b_1()
                         .border_color(rgb(0xe3def2))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Transfers"))
-                        .children(transfers.into_iter().enumerate().map(|(index, transfer)| {
-                            let id = transfer.id.clone();
-                            let dismiss_id = id.clone();
-                            let retry_transfer = transfer.clone();
-                            let active = matches!(
-                                transfer.state,
-                                TransferState::Queued
-                                    | TransferState::Sending { .. }
-                                    | TransferState::Checking
-                            );
-                            let resumable = matches!(transfer.state, TransferState::Failed { .. })
-                                && (matches!(transfer.direction, TransferDirection::Download)
-                                    || transfer.upload_id.is_some());
-                            let retry_connection = current_connection.clone();
-                            let control = self.transfer_controls.get(&id).cloned();
+                        .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_3()
-                                .rounded_lg()
-                                .bg(rgb(0xeeeafa))
-                                .px_3()
-                                .py_2()
+                                .justify_between()
                                 .child(
-                                    div().flex_1().child(transfer_name(&transfer)).child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(rgb(0x766d91))
-                                            .child(transfer_state_label(&transfer.state)),
-                                    ),
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(transfer_summary),
                                 )
-                                .when(active && control.is_some(), |row| {
-                                    let control = control.expect("checked above");
-                                    row.child(
-                                        div()
-                                            .id(("cancel-transfer", index))
-                                            .cursor_pointer()
-                                            .rounded_lg()
-                                            .border_1()
-                                            .border_color(rgb(0xd4cee8))
-                                            .px_3()
-                                            .py_1()
-                                            .child("Cancel")
-                                            .on_click(move |_, _, cx| {
-                                                control.cancel();
-                                                cx.stop_propagation();
-                                            }),
-                                    )
-                                })
-                                .when(resumable && retry_connection.is_some(), |row| {
-                                    let connection = retry_connection.expect("checked above");
-                                    row.child(
-                                        div()
-                                            .id(("retry-transfer", index))
-                                            .cursor_pointer()
-                                            .rounded_lg()
-                                            .bg(rgb(0x5c4f8f))
-                                            .px_3()
-                                            .py_1()
-                                            .text_color(rgb(0xffffff))
-                                            .child("Retry")
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if matches!(
-                                                    retry_transfer.direction,
-                                                    TransferDirection::Download
-                                                ) {
-                                                    this.start_resume_download(
-                                                        connection.clone(),
-                                                        retry_transfer.clone(),
-                                                        cx,
-                                                    );
-                                                } else {
-                                                    this.start_resume_upload(
-                                                        connection.clone(),
-                                                        retry_transfer.clone(),
-                                                        cx,
-                                                    );
-                                                }
-                                            })),
-                                    )
-                                })
-                                .when(!active, |row| {
-                                    row.child(
-                                        div()
-                                            .id(("dismiss-transfer", index))
-                                            .cursor_pointer()
-                                            .rounded_lg()
-                                            .border_1()
-                                            .border_color(rgb(0xd4cee8))
-                                            .px_3()
-                                            .py_1()
-                                            .child("Dismiss")
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if dismiss_transfer(&dismiss_id).is_ok() {
-                                                    this.transfers
-                                                        .retain(|saved| saved.id != dismiss_id);
-                                                    this.transfer_controls.remove(&dismiss_id);
-                                                }
-                                                cx.notify();
-                                            })),
-                                    )
-                                })
-                        })),
+                                .child(
+                                    div()
+                                        .id("toggle-transfers")
+                                        .cursor_pointer()
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(rgb(0xd4cee8))
+                                        .px_3()
+                                        .py_1()
+                                        .child(if transfers_collapsed { "Show" } else { "Hide" })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.transfers_collapsed = !this.transfers_collapsed;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .when(!transfers_collapsed, |panel| {
+                            panel.children(transfers.into_iter().enumerate().map(
+                                |(index, transfer)| {
+                                    let id = transfer.id.clone();
+                                    let dismiss_id = id.clone();
+                                    let retry_transfer = transfer.clone();
+                                    let active = matches!(
+                                        transfer.state,
+                                        TransferState::Queued
+                                            | TransferState::Sending { .. }
+                                            | TransferState::Checking
+                                    );
+                                    let resumable =
+                                        matches!(transfer.state, TransferState::Failed { .. })
+                                            && (matches!(
+                                                transfer.direction,
+                                                TransferDirection::Download
+                                            ) || transfer.upload_id.is_some());
+                                    let retry_connection = current_connection.clone();
+                                    let control = self.transfer_controls.get(&id).cloned();
+                                    let speed = transfer_speeds.get(&id).copied();
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .rounded_lg()
+                                        .bg(rgb(0xeeeafa))
+                                        .px_3()
+                                        .py_2()
+                                        .child(
+                                            div().flex_1().child(transfer_name(&transfer)).child(
+                                                div().text_sm().text_color(rgb(0x766d91)).child(
+                                                    transfer_state_label(&transfer.state, speed),
+                                                ),
+                                            ),
+                                        )
+                                        .when(active && control.is_some(), |row| {
+                                            let control = control.expect("checked above");
+                                            row.child(
+                                                div()
+                                                    .id(("cancel-transfer", index))
+                                                    .cursor_pointer()
+                                                    .rounded_lg()
+                                                    .border_1()
+                                                    .border_color(rgb(0xd4cee8))
+                                                    .px_3()
+                                                    .py_1()
+                                                    .child("Cancel")
+                                                    .on_click(move |_, _, cx| {
+                                                        control.cancel();
+                                                        cx.stop_propagation();
+                                                    }),
+                                            )
+                                        })
+                                        .when(resumable && retry_connection.is_some(), |row| {
+                                            let connection =
+                                                retry_connection.expect("checked above");
+                                            row.child(
+                                                div()
+                                                    .id(("retry-transfer", index))
+                                                    .cursor_pointer()
+                                                    .rounded_lg()
+                                                    .bg(rgb(0x5c4f8f))
+                                                    .px_3()
+                                                    .py_1()
+                                                    .text_color(rgb(0xffffff))
+                                                    .child("Retry")
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if matches!(
+                                                                retry_transfer.direction,
+                                                                TransferDirection::Download
+                                                            ) {
+                                                                this.start_resume_download(
+                                                                    connection.clone(),
+                                                                    retry_transfer.clone(),
+                                                                    cx,
+                                                                );
+                                                            } else {
+                                                                this.start_resume_upload(
+                                                                    connection.clone(),
+                                                                    retry_transfer.clone(),
+                                                                    cx,
+                                                                );
+                                                            }
+                                                        },
+                                                    )),
+                                            )
+                                        })
+                                        .when(!active, |row| {
+                                            row.child(
+                                                div()
+                                                    .id(("dismiss-transfer", index))
+                                                    .cursor_pointer()
+                                                    .rounded_lg()
+                                                    .border_1()
+                                                    .border_color(rgb(0xd4cee8))
+                                                    .px_3()
+                                                    .py_1()
+                                                    .child("Dismiss")
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if dismiss_transfer(&dismiss_id).is_ok()
+                                                            {
+                                                                this.transfers.retain(|saved| {
+                                                                    saved.id != dismiss_id
+                                                                });
+                                                                this.transfer_controls
+                                                                    .remove(&dismiss_id);
+                                                                this.transfer_speed_samples
+                                                                    .remove(&dismiss_id);
+                                                                this.transfer_speeds
+                                                                    .remove(&dismiss_id);
+                                                            }
+                                                            cx.notify();
+                                                        },
+                                                    )),
+                                            )
+                                        })
+                                },
+                            ))
+                        }),
                 )
             })
             .when(self.new_folder_open, |browser| {
@@ -3058,10 +3145,41 @@ fn transfer_name(transfer: &Transfer) -> String {
     }
 }
 
-fn transfer_state_label(state: &TransferState) -> String {
+fn transfer_summary(transfers: &[Transfer]) -> String {
+    let active = transfers
+        .iter()
+        .filter(|transfer| {
+            matches!(
+                transfer.state,
+                TransferState::Queued | TransferState::Sending { .. } | TransferState::Checking
+            )
+        })
+        .count();
+    let failed = transfers
+        .iter()
+        .filter(|transfer| matches!(transfer.state, TransferState::Failed { .. }))
+        .count();
+    let completed = transfers.len() - active - failed;
+    let mut parts = Vec::new();
+    if active > 0 {
+        parts.push(format!("{active} active"));
+    }
+    if completed > 0 {
+        parts.push(format!("{completed} completed"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    format!("Transfers · {}", parts.join(" · "))
+}
+
+fn transfer_state_label(state: &TransferState, speed: Option<u64>) -> String {
     match state {
         TransferState::Queued => "Waiting".into(),
-        TransferState::Sending { percent } => format!("Transferring… {percent:.0}%"),
+        TransferState::Sending { percent } => speed.map_or_else(
+            || format!("Transferring… {percent:.0}%"),
+            |speed| format!("Transferring… {percent:.0}% · {}/s", format_bytes(speed)),
+        ),
         TransferState::Checking => "Checking file…".into(),
         TransferState::Uploaded => "Uploaded ✓".into(),
         TransferState::Downloaded => "Downloaded ✓".into(),
@@ -3156,6 +3274,22 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn transfer(state: TransferState) -> Transfer {
+        Transfer {
+            id: "transfer".into(),
+            connection_id: "connection".into(),
+            remote_key: "file.bin".into(),
+            local_path: "/tmp/file.bin".into(),
+            size: 1024,
+            part_size: 1024,
+            upload_id: None,
+            direction: TransferDirection::Upload,
+            state,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
     #[test]
     fn keeps_bulk_downloads_inside_the_chosen_folder() {
         let root = Path::new("/tmp/downloads");
@@ -3195,5 +3329,25 @@ mod tests {
             "work/photos/edited/"
         ));
         assert!(!can_move_entries_to(&[], "archive/"));
+    }
+
+    #[test]
+    fn summarizes_transfer_batches() {
+        let transfers = vec![
+            transfer(TransferState::Sending { percent: 50.0 }),
+            transfer(TransferState::Uploaded),
+            transfer(TransferState::Failed {
+                error_class: ErrorClass::Offline,
+            }),
+        ];
+
+        assert_eq!(
+            transfer_summary(&transfers),
+            "Transfers · 1 active · 1 completed · 1 failed"
+        );
+        assert_eq!(
+            transfer_state_label(&TransferState::Sending { percent: 50.0 }, Some(1024)),
+            "Transferring… 50% · 1.0 KB/s"
+        );
     }
 }
