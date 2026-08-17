@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, FontWeight, Render,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, ExternalPaths,
+    FontWeight, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_component::{
     Root,
@@ -26,7 +26,7 @@ use lopload_native::{
     },
     update_connection,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Clone, Copy)]
 enum Screen {
@@ -46,6 +46,7 @@ enum BrowserStatus {
 enum TransferEvent {
     Update(Transfer, TransferControl),
     Removed(String),
+    Status(String),
 }
 
 struct LoploadApp {
@@ -514,6 +515,10 @@ impl LoploadApp {
                             this.transfer_controls.remove(&id);
                             cx.notify();
                         }
+                        TransferEvent::Status(status) => {
+                            this.operation_status = Some(status);
+                            cx.notify();
+                        }
                     });
                 }
             }
@@ -522,6 +527,19 @@ impl LoploadApp {
     }
 
     fn start_upload(&mut self, cx: &mut Context<Self>) {
+        let picker = cx
+            .background_executor()
+            .spawn(async move { rfd::FileDialog::new().pick_files() });
+        cx.spawn(async move |this, cx| {
+            let paths = picker.await;
+            if let (Some(this), Some(paths)) = (this.upgrade(), paths) {
+                let _ = this.update(cx, |this, cx| this.start_upload_paths(paths, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn start_upload_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(connection) = self.current_connection.clone() else {
             return;
         };
@@ -531,21 +549,20 @@ impl LoploadApp {
         self.listen_for_transfers(receiver, cx);
         cx.background_executor()
             .spawn(async move {
-                let Some(paths) = rfd::FileDialog::new().pick_files() else {
-                    return;
-                };
-                for group in paths.chunks(concurrency) {
+                let files = expand_upload_paths(&paths);
+                if files.len() != paths.len() {
+                    let _ = sender.send_blocking(TransferEvent::Status(
+                        "Folder drops aren't available in the native build yet".into(),
+                    ));
+                }
+                for group in files.chunks(concurrency) {
                     std::thread::scope(|scope| {
-                        for path in group.iter().cloned() {
+                        for (path, relative_key) in group.iter().cloned() {
                             let connection = connection.clone();
                             let prefix = prefix.clone();
                             let sender = sender.clone();
                             scope.spawn(move || {
-                                let Some(name) = path.file_name().and_then(|name| name.to_str())
-                                else {
-                                    return;
-                                };
-                                let key = format!("{prefix}{name}");
+                                let key = format!("{prefix}{relative_key}");
                                 let control = TransferControl::default();
                                 let event_control = control.clone();
                                 let mut transfer_id = None;
@@ -1137,6 +1154,10 @@ impl LoploadApp {
             .flex()
             .flex_col()
             .min_h_0()
+            .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgb(0xeeeafa)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                this.start_upload_paths(paths.paths().to_vec(), cx);
+            }))
             .child(
                 div()
                     .flex()
@@ -2142,6 +2163,21 @@ fn transfer_state_label(state: &TransferState) -> String {
         }
         .into(),
     }
+}
+
+fn expand_upload_paths(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    paths
+        .iter()
+        .filter(|path| {
+            std::fs::symlink_metadata(path)
+                .map(|metadata| metadata.file_type().is_file())
+                .unwrap_or(false)
+        })
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().to_string();
+            Some((path.clone(), name))
+        })
+        .collect()
 }
 
 fn main() {
