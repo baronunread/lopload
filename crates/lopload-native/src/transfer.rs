@@ -1,4 +1,4 @@
-use crate::{StorageConnection, open_database, s3};
+use crate::{StorageConnection, open_database, s3, settings};
 use aws_sdk_s3::{
     Client,
     primitives::ByteStream,
@@ -252,57 +252,74 @@ fn upload_multipart(
         &mut on_update,
     )?;
 
-    let mut file = match fs::File::open(&transfer.local_path) {
-        Ok(file) => file,
-        Err(_) => return fail(transfer, ErrorClass::NotFound, &mut on_update),
-    };
-    for part_number in 1..=total_parts {
-        if completed.iter().any(|part| part.part_number == part_number) {
-            continue;
-        }
+    let pending = (1..=total_parts)
+        .filter(|part_number| {
+            !completed
+                .iter()
+                .any(|part| part.part_number == *part_number)
+        })
+        .collect::<Vec<_>>();
+    let concurrency = settings::transfer_tuning()
+        .map(|tuning| tuning.upload_parts_in_flight.max(1) as usize)
+        .unwrap_or(1);
+    for group in pending.chunks(concurrency) {
         ensure_multipart_not_cancelled(client, connection, &transfer, &upload_id, control)?;
-        let length = part_length(transfer.size, transfer.part_size, part_number);
-        let offset = (part_number as u64 - 1) * transfer.part_size;
-        if file.seek(SeekFrom::Start(offset)).is_err() {
-            return fail(transfer, ErrorClass::NotFound, &mut on_update);
-        }
-        let mut body = vec![0; length as usize];
-        if file.read_exact(&mut body).is_err() {
-            return fail(transfer, ErrorClass::NotFound, &mut on_update);
-        }
-        let result = s3::runtime()?.block_on(
-            client
-                .upload_part()
-                .bucket(&connection.bucket)
-                .key(&transfer.remote_key)
-                .upload_id(&upload_id)
-                .part_number(part_number)
-                .body(ByteStream::from(body))
-                .send(),
-        );
-        let output = match result {
-            Ok(output) => output,
-            Err(error) => {
-                return fail(transfer, classify_error(&error.to_string()), &mut on_update);
+        let results = s3::runtime()?.block_on(async {
+            let mut tasks = tokio::task::JoinSet::new();
+            for part_number in group.iter().copied() {
+                let client = client.clone();
+                let bucket = connection.bucket.clone();
+                let key = transfer.remote_key.clone();
+                let upload_id = upload_id.clone();
+                let local_path = transfer.local_path.clone();
+                let transfer_id = transfer.id.clone();
+                let part_size = transfer.part_size;
+                let total_size = transfer.size;
+                tasks.spawn(async move {
+                    let length = part_length(total_size, part_size, part_number);
+                    let offset = (part_number as u64 - 1) * part_size;
+                    let body = read_file_range(Path::new(&local_path), offset, length)?;
+                    let output = client
+                        .upload_part()
+                        .bucket(bucket)
+                        .key(key)
+                        .upload_id(upload_id)
+                        .part_number(part_number)
+                        .body(ByteStream::from(body))
+                        .send()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    Ok::<_, String>(TransferPart {
+                        transfer_id,
+                        part_number,
+                        etag: output.e_tag().unwrap_or_default().to_string(),
+                        size: length,
+                    })
+                });
             }
+            let mut results = Vec::new();
+            while let Some(result) = tasks.join_next().await {
+                results.push(result.map_err(|error| error.to_string())??);
+            }
+            Ok::<_, String>(results)
+        });
+        let results = match results {
+            Ok(results) => results,
+            Err(error) => return fail(transfer, classify_error(&error), &mut on_update),
         };
         ensure_multipart_not_cancelled(client, connection, &transfer, &upload_id, control)?;
-        let part = TransferPart {
-            transfer_id: transfer.id.clone(),
-            part_number,
-            etag: output.e_tag().unwrap_or_default().to_string(),
-            size: length,
-        };
-        save_part(&part)?;
-        completed.push(part);
-        bytes_done += length;
-        transition(
-            &mut transfer,
-            TransferState::Sending {
-                percent: percent(bytes_done, total_size),
-            },
-            &mut on_update,
-        )?;
+        for result in results {
+            save_part(&result)?;
+            bytes_done += result.size;
+            completed.push(result);
+            transition(
+                &mut transfer,
+                TransferState::Sending {
+                    percent: percent(bytes_done, total_size),
+                },
+                &mut on_update,
+            )?;
+        }
     }
 
     completed.sort_by_key(|part| part.part_number);
@@ -540,55 +557,91 @@ fn download_ranged(
         Ok(file) => file,
         Err(_) => return fail(transfer, ErrorClass::StorageFull, &mut on_update),
     };
-    for part_number in 1..=total_parts {
-        if completed.iter().any(|part| part.part_number == part_number) {
-            continue;
-        }
+    let pending = (1..=total_parts)
+        .filter(|part_number| {
+            !completed
+                .iter()
+                .any(|part| part.part_number == *part_number)
+        })
+        .collect::<Vec<_>>();
+    let concurrency = settings::transfer_tuning()
+        .map(|tuning| tuning.download_connections.max(1) as usize)
+        .unwrap_or(1);
+    for group in pending.chunks(concurrency) {
         if control.is_cancelled() {
             let _ = fs::remove_file(&temporary);
             dismiss_transfer(&transfer.id)?;
             return Err("Transfer cancelled".into());
         }
-        let length = part_length(total_size, transfer.part_size, part_number);
-        let start = (part_number as u64 - 1) * transfer.part_size;
-        let end = start + length - 1;
-        let result = s3::runtime()?.block_on(async {
-            let output = client
-                .get_object()
-                .bucket(&connection.bucket)
-                .key(&transfer.remote_key)
-                .range(format!("bytes={start}-{end}"))
-                .send()
-                .await?;
-            let bytes = output.body.collect().await?.into_bytes();
-            Ok::<_, Box<dyn std::error::Error>>(bytes)
+        let results = s3::runtime()?.block_on(async {
+            let mut tasks = tokio::task::JoinSet::new();
+            for part_number in group.iter().copied() {
+                let client = client.clone();
+                let bucket = connection.bucket.clone();
+                let key = transfer.remote_key.clone();
+                let part_size = transfer.part_size;
+                tasks.spawn(async move {
+                    let length = part_length(total_size, part_size, part_number);
+                    let start = (part_number as u64 - 1) * part_size;
+                    let end = start + length - 1;
+                    let output = client
+                        .get_object()
+                        .bucket(bucket)
+                        .key(key)
+                        .range(format!("bytes={start}-{end}"))
+                        .send()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let bytes = output
+                        .body
+                        .collect()
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .into_bytes();
+                    if bytes.len() as u64 != length {
+                        return Err("Downloaded bytes could not be verified".to_string());
+                    }
+                    Ok::<_, String>((part_number, start, length, bytes))
+                });
+            }
+            let mut results = Vec::new();
+            while let Some(result) = tasks.join_next().await {
+                results.push(result.map_err(|error| error.to_string())??);
+            }
+            Ok::<_, String>(results)
         });
-        let bytes = match result {
-            Ok(bytes) if bytes.len() as u64 == length => bytes,
-            Ok(_) => return fail(transfer, ErrorClass::Verification, &mut on_update),
+        let results = match results {
+            Ok(results) => results,
             Err(error) => {
-                return fail(transfer, classify_error(&error.to_string()), &mut on_update);
+                return fail(transfer, classify_error(&error), &mut on_update);
             }
         };
-        if file.seek(SeekFrom::Start(start)).is_err() || file.write_all(&bytes).is_err() {
-            return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+        if control.is_cancelled() {
+            let _ = fs::remove_file(&temporary);
+            dismiss_transfer(&transfer.id)?;
+            return Err("Transfer cancelled".into());
         }
-        let part = TransferPart {
-            transfer_id: transfer.id.clone(),
-            part_number,
-            etag: String::new(),
-            size: length,
-        };
-        save_part(&part)?;
-        completed.push(part);
-        bytes_done += length;
-        transition(
-            &mut transfer,
-            TransferState::Sending {
-                percent: percent(bytes_done, total_size),
-            },
-            &mut on_update,
-        )?;
+        for (part_number, start, length, bytes) in results {
+            if file.seek(SeekFrom::Start(start)).is_err() || file.write_all(&bytes).is_err() {
+                return fail(transfer, ErrorClass::StorageFull, &mut on_update);
+            }
+            let part = TransferPart {
+                transfer_id: transfer.id.clone(),
+                part_number,
+                etag: String::new(),
+                size: length,
+            };
+            save_part(&part)?;
+            completed.push(part);
+            bytes_done += length;
+            transition(
+                &mut transfer,
+                TransferState::Sending {
+                    percent: percent(bytes_done, total_size),
+                },
+                &mut on_update,
+            )?;
+        }
     }
     if file.sync_all().is_err() {
         return fail(transfer, ErrorClass::StorageFull, &mut on_update);
@@ -658,7 +711,9 @@ fn new_transfer(
         remote_key: remote_key.to_string(),
         local_path: local_path.to_string_lossy().to_string(),
         size,
-        part_size: DEFAULT_PART_SIZE,
+        part_size: settings::transfer_tuning()
+            .map(|tuning| u64::from(tuning.part_size_mib) * 1024 * 1024)
+            .unwrap_or(DEFAULT_PART_SIZE),
         upload_id: None,
         direction,
         state: TransferState::Queued,
@@ -1008,6 +1063,16 @@ fn hex_digest_file(path: &Path) -> Option<String> {
         hasher.update(&buffer[..read]);
     }
     Some(format!("{:x}", hasher.finalize()))
+}
+
+fn read_file_range(path: &Path, offset: u64, length: u64) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(path).map_err(|_| "This local file could not be read")?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|_| "This local file could not be read")?;
+    let mut body = vec![0; length as usize];
+    file.read_exact(&mut body)
+        .map_err(|_| "This local file could not be read")?;
+    Ok(body)
 }
 
 fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {

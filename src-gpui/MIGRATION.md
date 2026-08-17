@@ -20,6 +20,8 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Persisted ranged downloads with size and plain-MD5 verification and temporary-file commits
 - File and folder rename, confirmed Trash moves, restore, permanent delete, and empty-Trash flows
 - Server-side multipart copies for large rename/Trash operations and 24-hour share links
+- Native download-folder, automatic-update, and transfer-speed settings
+- Bounded parallel multipart uploads and ranged downloads driven by the selected speed preset
 - Deterministic Rustls/WebPKI networking verified against real MinIO
 - Cinder run/check commands and version lockstep with the production app
 
@@ -29,9 +31,8 @@ of time on machines with full Xcode once native packaging is introduced.
 
 ## Required for parity
 
-- Parallel upload/download workers and manual retry for interrupted downloads
+- Manual retry for interrupted downloads
 - Move-to-folder controls and progress for recursive storage operations
-- Native file dialogs, drag and drop, tray, notifications, and auto-updates
-- Persistent connection, settings, and transfer stores
+- Native drag and drop, tray, notifications, and auto-updates
 - Scenario coverage equivalent to the current Host-seam suite
 - macOS, Linux, and Windows packaging and signing

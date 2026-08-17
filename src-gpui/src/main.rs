@@ -16,6 +16,10 @@ use lopload_native::{
     },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
+    settings::{
+        TransferTuning, auto_update_enabled, default_download_dir, set_auto_update_enabled,
+        set_default_download_dir, set_transfer_tuning, transfer_tuning,
+    },
     transfer::{
         ErrorClass, Transfer, TransferControl, TransferDirection, TransferState, dismiss_transfer,
         download_file, list_transfers, resume_upload, upload_file,
@@ -30,6 +34,7 @@ enum Screen {
     AddStorage,
     Browser,
     Trash,
+    Settings,
 }
 
 enum BrowserStatus {
@@ -60,6 +65,10 @@ struct LoploadApp {
     pending_delete: Option<TrashItem>,
     confirm_empty_trash: bool,
     operation_status: Option<String>,
+    tuning: TransferTuning,
+    auto_update_enabled: bool,
+    default_download_dir: Option<String>,
+    settings_status: Option<String>,
     name: Entity<InputState>,
     endpoint: Entity<InputState>,
     bucket: Entity<InputState>,
@@ -86,6 +95,9 @@ impl LoploadApp {
                 Some("Saved storage connections could not be loaded".to_string()),
             ),
         };
+        let tuning = transfer_tuning().unwrap_or_default();
+        let auto_update_enabled = auto_update_enabled().unwrap_or(true);
+        let default_download_dir = default_download_dir().unwrap_or_default();
         Self {
             screen: Screen::Home,
             connections,
@@ -103,6 +115,10 @@ impl LoploadApp {
             pending_delete: None,
             confirm_empty_trash: false,
             operation_status: None,
+            tuning,
+            auto_update_enabled,
+            default_download_dir,
+            settings_status: None,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("My storage")),
             endpoint: cx
                 .new(|cx| InputState::new(window, cx).placeholder("https://storage.example.com")),
@@ -405,6 +421,57 @@ impl LoploadApp {
         .detach();
     }
 
+    fn choose_download_folder(&mut self, cx: &mut Context<Self>) {
+        let picker = cx
+            .background_executor()
+            .spawn(async move { rfd::FileDialog::new().pick_folder() });
+        cx.spawn(async move |this, cx| {
+            let folder = picker.await;
+            if let (Some(this), Some(folder)) = (this.upgrade(), folder) {
+                let _ = this.update(cx, |this, cx| {
+                    let path = folder.to_string_lossy().to_string();
+                    match set_default_download_dir(Some(&path)) {
+                        Ok(()) => {
+                            this.default_download_dir = Some(path);
+                            this.settings_status = Some("Download folder saved".into());
+                        }
+                        Err(_) => this.settings_status = Some("Settings could not be saved".into()),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn choose_tuning(&mut self, preset: &str, cx: &mut Context<Self>) {
+        let tuning = match preset {
+            "slow" => TransferTuning {
+                preset: "slow".into(),
+                concurrent_files: 1,
+                upload_parts_in_flight: 2,
+                download_connections: 2,
+                part_size_mib: 8,
+            },
+            "fast" => TransferTuning {
+                preset: "fast".into(),
+                concurrent_files: 4,
+                upload_parts_in_flight: 8,
+                download_connections: 8,
+                part_size_mib: 8,
+            },
+            _ => TransferTuning::default(),
+        };
+        match set_transfer_tuning(&tuning) {
+            Ok(()) => {
+                self.tuning = tuning;
+                self.settings_status = Some("Transfer settings saved".into());
+            }
+            Err(_) => self.settings_status = Some("Settings could not be saved".into()),
+        }
+        cx.notify();
+    }
+
     fn listen_for_transfers(
         &mut self,
         receiver: async_channel::Receiver<TransferEvent>,
@@ -471,13 +538,19 @@ impl LoploadApp {
         };
         let (sender, receiver) = async_channel::unbounded();
         self.listen_for_transfers(receiver, cx);
+        let default_download_dir = self.default_download_dir.clone();
         cx.background_executor()
             .spawn(async move {
-                let Some(destination) = rfd::FileDialog::new()
-                    .set_file_name(&entry.name)
-                    .save_file()
-                else {
-                    return;
+                let destination = if let Some(folder) = default_download_dir {
+                    std::path::Path::new(&folder).join(&entry.name)
+                } else {
+                    let Some(destination) = rfd::FileDialog::new()
+                        .set_file_name(&entry.name)
+                        .save_file()
+                    else {
+                        return;
+                    };
+                    destination
                 };
                 let control = TransferControl::default();
                 let event_control = control.clone();
@@ -1738,6 +1811,173 @@ impl LoploadApp {
                     })),
             )
     }
+
+    fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected_preset = self.tuning.preset.clone();
+        let download_dir = self
+            .default_download_dir
+            .clone()
+            .unwrap_or_else(|| "Ask each time".into());
+        div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .child(
+                div()
+                    .w(px(620.0))
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgb(0xe3def2))
+                    .bg(rgb(0xffffff))
+                    .p_8()
+                    .child(
+                        div()
+                            .text_2xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Settings"),
+                    )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Transfers"))
+                    .child(div().flex().gap_3().children(
+                        ["slow", "normal", "fast"].into_iter().enumerate().map(
+                            |(index, preset)| {
+                                let selected = selected_preset == preset;
+                                div()
+                                    .id(("tuning-preset", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .when(selected, |button| button.bg(rgb(0xeeeafa)))
+                                    .px_4()
+                                    .py_2()
+                                    .child(match preset {
+                                        "slow" => "Slow",
+                                        "fast" => "Fast",
+                                        _ => "Normal",
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.choose_tuning(preset, cx)
+                                    }))
+                            },
+                        ),
+                    ))
+                    .child(div().text_sm().text_color(rgb(0x766d91)).child(format!(
+                        "{} files at once · {} upload parts · {} download connections",
+                        self.tuning.concurrent_files,
+                        self.tuning.upload_parts_in_flight,
+                        self.tuning.download_connections
+                    )))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Downloads"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_sm()
+                                    .text_color(rgb(0x766d91))
+                                    .child(download_dir),
+                            )
+                            .child(
+                                div()
+                                    .id("choose-download-folder")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_3()
+                                    .py_2()
+                                    .child("Choose folder")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.choose_download_folder(cx)
+                                    })),
+                            )
+                            .when(self.default_download_dir.is_some(), |row| {
+                                row.child(
+                                    div()
+                                        .id("clear-download-folder")
+                                        .cursor_pointer()
+                                        .px_3()
+                                        .py_2()
+                                        .child("Clear")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if set_default_download_dir(None).is_ok() {
+                                                this.default_download_dir = None;
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Check for updates automatically"),
+                            )
+                            .child(
+                                div()
+                                    .id("toggle-auto-update")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .bg(rgb(if self.auto_update_enabled {
+                                        0x5c4f8f
+                                    } else {
+                                        0xeeeafa
+                                    }))
+                                    .px_4()
+                                    .py_2()
+                                    .text_color(rgb(if self.auto_update_enabled {
+                                        0xffffff
+                                    } else {
+                                        0x29243a
+                                    }))
+                                    .child(if self.auto_update_enabled {
+                                        "On"
+                                    } else {
+                                        "Off"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let enabled = !this.auto_update_enabled;
+                                        if set_auto_update_enabled(enabled).is_ok() {
+                                            this.auto_update_enabled = enabled;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .when_some(self.settings_status.clone(), |panel, status| {
+                        panel.child(div().text_sm().text_color(rgb(0x5c4f8f)).child(status))
+                    })
+                    .child(
+                        div()
+                            .id("close-settings")
+                            .cursor_pointer()
+                            .rounded_lg()
+                            .bg(rgb(0x5c4f8f))
+                            .px_4()
+                            .py_2()
+                            .text_color(rgb(0xffffff))
+                            .child("Done")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.screen = Screen::Home;
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
 }
 
 impl Render for LoploadApp {
@@ -1747,6 +1987,7 @@ impl Render for LoploadApp {
             Screen::AddStorage => self.render_add_storage(cx).into_any_element(),
             Screen::Browser => self.render_browser(cx).into_any_element(),
             Screen::Trash => self.render_trash(cx).into_any_element(),
+            Screen::Settings => self.render_settings(cx).into_any_element(),
         };
 
         div()
@@ -1773,9 +2014,19 @@ impl Render for LoploadApp {
                     )
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(0x766d91))
-                            .child("Native GPUI"),
+                            .id("open-settings")
+                            .cursor_pointer()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(0xd4cee8))
+                            .px_3()
+                            .py_2()
+                            .child("Settings")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.screen = Screen::Settings;
+                                this.settings_status = None;
+                                cx.notify();
+                            })),
                     ),
             )
             .child(content)

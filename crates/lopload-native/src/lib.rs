@@ -3,6 +3,8 @@ pub mod keychain;
 pub mod operations;
 #[cfg(feature = "s3")]
 pub mod s3;
+#[cfg(feature = "storage")]
+pub mod settings;
 #[cfg(feature = "s3")]
 pub mod transfer;
 
@@ -308,6 +310,10 @@ fn open_database() -> Result<Database, String> {
                 size INTEGER NOT NULL,
                 PRIMARY KEY (transfer_id, part_number),
                 FOREIGN KEY (transfer_id) REFERENCES transfers(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );",
         )
         .map_err(|error| error.to_string())?;
