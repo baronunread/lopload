@@ -217,10 +217,8 @@ impl LoploadApp {
             .spawn(async move {
                 let id = transfer.id.clone();
                 let _ = resume_download(&connection, transfer, &control, |updated| {
-                    let _ = sender.send_blocking(TransferEvent::Update(
-                        updated,
-                        event_control.clone(),
-                    ));
+                    let _ =
+                        sender.send_blocking(TransferEvent::Update(updated, event_control.clone()));
                 });
                 if control.is_cancelled() {
                     let _ = sender.send_blocking(TransferEvent::Removed(id));
@@ -528,6 +526,7 @@ impl LoploadApp {
             return;
         };
         let prefix = self.prefix.clone();
+        let concurrency = self.tuning.concurrent_files.max(1) as usize;
         let (sender, receiver) = async_channel::unbounded();
         self.listen_for_transfers(receiver, cx);
         cx.background_executor()
@@ -535,24 +534,37 @@ impl LoploadApp {
                 let Some(paths) = rfd::FileDialog::new().pick_files() else {
                     return;
                 };
-                for path in paths {
-                    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                        continue;
-                    };
-                    let key = format!("{prefix}{name}");
-                    let control = TransferControl::default();
-                    let event_control = control.clone();
-                    let mut transfer_id = None;
-                    let _ = upload_file(&connection, &path, &key, &control, |transfer| {
-                        transfer_id = Some(transfer.id.clone());
-                        let _ = sender
-                            .send_blocking(TransferEvent::Update(transfer, event_control.clone()));
-                    });
-                    if control.is_cancelled() {
-                        if let Some(id) = transfer_id {
-                            let _ = sender.send_blocking(TransferEvent::Removed(id));
+                for group in paths.chunks(concurrency) {
+                    std::thread::scope(|scope| {
+                        for path in group.iter().cloned() {
+                            let connection = connection.clone();
+                            let prefix = prefix.clone();
+                            let sender = sender.clone();
+                            scope.spawn(move || {
+                                let Some(name) = path.file_name().and_then(|name| name.to_str())
+                                else {
+                                    return;
+                                };
+                                let key = format!("{prefix}{name}");
+                                let control = TransferControl::default();
+                                let event_control = control.clone();
+                                let mut transfer_id = None;
+                                let _ =
+                                    upload_file(&connection, &path, &key, &control, |transfer| {
+                                        transfer_id = Some(transfer.id.clone());
+                                        let _ = sender.send_blocking(TransferEvent::Update(
+                                            transfer,
+                                            event_control.clone(),
+                                        ));
+                                    });
+                                if control.is_cancelled() {
+                                    if let Some(id) = transfer_id {
+                                        let _ = sender.send_blocking(TransferEvent::Removed(id));
+                                    }
+                                }
+                            });
                         }
-                    }
+                    });
                 }
             })
             .detach();
@@ -1370,10 +1382,8 @@ impl LoploadApp {
                                     | TransferState::Checking
                             );
                             let resumable = matches!(transfer.state, TransferState::Failed { .. })
-                                && (matches!(
-                                    transfer.direction,
-                                    TransferDirection::Download
-                                ) || transfer.upload_id.is_some());
+                                && (matches!(transfer.direction, TransferDirection::Download)
+                                    || transfer.upload_id.is_some());
                             let retry_connection = current_connection.clone();
                             let control = self.transfer_controls.get(&id).cloned();
                             div()
