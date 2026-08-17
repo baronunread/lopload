@@ -119,6 +119,54 @@ pub fn create_folder(
     })
 }
 
+pub fn preview_bytes(
+    connection: &StorageConnection,
+    key: &str,
+    maximum_size: u64,
+) -> Result<Vec<u8>, String> {
+    let connection = connection.clone();
+    let key = key.to_string();
+    runtime()?.block_on(async move {
+        let client = client(&connection)?;
+        preview_bytes_with_client(&client, &connection.bucket, &key, maximum_size).await
+    })
+}
+
+async fn preview_bytes_with_client(
+    client: &Client,
+    bucket: &str,
+    key: &str,
+    maximum_size: u64,
+) -> Result<Vec<u8>, String> {
+    let head = client
+        .head_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|_| "This preview could not be loaded".to_string())?;
+    let size = head
+        .content_length()
+        .and_then(|size| u64::try_from(size).ok())
+        .unwrap_or(maximum_size + 1);
+    if size > maximum_size {
+        return Err("This file is too large to preview".into());
+    }
+    let output = client
+        .get_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|_| "This preview could not be loaded".to_string())?;
+    output
+        .body
+        .collect()
+        .await
+        .map(|bytes| bytes.into_bytes().to_vec())
+        .map_err(|_| "This preview could not be loaded".to_string())
+}
+
 async fn list_entries_async(
     connection: &StorageConnection,
     prefix: &str,
@@ -304,6 +352,17 @@ mod tests {
                 assert!(matches!(entries[0].kind, RemoteEntryKind::Folder));
                 assert_eq!(entries[0].name, "docs");
                 assert_eq!(entries[1].name, "photo.jpg");
+                assert_eq!(
+                    preview_bytes_with_client(&client, &bucket, "photo.jpg", 5)
+                        .await
+                        .expect("preview"),
+                    b"image"
+                );
+                assert!(
+                    preview_bytes_with_client(&client, &bucket, "photo.jpg", 4)
+                        .await
+                        .is_err()
+                );
 
                 client
                     .delete_object()

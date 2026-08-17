@@ -1,8 +1,8 @@
 use chrono::{Local, TimeZone};
 use gpui::{
     App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, ExternalPaths,
-    FontWeight, Render, Subscription, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
+    FontWeight, Image, ImageFormat, Render, Subscription, Window, WindowBounds, WindowOptions, div,
+    img, prelude::*, px, rgb, size,
 };
 use gpui_component::{
     Root,
@@ -18,7 +18,10 @@ use lopload_native::{
         move_to_trash_with_progress, rename_file, rename_folder, restore_trash_item_with_progress,
         share_link,
     },
-    s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
+    s3::{
+        RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries,
+        preview_bytes,
+    },
     save_connection, set_last_prefix,
     settings::{
         TransferTuning, auto_update_enabled, default_download_dir, set_auto_update_enabled,
@@ -98,6 +101,8 @@ struct LoploadApp {
     current_connection: Option<StorageConnection>,
     prefix: String,
     entries: Vec<RemoteEntry>,
+    previews: HashMap<String, std::sync::Arc<Image>>,
+    preview_failures: HashSet<String>,
     browser_status: BrowserStatus,
     load_generation: u64,
     transfers: Vec<Transfer>,
@@ -168,6 +173,8 @@ impl LoploadApp {
             current_connection: None,
             prefix: String::new(),
             entries: Vec::new(),
+            previews: HashMap::new(),
+            preview_failures: HashSet::new(),
             browser_status: BrowserStatus::Idle,
             load_generation: 0,
             transfers: Vec::new(),
@@ -226,6 +233,8 @@ impl LoploadApp {
         self.transfer_controls.clear();
         self.transfer_speed_samples.clear();
         self.transfer_speeds.clear();
+        self.previews.clear();
+        self.preview_failures.clear();
         self.current_connection = Some(connection);
         self.screen = Screen::Browser;
         self.load_prefix(prefix, cx);
@@ -1272,6 +1281,7 @@ impl LoploadApp {
                     }
                     match result {
                         Ok(entries) => {
+                            let preview_entries = entries.clone();
                             this.entries = entries;
                             this.browser_status = BrowserStatus::Idle;
                             if let Some(connection) = this.current_connection.as_mut() {
@@ -1285,8 +1295,69 @@ impl LoploadApp {
                                     saved.last_prefix = this.prefix.clone();
                                 }
                             }
+                            this.load_previews(preview_entries, generation, cx);
                         }
                         Err(error) => this.browser_status = BrowserStatus::Failed(error),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn load_previews(
+        &mut self,
+        entries: Vec<RemoteEntry>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        const MAXIMUM_PREVIEW_SIZE: u64 = 25 * 1024 * 1024;
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let candidates = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let format = image_format(&entry.name)?;
+                if entry.size.unwrap_or(MAXIMUM_PREVIEW_SIZE + 1) > MAXIMUM_PREVIEW_SIZE
+                    || self.previews.contains_key(&entry.key)
+                    || self.preview_failures.contains(&entry.key)
+                {
+                    return None;
+                }
+                Some((entry.key, format))
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return;
+        }
+        let load = cx.background_executor().spawn(async move {
+            candidates
+                .into_iter()
+                .map(|(key, format)| {
+                    let result = preview_bytes(&connection, &key, MAXIMUM_PREVIEW_SIZE)
+                        .map(|bytes| std::sync::Arc::new(Image::from_bytes(format, bytes)));
+                    (key, result)
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let previews = load.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    if this.load_generation != generation {
+                        return;
+                    }
+                    for (key, preview) in previews {
+                        match preview {
+                            Ok(preview) => {
+                                this.previews.insert(key, preview);
+                            }
+                            Err(_) => {
+                                this.preview_failures.insert(key);
+                            }
+                        }
                     }
                     cx.notify();
                 });
@@ -2505,6 +2576,8 @@ impl LoploadApp {
                         };
                         let drop_destination = entry.key.clone();
                         let allowed_destination = entry.key.clone();
+                        let preview = self.previews.get(&entry.key).cloned();
+                        let has_preview = preview.is_some();
                         div()
                             .id(("entry", index))
                             .flex()
@@ -2522,11 +2595,33 @@ impl LoploadApp {
                                 |drag, _, _, cx| cx.new(|_| drag.clone()),
                             )
                             .when(folder, |row| row.cursor_pointer())
-                            .child(div().w(px(28.0)).text_center().child(if folder {
-                                if selected { "✓" } else { "▸" }
-                            } else {
-                                if selected { "✓" } else { "·" }
-                            }))
+                            .child(
+                                div()
+                                    .w(px(40.0))
+                                    .h(px(40.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_center()
+                                    .when_some(preview, |cell, preview| {
+                                        cell.child(
+                                            img(preview)
+                                                .size(px(40.0))
+                                                .rounded_lg()
+                                                .border_1()
+                                                .border_color(rgb(0xd4cee8)),
+                                        )
+                                    })
+                                    .when(!has_preview, |cell| {
+                                        cell.child(if folder {
+                                            if selected { "✓" } else { "▸" }
+                                        } else if selected {
+                                            "✓"
+                                        } else {
+                                            "·"
+                                        })
+                                    }),
+                            )
                             .child(
                                 div()
                                     .id(("move-entry", index))
@@ -3183,6 +3278,24 @@ fn format_date(timestamp: i64) -> String {
         .unwrap_or_default()
 }
 
+fn image_format(name: &str) -> Option<ImageFormat> {
+    match Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => Some(ImageFormat::Png),
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "webp" => Some(ImageFormat::Webp),
+        "gif" => Some(ImageFormat::Gif),
+        "svg" => Some(ImageFormat::Svg),
+        "bmp" => Some(ImageFormat::Bmp),
+        "tif" | "tiff" => Some(ImageFormat::Tiff),
+        _ => None,
+    }
+}
+
 fn transfer_name(transfer: &Transfer) -> String {
     match transfer.direction {
         TransferDirection::Upload => std::path::Path::new(&transfer.local_path)
@@ -3473,5 +3586,13 @@ mod tests {
             transfer_completion_message(&TransferDirection::Upload, 0, 0),
             None
         );
+    }
+
+    #[test]
+    fn recognizes_native_image_previews() {
+        assert_eq!(image_format("photo.JPG"), Some(ImageFormat::Jpeg));
+        assert_eq!(image_format("diagram.svg"), Some(ImageFormat::Svg));
+        assert_eq!(image_format("archive.zip"), None);
+        assert_eq!(image_format("no-extension"), None);
     }
 }

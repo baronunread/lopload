@@ -28,6 +28,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Native OS file drops onto the current folder
 - Name filtering and name/size/modified-date sorting
 - File information and recursively calculated folder information
+- Authenticated native image thumbnails with a 25 MB memory guard
 - Multi-selection with guarded recursive bulk downloads and confirmed bulk Trash
 - Conflict-checked single and bulk move-to-folder controls
 - Internal drag-to-move for selected rows, folder targets, and the parent folder
@@ -45,7 +46,6 @@ of time on machines with full Xcode once native packaging is introduced.
 ## Required for parity
 
 - Guarded recursive folder drops, tray, and auto-updates
-- Media previews
 - First-run celebration, system theme handling, and the remaining polished browser states
 - Scenario coverage equivalent to the current Host-seam suite
 - macOS, Linux, and Windows packaging and signing
