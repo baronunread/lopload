@@ -5,12 +5,27 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 
+[features]
+default = ["storage", "s3"]
+storage = ["dep:directories", "dep:rusqlite", "dep:uuid"]
+s3 = [
+  "storage",
+  "dep:aws-sdk-s3",
+  "dep:aws-smithy-http-client",
+  "dep:hyper-rustls",
+  "dep:tokio",
+]
+
 [dependencies]
-directories = "6"
-rusqlite = { version = "0.32", features = ["bundled"] }
+aws-sdk-s3 = { version = "=1.85.0", optional = true }
+aws-smithy-http-client = { version = "=1.1.4", features = ["legacy-rustls-ring"], optional = true }
+directories = { version = "6", optional = true }
+hyper-rustls = { version = "0.24.2", features = ["http1", "http2", "webpki-roots"], optional = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

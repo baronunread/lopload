@@ -75,6 +75,22 @@ jobs:
         working-directory: crates/lopload-native
         run: cinder test
 
+      - name: Start native S3 test storage
+        run: |
+          docker run -d --name lopload-native-minio -p 9400:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:9400/minio/health/live && break
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:9400/minio/health/live
+
+      - name: Cinder native S3 integration
+        working-directory: crates/lopload-native
+        run: cinder test lists_real_minio_objects -- --ignored
+
       - name: Cinder test
         working-directory: src-tauri
         run: cinder test

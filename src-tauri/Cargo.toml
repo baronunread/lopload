@@ -30,7 +30,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-lopload-native = { path = "../crates/lopload-native" }
+lopload-native = { path = "../crates/lopload-native", default-features = false }
 percent-encoding = "2"
 tokio = { version = "1", features = ["macros", "sync"] }
 tauri-plugin-updater = "2.10.1"
