@@ -26,9 +26,9 @@ use lopload_native::{
     },
     save_connection, set_last_prefix,
     settings::{
-        ThemeMode, TransferTuning, auto_update_enabled, default_download_dir,
-        set_auto_update_enabled, set_default_download_dir, set_theme_mode, set_transfer_tuning,
-        theme_mode, transfer_tuning,
+        ThemeMode, TransferTuning, auto_update_enabled, default_download_dir, last_connection_id,
+        set_auto_update_enabled, set_default_download_dir, set_last_connection_id, set_theme_mode,
+        set_transfer_tuning, theme_mode, transfer_tuning,
     },
     transfer::{
         ErrorClass, Transfer, TransferControl, TransferDirection, TransferState,
@@ -191,17 +191,38 @@ impl LoploadApp {
         let system_is_dark = is_dark_appearance(window);
         set_dark_appearance(theme_mode, system_is_dark);
         let first_run = connections.is_empty();
-        Self {
+        let current_connection = if first_run {
+            None
+        } else {
+            let last_id = last_connection_id().ok().flatten();
+            last_id
+                .and_then(|id| {
+                    connections
+                        .iter()
+                        .find(|connection| connection.id == id)
+                        .cloned()
+                })
+                .or_else(|| connections.first().cloned())
+        };
+        let prefix = current_connection
+            .as_ref()
+            .map(|connection| connection.last_prefix.clone())
+            .unwrap_or_default();
+        let transfers = current_connection
+            .as_ref()
+            .and_then(|connection| list_transfers(&connection.id).ok())
+            .unwrap_or_default();
+        let mut app = Self {
             screen: initial_screen(first_run),
             connections,
-            current_connection: None,
-            prefix: String::new(),
+            current_connection,
+            prefix,
             entries: Vec::new(),
             previews: HashMap::new(),
             preview_failures: HashSet::new(),
             browser_status: BrowserStatus::Idle,
             load_generation: 0,
-            transfers: Vec::new(),
+            transfers,
             transfer_controls: HashMap::new(),
             transfer_speed_samples: HashMap::new(),
             transfer_speeds: HashMap::new(),
@@ -254,10 +275,17 @@ impl LoploadApp {
             home_error,
             celebration_connection: None,
             _subscriptions: vec![filter_subscription, appearance_subscription],
+        };
+        if let Some(connection) = app.current_connection.clone() {
+            tray::update_status(&app.transfers, cx);
+            app.load_prefix(connection.last_prefix, cx);
+            app.resume_pending_uploads(cx);
         }
+        app
     }
 
     fn open_connection(&mut self, connection: StorageConnection, cx: &mut Context<Self>) {
+        let _ = set_last_connection_id(&connection.id);
         let prefix = connection.last_prefix.clone();
         self.transfers = list_transfers(&connection.id).unwrap_or_default();
         self.transfer_controls.clear();
@@ -3696,7 +3724,7 @@ fn initial_screen(first_run: bool) -> Screen {
     if first_run {
         Screen::AddStorage
     } else {
-        Screen::Home
+        Screen::Browser
     }
 }
 
@@ -4147,7 +4175,7 @@ mod tests {
     #[test]
     fn routes_the_first_connection_through_onboarding() {
         assert_eq!(initial_screen(true), Screen::AddStorage);
-        assert_eq!(initial_screen(false), Screen::Home);
+        assert_eq!(initial_screen(false), Screen::Browser);
         assert_eq!(screen_after_connection_save(true), Screen::Celebration);
         assert_eq!(screen_after_connection_save(false), Screen::Home);
     }

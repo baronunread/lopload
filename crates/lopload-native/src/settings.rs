@@ -46,6 +46,14 @@ pub fn set_theme_mode(mode: ThemeMode) -> Result<(), String> {
     set("theme_mode", &mode)
 }
 
+pub fn last_connection_id() -> Result<Option<String>, String> {
+    get("last_connection_id")
+}
+
+pub fn set_last_connection_id(connection_id: &str) -> Result<(), String> {
+    set("last_connection_id", connection_id)
+}
+
 pub fn default_download_dir() -> Result<Option<String>, String> {
     Ok(get::<String>("default_download_dir")?)
 }
