@@ -1529,6 +1529,10 @@ impl LoploadApp {
             BrowserStatus::Loading => Some("Loading…".to_string()),
             BrowserStatus::Failed(error) => Some(error.clone()),
         };
+        let credential_error = matches!(
+            &self.browser_status,
+            BrowserStatus::Failed(error) if error.to_lowercase().contains("credential")
+        );
 
         div()
             .flex_1()
@@ -2195,6 +2199,25 @@ impl LoploadApp {
                                 .text_center()
                                 .text_color(rgb(0x766d91))
                                 .child(message),
+                        )
+                    })
+                    .when(credential_error, |list| {
+                        let connection = self.current_connection.clone();
+                        list.child(
+                            div()
+                                .id("reenter-credentials")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(rgb(0x5c4f8f))
+                                .px_4()
+                                .py_2()
+                                .text_color(rgb(0xffffff))
+                                .child("Re-enter credentials")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if let Some(connection) = connection.clone() {
+                                        this.begin_edit_connection(connection, window, cx);
+                                    }
+                                })),
                         )
                     })
                     .children(entries.into_iter().enumerate().map(|(index, entry)| {

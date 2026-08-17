@@ -29,6 +29,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Multi-selection with guarded recursive bulk downloads and confirmed bulk Trash
 - Conflict-checked single and bulk move-to-folder controls
 - Item- and byte-weighted progress for recursive folder moves
+- Credential re-entry and generation-guarded listing responses
 - Deterministic Rustls/WebPKI networking verified against real MinIO
 - Cinder run/check commands and version lockstep with the production app
 
@@ -41,7 +42,7 @@ of time on machines with full Xcode once native packaging is introduced.
 - Progress for recursive Trash, restore, and permanent-delete operations
 - Guarded recursive folder drops, internal drag-to-move, tray, notifications, and auto-updates
 - Media previews
-- Credential re-entry, optimistic mutations with rollback, and stale-list protection
+- Optimistic mutations with rollback
 - Transfer speed display, collapsed batch summaries, and completion notifications
 - First-run celebration, system theme handling, and the remaining polished browser states
 - Scenario coverage equivalent to the current Host-seam suite
