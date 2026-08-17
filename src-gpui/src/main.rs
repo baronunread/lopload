@@ -13,9 +13,10 @@ use lopload_native::{
     NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
     list_connections,
     operations::{
-        TrashItem, delete_trash_item, empty_trash, files_in_folder, folder_info, list_folders,
-        list_trash, move_entry_with_progress, move_to_trash, rename_file, rename_folder,
-        restore_trash_item, share_link,
+        TrashItem, delete_trash_item_with_progress, empty_trash_with_progress, files_in_folder,
+        folder_info, list_folders, list_trash, move_entry_with_progress,
+        move_to_trash_with_progress, rename_file, rename_folder, restore_trash_item_with_progress,
+        share_link,
     },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
@@ -348,10 +349,17 @@ impl LoploadApp {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis() as i64)
             .unwrap_or_default();
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
         cx.notify();
-        let operation = cx
-            .background_executor()
-            .spawn(async move { move_to_trash(&connection, &key, is_folder, deleted_at) });
+        let operation = cx.background_executor().spawn(async move {
+            move_to_trash_with_progress(&connection, &key, is_folder, deleted_at, |progress| {
+                let _ = sender.send_blocking(TransferEvent::Status(format_operation_progress(
+                    "Moving to Trash",
+                    &progress,
+                )));
+            })
+        });
         cx.spawn(async move |this, cx| {
             let result = operation.await;
             if let Some(this) = this.upgrade() {
@@ -493,9 +501,16 @@ impl LoploadApp {
             return;
         };
         self.operation_status = Some("Restoring…".into());
-        let operation = cx
-            .background_executor()
-            .spawn(async move { restore_trash_item(&connection, &item) });
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        let operation = cx.background_executor().spawn(async move {
+            restore_trash_item_with_progress(&connection, &item, |progress| {
+                let _ = sender.send_blocking(TransferEvent::Status(format_operation_progress(
+                    "Restoring",
+                    &progress,
+                )));
+            })
+        });
         cx.spawn(async move |this, cx| {
             let result = operation.await;
             if let Some(this) = this.upgrade() {
@@ -518,9 +533,15 @@ impl LoploadApp {
             return;
         };
         self.operation_status = Some("Deleting…".into());
-        let operation = cx
-            .background_executor()
-            .spawn(async move { delete_trash_item(&connection, &item) });
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        let operation = cx.background_executor().spawn(async move {
+            delete_trash_item_with_progress(&connection, &item, |progress| {
+                let _ = sender.send_blocking(TransferEvent::Status(format_operation_progress(
+                    "Deleting", &progress,
+                )));
+            })
+        });
         cx.spawn(async move |this, cx| {
             let result = operation.await;
             if let Some(this) = this.upgrade() {
@@ -539,9 +560,16 @@ impl LoploadApp {
         };
         self.confirm_empty_trash = false;
         self.operation_status = Some("Emptying Trash…".into());
-        let operation = cx
-            .background_executor()
-            .spawn(async move { empty_trash(&connection) });
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        let operation = cx.background_executor().spawn(async move {
+            empty_trash_with_progress(&connection, |progress| {
+                let _ = sender.send_blocking(TransferEvent::Status(format_operation_progress(
+                    "Emptying Trash",
+                    &progress,
+                )));
+            })
+        });
         cx.spawn(async move |this, cx| {
             let result = operation.await;
             if let Some(this) = this.upgrade() {
@@ -790,14 +818,21 @@ impl LoploadApp {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis() as i64)
             .unwrap_or_default();
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
         cx.notify();
         let operation = cx.background_executor().spawn(async move {
             for entry in entries {
-                move_to_trash(
+                move_to_trash_with_progress(
                     &connection,
                     &entry.key,
                     matches!(entry.kind, RemoteEntryKind::Folder),
                     deleted_at,
+                    |progress| {
+                        let _ = sender.send_blocking(TransferEvent::Status(
+                            format_operation_progress("Moving to Trash", &progress),
+                        ));
+                    },
                 )?;
             }
             Ok::<_, String>(())
@@ -900,20 +935,7 @@ impl LoploadApp {
                     matches!(entry.kind, RemoteEntryKind::Folder),
                     &destination,
                     |progress| {
-                        let detail = if progress.total_bytes > 0 {
-                            format!(
-                                "Moving… {} of {} · {} of {}",
-                                progress.completed_items,
-                                progress.total_items,
-                                format_bytes(progress.completed_bytes),
-                                format_bytes(progress.total_bytes)
-                            )
-                        } else {
-                            format!(
-                                "Moving… {} of {}",
-                                progress.completed_items, progress.total_items
-                            )
-                        };
+                        let detail = format_operation_progress("Moving", &progress);
                         let _ = sender.send_blocking(TransferEvent::Status(detail));
                     },
                 )?;
@@ -2988,6 +3010,26 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} {}", bytes, UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn format_operation_progress(
+    action: &str,
+    progress: &lopload_native::operations::OperationProgress,
+) -> String {
+    if progress.total_bytes > 0 {
+        format!(
+            "{action}… {} of {} · {} of {}",
+            progress.completed_items,
+            progress.total_items,
+            format_bytes(progress.completed_bytes),
+            format_bytes(progress.total_bytes)
+        )
+    } else {
+        format!(
+            "{action}… {} of {}",
+            progress.completed_items, progress.total_items
+        )
     }
 }
 
