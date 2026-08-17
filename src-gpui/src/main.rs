@@ -47,6 +47,9 @@ use std::{
 };
 
 static DARK_APPEARANCE: AtomicBool = AtomicBool::new(false);
+const MAX_UPLOAD_DEPTH: usize = 32;
+const MAX_UPLOAD_ITEMS: usize = 10_000;
+const MAX_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
@@ -921,11 +924,18 @@ impl LoploadApp {
         self.listen_for_transfers(receiver, cx);
         cx.background_executor()
             .spawn(async move {
-                let files = expand_upload_paths(&paths);
-                if files.len() != paths.len() {
+                let files = match expand_upload_paths(&paths) {
+                    Ok(files) => files,
+                    Err(error) => {
+                        let _ = sender.send_blocking(TransferEvent::Status(error));
+                        return;
+                    }
+                };
+                if files.is_empty() {
                     let _ = sender.send_blocking(TransferEvent::Status(
-                        "Folder drops aren't available in the native build yet".into(),
+                        "No uploadable files were found".into(),
                     ));
+                    return;
                 }
                 let mut succeeded = 0;
                 let mut failed = 0;
@@ -3999,19 +4009,72 @@ fn browser_status_message(
     }
 }
 
-fn expand_upload_paths(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
-    paths
-        .iter()
-        .filter(|path| {
-            std::fs::symlink_metadata(path)
-                .map(|metadata| metadata.file_type().is_file())
-                .unwrap_or(false)
-        })
-        .filter_map(|path| {
-            let name = path.file_name()?.to_string_lossy().to_string();
-            Some((path.clone(), name))
-        })
-        .collect()
+fn expand_upload_paths(paths: &[PathBuf]) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut files = Vec::new();
+    let mut pending = Vec::new();
+    let mut visited_items = 0usize;
+    let mut total_bytes = 0u64;
+
+    for path in paths {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "One of the selected items could not be read".to_string())?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let relative = vec![name.to_string_lossy().to_string()];
+        pending.push((path.clone(), relative, 0usize, metadata));
+    }
+
+    while let Some((path, relative, depth, metadata)) = pending.pop() {
+        visited_items += 1;
+        if visited_items > MAX_UPLOAD_ITEMS {
+            return Err(format!(
+                "That selection contains more than {MAX_UPLOAD_ITEMS} items"
+            ));
+        }
+
+        if metadata.file_type().is_file() {
+            total_bytes = total_bytes
+                .checked_add(metadata.len())
+                .ok_or_else(|| "That selection is too large to upload safely".to_string())?;
+            if total_bytes > MAX_UPLOAD_BYTES {
+                return Err("That selection is larger than 1 TB".into());
+            }
+            files.push((path, relative.join("/")));
+            continue;
+        }
+        if !metadata.file_type().is_dir() {
+            continue;
+        }
+        if depth >= MAX_UPLOAD_DEPTH {
+            return Err(format!(
+                "That folder is nested more than {MAX_UPLOAD_DEPTH} levels deep"
+            ));
+        }
+
+        let mut entries = std::fs::read_dir(&path)
+            .map_err(|_| "One of the selected folders could not be read".to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "One of the selected folders could not be read".to_string())?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries.into_iter().rev() {
+            let child_path = entry.path();
+            let child_metadata = std::fs::symlink_metadata(&child_path)
+                .map_err(|_| "One of the selected items could not be read".to_string())?;
+            if child_metadata.file_type().is_symlink() {
+                continue;
+            }
+            let mut child_relative = relative.clone();
+            child_relative.push(entry.file_name().to_string_lossy().to_string());
+            pending.push((child_path, child_relative, depth + 1, child_metadata));
+        }
+    }
+
+    files.sort_by(|left, right| left.1.cmp(&right.1));
+    Ok(files)
 }
 
 fn safe_destination(root: &Path, relative: &str) -> Option<PathBuf> {
@@ -4280,6 +4343,62 @@ mod tests {
         );
         assert_eq!(safe_destination(root, "../private.txt"), None);
         assert_eq!(safe_destination(root, "/absolute.txt"), None);
+    }
+
+    #[test]
+    fn expands_dropped_folders_with_remote_relative_names() {
+        let root = std::env::temp_dir().join(format!(
+            "lopload-folder-drop-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let selected = root.join("photos");
+        std::fs::create_dir_all(selected.join("holiday")).expect("create test folders");
+        std::fs::write(selected.join("cover.jpg"), b"cover").expect("write cover");
+        std::fs::write(selected.join("holiday").join("beach.jpg"), b"beach")
+            .expect("write nested file");
+
+        let expanded =
+            expand_upload_paths(std::slice::from_ref(&selected)).expect("expand selected folder");
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|(_, relative)| relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["photos/cover.jpg", "photos/holiday/beach.jpg"]
+        );
+
+        std::fs::remove_dir_all(root).expect("remove test folders");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinks_in_dropped_folders() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "lopload-folder-symlink-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let selected = root.join("selected");
+        std::fs::create_dir_all(&selected).expect("create selected folder");
+        std::fs::write(root.join("outside.txt"), b"outside").expect("write outside file");
+        symlink(root.join("outside.txt"), selected.join("linked.txt")).expect("create symlink");
+
+        assert!(
+            expand_upload_paths(std::slice::from_ref(&selected))
+                .expect("expand selected folder")
+                .is_empty()
+        );
+
+        std::fs::remove_dir_all(root).expect("remove test folders");
     }
 
     #[test]
