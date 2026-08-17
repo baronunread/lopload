@@ -35,5 +35,10 @@ of time on machines with full Xcode once native packaging is introduced.
 
 - Move-to-folder controls and progress for recursive storage operations
 - Guarded recursive folder drops, internal drag-to-move, tray, notifications, and auto-updates
+- Multi-selection and bulk download/Trash/move actions
+- Name/size/date sorting, name filtering, file and folder information, and media previews
+- Credential re-entry, optimistic mutations with rollback, and stale-list protection
+- Transfer speed display, collapsed batch summaries, and completion notifications
+- First-run celebration, system theme handling, and the remaining polished browser states
 - Scenario coverage equivalent to the current Host-seam suite
 - macOS, Linux, and Windows packaging and signing
