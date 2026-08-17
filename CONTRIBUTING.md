@@ -4,33 +4,29 @@ Thanks for your interest! Bug reports, feature requests, and PRs are all welcome
 
 ## Development setup
 
-You'll need [Bun](https://bun.sh) and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform (Rust toolchain, plus platform WebView deps on Linux).
+You'll need [Bun](https://bun.sh), Rust, and [Cinder](https://github.com/CapSoftware/cinder). Cinder currently has no stable release, so bootstrap the pinned revision once with Cargo:
 
 ```sh
+cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 bun install
-bun run tauri dev        # desktop app with hot-reload
+bun run dev              # native GPUI app with hot-reload
 ```
 
-Everything uses `bun` — never `npm`/`npx`/`node`.
+Cinder drives the GPUI application while Cargo remains the source of truth underneath it.
 
-> `bun run dev` starts Vite in a plain browser tab, but the real S3/keychain/transfer stack needs the Tauri webview — use `bun run tauri dev`.
+Everything uses `bun` — never `npm`/`npx`/`node`.
 
 ## Before opening a PR
 
 ```sh
-bun run check     # typecheck + the whole suite — must pass, CI gates on this
-bun run selftest  # the same scenarios, inside the real Tauri binary (macOS/Linux/Windows — needs OS keychain)
+bun run check
 ```
 
-Tests talk to a real MinIO, so Docker needs to be running. The container is
-reused between runs, so you pay its ~2s startup once. `bun run selftest` boots
-the actual app and drives it — that's the one that covers the Rust/IPC path, and
-it's worth running before anything that touches transfers. On Linux it needs a
-running Secret Service provider (gnome-keyring / KWallet).
+Ignored native integration tests talk to a real MinIO, so Docker needs to be running when you exercise those scenarios. CI runs them against an actual MinIO container. On Linux, keychain tests need a running Secret Service provider such as gnome-keyring or KWallet.
 
 - Branch off `main`; PRs require passing CI and one approving review.
 - Keep PRs focused — one change per PR.
-- Match the existing code style; there's no formatter config, TypeScript strictness is the contract.
+- Match the existing Rust style and run `cinder fmt` before submitting.
 
 ## Architecture and conventions
 

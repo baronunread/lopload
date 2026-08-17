@@ -32,21 +32,29 @@
 
 ### Quick start
 
+Install [Cinder](https://github.com/CapSoftware/cinder) once. Cinder is not yet distributed as a stable release, so Lopload pins the revision it uses:
+
 ```bash
+cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 bun install
-bun run tauri dev
+bun run dev
 ```
 
-> [!TIP]
-> `bun run dev` starts Vite in a plain browser tab, but the app only renders a
-> "requires the desktop app" notice there — the real S3/keychain/transfer
-> stack needs the Tauri webview. Use `bun run tauri dev` to run the app.
+The desktop application is native Rust rendered by GPUI; it does not embed a webview. Useful commands are:
+
+```bash
+bun run check
+bun run build
+bun run package
+```
+
+The shipping UI lives in `src-gpui/`; reusable storage, transfer, SQLite, and keychain code lives in `crates/lopload-native/`.
 
 | Platform | Download |
 |---|---|
 | macOS (Apple Silicon) | `.dmg` |
-| Windows (x64) | `.msi` (installer) · `.exe` (portable) |
-| Linux (x64) | `.deb` · `.rpm` · `.AppImage` |
+| Windows (x64) | `.msi` · NSIS `.exe` · portable `.exe` |
+| Linux (x64) | `.deb` · `.AppImage` |
 
 Download from the [releases page](https://github.com/baronunread/lopload/releases).
 
@@ -68,13 +76,13 @@ Download from the [releases page](https://github.com/baronunread/lopload/release
 - **Follows system theme** — light/dark follows the OS by default, with a manual toggle in the header.
 
 > [!TIP]
-> **Production build** — `bun run tauri build` always stores credentials in the native OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). No env vars, no config, no prompts.
+> **Production build** — `bun run package` always stores credentials in the native OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). No env vars or config files hold secrets.
 
 ---
 
 ### Auto updates
 
-Lopload checks GitHub Releases for a new version on startup (and at most every 24h while it stays open). When one is found, a non-intrusive banner lets you download it in the background — with a progress bar, without interrupting your work — and restart when you choose. Never a forced or silent update. Updates are signed with a minisign keypair and verified before install — the public key ships in `src-tauri/tauri.conf.json`; there's no paid code-signing certificate involved.
+Lopload checks GitHub Releases on startup when automatic checks are enabled, and also offers a manual check in Settings. When a newer version is found, a banner lets you install and restart. Updates are never installed silently. Every downloaded installer is verified with the Minisign public key embedded in `src-gpui/src/updater.rs` before it can run. Linux AppImages update in place; `.deb` installations remain under their package manager's control.
 
 <details>
 <summary><strong>Running a fork?</strong> One-time signing setup</summary>
@@ -83,17 +91,17 @@ Tagged release builds (`v*`) sign updater artifacts with a private key held in t
 
 1. **Generate the keypair** (once, on your machine — never commit the private key):
    ```sh
-   bunx tauri signer generate -w ~/.tauri/lopload.key
+   cargo-packager signer generate --path ~/.cargo/lopload.key
    ```
    This prints a public key and writes the private key to `~/.tauri/lopload.key`. Optionally pass `-p` to set a password on the private key.
 
-2. **Paste the public key** into `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`, and point `plugins.updater.endpoints` at your fork's releases.
+2. **Paste the decoded Minisign public key** and your fork's `latest.json` URL into `src-gpui/src/updater.rs`.
 
 3. **Add GitHub Actions secrets** (repo → Settings → Secrets and variables → Actions):
    - `TAURI_SIGNING_PRIVATE_KEY` — the contents of `~/.tauri/lopload.key`
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — only if you set a password in step 1
 
-Everyday push/PR builds pass `--no-sign` and work without any of this; only tag builds need the secrets.
+Everyday push/PR builds work without these secrets; only tagged releases sign updater packages.
 </details>
 
 ---
@@ -101,7 +109,7 @@ Everyday push/PR builds pass `--no-sign` and work without any of this; only tag 
 ### Security
 
 - Credentials live only in the OS keychain. Never in SQLite, config files, or logs.
-- All S3 requests go through Rust via `@tauri-apps/plugin-http`. No CORS, no proxy, no third-party relay.
+- All S3 requests run in native Rust. No CORS workaround, webview bridge, proxy, or third-party relay is involved.
 - Error messages shown to the user are plain sentences. Raw SDK or XML error text never reaches the UI.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 - [Documentation](https://docs.lopload.com) *(coming soon)*

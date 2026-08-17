@@ -1,0 +1,82 @@
+name: GPUI packages
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            formats: deb,appimage
+          - os: macos-26
+            formats: app,dmg
+          - os: windows-latest
+            formats: nsis,wix
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Cinder
+        run: cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-gpui
+            crates/lopload-native
+
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxdo-dev \
+            libxkbcommon-x11-dev \
+            libayatana-appindicator3-dev \
+            libzstd-dev \
+            patchelf
+
+      - name: Package GPUI application
+        working-directory: src-gpui
+        run: cargo-packager --config packager.toml --formats ${{ matrix.formats }}
+
+      - name: Copy raw binary (Windows portable)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item src-gpui/target/release/lopload.exe src-gpui/target/release/packages/Lopload_portable.exe
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpui-${{ matrix.os }}
+          path: src-gpui/target/release/packages/

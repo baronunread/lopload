@@ -4,6 +4,7 @@
   "version": "../package.json",
   "identifier": "com.lopload",
   "build": {
+    "runner": "cinder",
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "bun run build",

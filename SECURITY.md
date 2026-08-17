@@ -15,7 +15,7 @@ Report privately via [GitHub Security Advisories](https://github.com/baronunread
 Lopload's security-relevant surface:
 
 - Credentials must live only in the OS keychain — never in SQLite, config files, logs, or error messages.
-- All S3 traffic goes through the Tauri HTTP plugin (Rust); nothing should transit a third-party relay.
-- Update artifacts are minisign-verified via Tauri's updater.
+- All S3 traffic runs in native Rust; nothing should transit a third-party relay.
+- Update artifacts are Minisign-verified by the native updater before installation.
 
 Anything that violates these invariants — a credential leaking into a log or the database, share links exposing more than intended, updater signature bypass — is a valid report.

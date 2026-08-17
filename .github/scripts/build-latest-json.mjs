@@ -1,14 +1,3 @@
-// Builds the tauri-plugin-updater static manifest (latest.json) for a
-// GitHub release. Runs after `actions/download-artifact` has merged every
-// platform's `src-tauri/target/release/bundle/` into the current directory.
-//
-// We don't use tauri-apps/tauri-action (which does this automatically) — the
-// existing release workflow builds and uploads bundles by hand, so this
-// mirrors the same recipe by hand: read the `.sig` file the CLI wrote next
-// to each updater-eligible bundle and pair it with the asset's eventual
-// GitHub Release download URL.
-//
-// Schema: https://v2.tauri.app/plugin/updater/#static-json-file
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -29,13 +18,15 @@ function findSigned(suffix) {
   if (!match) return null;
   const sigPath = `${match}.sig`;
   if (!files.includes(sigPath)) return null;
-  return { path: match, signature: readFileSync(sigPath, "utf8").trim() };
-}
-
-function readMarker(name, fallback) {
-  const match = files.find((f) => f.endsWith(name));
-  if (!match) return fallback;
-  return readFileSync(match, "utf8").trim();
+  const encoded = readFileSync(sigPath, "utf8").trim();
+  const signature = Buffer.from(encoded, "base64").toString("utf8").trim();
+  if (!signature.startsWith("untrusted comment:") || !signature.includes("trusted comment:")) {
+    throw new Error(`Invalid Minisign signature in ${sigPath}`);
+  }
+  return {
+    path: match,
+    signature,
+  };
 }
 
 const repo = process.env.GITHUB_REPOSITORY;
@@ -49,18 +40,11 @@ function assetUrl(path) {
   return `https://github.com/${repo}/releases/download/${tag}/${path.split("/").pop()}`;
 }
 
-const darwinArch = readMarker("updater-arch-darwin.txt", "x86_64");
-
-// One entry per platform tauri-plugin-updater checks against at runtime.
-// Suffixes follow createUpdaterArtifacts: true (Tauri v2 native): the updater
-// consumes the bundles themselves (.AppImage, NSIS -setup.exe) plus a .sig
-// sidecar — only macOS still wraps in .app.tar.gz. The .AppImage.tar.gz /
-// .nsis.zip names belong to the "v1Compatible" mode we don't use.
+const macArchive = files.find((file) => file.endsWith(".app.zip"));
+const darwinArch = macArchive?.includes("darwin-aarch64") ? "aarch64" : "x86_64";
 const wanted = [
-  { key: `darwin-${darwinArch}`, suffix: ".app.tar.gz" },
+  { key: `darwin-${darwinArch}`, suffix: ".app.zip" },
   { key: "linux-x86_64", suffix: ".AppImage" },
-  // Windows produces both an NSIS and an MSI installer; NSIS is the one
-  // tauri-plugin-updater expects on this platform.
   { key: "windows-x86_64", suffix: "-setup.exe" },
 ];
 
@@ -79,8 +63,7 @@ for (const { key, suffix } of wanted) {
 if (missing.length > 0) {
   console.error("Missing signed updater artifacts for:\n" + missing.map((m) => `  - ${m}`).join("\n"));
   console.error(
-    "Every downloaded bundle-* artifact must contain a signed updater bundle — check that " +
-      "TAURI_SIGNING_PRIVATE_KEY was set for this run and that all three build jobs succeeded.",
+    "Every downloaded bundle-* artifact must contain a signed updater package — check the signing secret and all three build jobs.",
   );
   process.exit(1);
 }

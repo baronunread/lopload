@@ -32,7 +32,7 @@ const REPO_ROOT = resolve(import.meta.dir, "..");
 const SELFTEST_PORT = 14330;
 
 /** Overall time budget: MinIO startup + app boot + all scenarios. Generous —
- * a cold `cargo build` inside `tauri dev` can itself take a couple of
+ * a cold Cinder/Cargo build inside `tauri dev` can itself take a couple of
  * minutes the first time. */
 const OVERALL_TIMEOUT_MS = 10 * 60_000;
 /** Once the sentinel line is seen, how long to wait for the app to exit on

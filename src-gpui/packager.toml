@@ -1,0 +1,23 @@
+name = "lopload"
+product-name = "Lopload"
+version = "0.2.0"
+identifier = "com.lopload"
+description = "A desktop file manager for S3-compatible storage"
+category = "Utility"
+before-packaging-command = "cinder build --release"
+binaries-dir = "target/release"
+out-dir = "target/release/packages"
+icons = [
+  "../src-tauri/icons/32x32.png",
+  "../src-tauri/icons/128x128.png",
+  "../src-tauri/icons/128x128@2x.png",
+  "../src-tauri/icons/icon.icns",
+  "../src-tauri/icons/icon.ico",
+]
+binaries = [{ path = "lopload", main = true }]
+
+[macos]
+minimum-system-version = "12.0"
+
+[windows]
+allow-downgrades = false

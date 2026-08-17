@@ -30,7 +30,7 @@ and run in both places:
   file are selftest-scoped (`lopload-selftest.db` / `settings-selftest.json`),
   so wiping state between scenarios never touches the connections the real
   app has saved. Exit code comes from the
-  `SELFTEST_RESULT PASS|FAIL` sentinel. Budget ~10 min cold (cargo build),
+  `SELFTEST_RESULT PASS|FAIL` sentinel. Budget ~10 min cold (Cinder/Cargo build),
   ~1–2 min warm. Linux needs a running Secret Service provider
   (gnome-keyring / KWallet).
 
