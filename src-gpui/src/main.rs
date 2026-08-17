@@ -26,8 +26,9 @@ use lopload_native::{
     },
     save_connection, set_last_prefix,
     settings::{
-        TransferTuning, auto_update_enabled, default_download_dir, set_auto_update_enabled,
-        set_default_download_dir, set_transfer_tuning, transfer_tuning,
+        ThemeMode, TransferTuning, auto_update_enabled, default_download_dir,
+        set_auto_update_enabled, set_default_download_dir, set_theme_mode, set_transfer_tuning,
+        theme_mode, transfer_tuning,
     },
     transfer::{
         ErrorClass, Transfer, TransferControl, TransferDirection, TransferState, dismiss_transfer,
@@ -131,6 +132,8 @@ struct LoploadApp {
     move_destinations: Vec<String>,
     move_loading: bool,
     tuning: TransferTuning,
+    theme_mode: Option<ThemeMode>,
+    system_is_dark: bool,
     auto_update_enabled: bool,
     default_download_dir: Option<String>,
     settings_status: Option<String>,
@@ -166,6 +169,7 @@ impl LoploadApp {
             ),
         };
         let tuning = transfer_tuning().unwrap_or_default();
+        let theme_mode = theme_mode().unwrap_or_default();
         let auto_update_enabled = auto_update_enabled().unwrap_or(true);
         let default_download_dir = default_download_dir().unwrap_or_default();
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter files"));
@@ -174,11 +178,13 @@ impl LoploadApp {
                 cx.notify();
             }
         });
-        let appearance_subscription = cx.observe_window_appearance(window, |_, window, cx| {
-            DARK_APPEARANCE.store(is_dark_appearance(window), AtomicOrdering::Relaxed);
+        let appearance_subscription = cx.observe_window_appearance(window, |this, window, cx| {
+            this.system_is_dark = is_dark_appearance(window);
+            set_dark_appearance(this.theme_mode, this.system_is_dark);
             cx.notify();
         });
-        DARK_APPEARANCE.store(is_dark_appearance(window), AtomicOrdering::Relaxed);
+        let system_is_dark = is_dark_appearance(window);
+        set_dark_appearance(theme_mode, system_is_dark);
         let first_run = connections.is_empty();
         Self {
             screen: initial_screen(first_run),
@@ -210,6 +216,8 @@ impl LoploadApp {
             move_destinations: Vec::new(),
             move_loading: false,
             tuning,
+            theme_mode,
+            system_is_dark,
             auto_update_enabled,
             default_download_dir,
             settings_status: None,
@@ -3264,7 +3272,8 @@ impl LoploadApp {
 
 impl Render for LoploadApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        DARK_APPEARANCE.store(is_dark_appearance(window), AtomicOrdering::Relaxed);
+        self.system_is_dark = is_dark_appearance(window);
+        set_dark_appearance(self.theme_mode, self.system_is_dark);
         let content = match self.screen {
             Screen::Home => self.render_home(cx).into_any_element(),
             Screen::AddStorage => self.render_add_storage(cx).into_any_element(),
@@ -3298,19 +3307,57 @@ impl Render for LoploadApp {
                     )
                     .child(
                         div()
-                            .id("open-settings")
-                            .cursor_pointer()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(strong_border_color())
-                            .px_3()
-                            .py_2()
-                            .child("Settings")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.screen = Screen::Settings;
-                                this.settings_status = None;
-                                cx.notify();
-                            })),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("toggle-theme")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(strong_border_color())
+                                    .px_3()
+                                    .py_2()
+                                    .child(if DARK_APPEARANCE.load(AtomicOrdering::Relaxed) {
+                                        "Light mode"
+                                    } else {
+                                        "Dark mode"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let next = if DARK_APPEARANCE
+                                            .load(AtomicOrdering::Relaxed)
+                                        {
+                                            ThemeMode::Light
+                                        } else {
+                                            ThemeMode::Dark
+                                        };
+                                        if set_theme_mode(next).is_ok() {
+                                            this.theme_mode = Some(next);
+                                            set_dark_appearance(
+                                                this.theme_mode,
+                                                this.system_is_dark,
+                                            );
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("open-settings")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(strong_border_color())
+                                    .px_3()
+                                    .py_2()
+                                    .child("Settings")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.screen = Screen::Settings;
+                                        this.settings_status = None;
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
             .child(content)
@@ -3331,6 +3378,15 @@ fn is_dark_appearance(window: &Window) -> bool {
         window.appearance(),
         WindowAppearance::Dark | WindowAppearance::VibrantDark
     )
+}
+
+fn set_dark_appearance(mode: Option<ThemeMode>, system_is_dark: bool) {
+    let is_dark = match mode {
+        Some(ThemeMode::Light) => false,
+        Some(ThemeMode::Dark) => true,
+        None => system_is_dark,
+    };
+    DARK_APPEARANCE.store(is_dark, AtomicOrdering::Relaxed);
 }
 
 fn themed_color(light: u32, dark: u32) -> Rgba {

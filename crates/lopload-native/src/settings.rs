@@ -2,6 +2,13 @@ use crate::open_database;
 use rusqlite::params;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    Light,
+    Dark,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransferTuning {
     pub preset: String,
@@ -29,6 +36,14 @@ pub fn auto_update_enabled() -> Result<bool, String> {
 
 pub fn set_auto_update_enabled(enabled: bool) -> Result<(), String> {
     set("auto_update_enabled", &enabled)
+}
+
+pub fn theme_mode() -> Result<Option<ThemeMode>, String> {
+    get("theme_mode")
+}
+
+pub fn set_theme_mode(mode: ThemeMode) -> Result<(), String> {
+    set("theme_mode", &mode)
 }
 
 pub fn default_download_dir() -> Result<Option<String>, String> {
@@ -104,6 +119,15 @@ mod tests {
         assert_eq!(
             set_transfer_tuning(&tuning).unwrap_err(),
             "Choose valid transfer settings"
+        );
+    }
+
+    #[test]
+    fn serializes_theme_modes_as_stable_setting_values() {
+        assert_eq!(serde_json::to_string(&ThemeMode::Light).unwrap(), "\"light\"");
+        assert_eq!(
+            serde_json::from_str::<ThemeMode>("\"dark\"").unwrap(),
+            ThemeMode::Dark
         );
     }
 }
