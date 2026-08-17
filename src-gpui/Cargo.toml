@@ -1,0 +1,12 @@
+[package]
+name = "lopload-gpui"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Experimental native GPUI frontend for Lopload"
+license = "MIT"
+
+[dependencies]
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+gpui-component = "0.5.1"
+lopload-native = { path = "../crates/lopload-native" }

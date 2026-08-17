@@ -1,6 +1,7 @@
 # Lopload — agent guide
 
-Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
+Production: Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
+Experimental: native Rust UI in `src-gpui/`, built with GPUI and Cinder.
 
 ## Quick start
 
@@ -8,6 +9,8 @@ Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
 cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder  # one-time bootstrap
 bun install
 bun run tauri dev       # desktop app with hot-reload
+bun run gpui            # experimental native GPUI app
+bun run gpui:check      # compile-check the GPUI crate with Cinder
 bun run dev              # Vite only, browser tab — shows a "requires the desktop app" notice
 bun run check            # typecheck + the whole suite — CI gates on this
 bun run selftest         # the scenarios, inside the real Tauri binary (desktop Linux/macOS/Windows — needs OS keychain)
@@ -53,6 +56,8 @@ src/tauri/          thin wrappers around Tauri plugins (keychain, fs, HTTP, noti
 src/services/       host.ts (the platform boundary) + appServices.ts (wires engine → AppServices)
 src/ui/             React components on Kumo, pastel palette
 src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs + fasthttp (zero-copy file writes / request bodies over IPC)
+src-gpui/           experimental native GPUI application
+crates/lopload-native/ shared SQLite connection store + OS-keychain backend
 tests/scenarios/    what the app does, driven through the real UI
 tests/support/      MinIO, the Node host, fault injection, the app harness
 tests/unit/         pure functions only

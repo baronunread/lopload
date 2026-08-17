@@ -40,6 +40,17 @@ bun install
 bun run tauri dev
 ```
 
+The `cinder` branch also carries the experimental native GPUI replacement:
+
+```bash
+bun run gpui
+bun run gpui:check
+```
+
+The GPUI target lives in `src-gpui/` and does not use a webview. It is an
+incremental migration; the Tauri application remains the parity reference
+until the checklist in `src-gpui/MIGRATION.md` is complete.
+
 > [!TIP]
 > `bun run dev` starts Vite in a plain browser tab, but the app only renders a
 > "requires the desktop app" notice there — the real S3/keychain/transfer

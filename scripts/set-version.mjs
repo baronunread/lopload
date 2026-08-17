@@ -1,7 +1,7 @@
 // Sets the app version. package.json is the single source of truth: the macOS
 // About panel + updater read it because src-tauri/tauri.conf.json is set to
 // "version": "../package.json", so that file isn't touched here. The Rust
-// crate (Cargo.toml + Cargo.lock) is kept in lockstep so CARGO_PKG_VERSION
+// application crates (Cargo.toml + Cargo.lock) are kept in lockstep so CARGO_PKG_VERSION
 // never drifts from the app version.
 //
 // Run locally with an explicit version:
@@ -37,10 +37,12 @@ const targets = [
   // Anchored to the [package] table so dependency versions further down the
   // manifest are never touched.
   { path: "src-tauri/Cargo.toml", re: /(\[package\][\s\S]*?\r?\nversion = )"[^"]*"/ },
+  { path: "src-gpui/Cargo.toml", re: /(\[package\][\s\S]*?\r?\nversion = )"[^"]*"/ },
   // The workspace's own entry in the lockfile, matched by package name so the
   // hundreds of dependency entries are left alone. `\r?\n` because Windows CI
   // checks out with CRLF line endings.
   { path: "src-tauri/Cargo.lock", re: /(name = "lopload"\r?\nversion = )"[^"]*"/ },
+  { path: "src-gpui/Cargo.lock", re: /(name = "lopload-gpui"\r?\nversion = )"[^"]*"/ },
 ];
 
 for (const { path, re } of targets) {
