@@ -107,16 +107,21 @@ pub fn create_folder(
     let connection = connection.clone();
     let key = format!("{prefix}{name}/");
     runtime()?.block_on(async move {
-        client(&connection)?
-            .put_object()
-            .bucket(&connection.bucket)
-            .key(key)
-            .body(ByteStream::from_static(b""))
-            .send()
-            .await
-            .map_err(|_| "Could not create this folder".to_string())?;
-        Ok(())
+        let client = client(&connection)?;
+        create_folder_with_client(&client, &connection.bucket, &key).await
     })
+}
+
+async fn create_folder_with_client(client: &Client, bucket: &str, key: &str) -> Result<(), String> {
+    client
+        .put_object()
+        .bucket(bucket)
+        .key(key)
+        .body(ByteStream::from_static(b""))
+        .send()
+        .await
+        .map_err(|_| "Could not create this folder".to_string())?;
+    Ok(())
 }
 
 pub fn preview_bytes(
@@ -330,6 +335,9 @@ mod tests {
             .expect("runtime")
             .block_on(async {
                 client.create_bucket().bucket(&bucket).send().await?;
+                create_folder_with_client(&client, &bucket, "empty/")
+                    .await
+                    .expect("create folder");
                 client
                     .put_object()
                     .bucket(&bucket)
@@ -348,10 +356,12 @@ mod tests {
                 let entries = list_entries_with_client(&client, &bucket, "")
                     .await
                     .expect("list");
-                assert_eq!(entries.len(), 2);
+                assert_eq!(entries.len(), 3);
                 assert!(matches!(entries[0].kind, RemoteEntryKind::Folder));
                 assert_eq!(entries[0].name, "docs");
-                assert_eq!(entries[1].name, "photo.jpg");
+                assert!(matches!(entries[1].kind, RemoteEntryKind::Folder));
+                assert_eq!(entries[1].name, "empty");
+                assert_eq!(entries[2].name, "photo.jpg");
                 assert_eq!(
                     preview_bytes_with_client(&client, &bucket, "photo.jpg", 5)
                         .await
@@ -368,6 +378,12 @@ mod tests {
                     .delete_object()
                     .bucket(&bucket)
                     .key("docs/readme.txt")
+                    .send()
+                    .await?;
+                client
+                    .delete_object()
+                    .bucket(&bucket)
+                    .key("empty/")
                     .send()
                     .await?;
                 client
