@@ -22,6 +22,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Server-side multipart copies for large rename/Trash operations and 24-hour share links
 - Native download-folder, automatic-update, and transfer-speed settings
 - Live transfer-rate display and collapsible active/completed/failed summaries
+- Cross-platform native completion notifications with one summary per transfer batch
 - Bounded parallel multipart uploads and ranged downloads driven by the selected speed preset
 - Manual retry for failed uploads and downloads, including persisted ranged-download recovery
 - Native OS file drops onto the current folder
@@ -43,7 +44,7 @@ of time on machines with full Xcode once native packaging is introduced.
 
 ## Required for parity
 
-- Guarded recursive folder drops, tray, notifications, and auto-updates
+- Guarded recursive folder drops, tray, and auto-updates
 - Media previews
 - First-run celebration, system theme handling, and the remaining polished browser states
 - Scenario coverage equivalent to the current Host-seam suite

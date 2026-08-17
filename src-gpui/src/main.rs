@@ -30,6 +30,7 @@ use lopload_native::{
     },
     update_connection,
 };
+use notify_rust::Notification;
 use std::{
     collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
@@ -268,7 +269,7 @@ impl LoploadApp {
         cx.background_executor()
             .spawn(async move {
                 let mut transfer_id = Some(transfer.id.clone());
-                let _ = resume_upload(&connection, transfer, &control, |updated| {
+                let result = resume_upload(&connection, transfer, &control, |updated| {
                     transfer_id = Some(updated.id.clone());
                     let _ =
                         sender.send_blocking(TransferEvent::Update(updated, event_control.clone()));
@@ -277,6 +278,12 @@ impl LoploadApp {
                     if let Some(id) = transfer_id {
                         let _ = sender.send_blocking(TransferEvent::Removed(id));
                     }
+                } else {
+                    notify_transfer_completion(
+                        TransferDirection::Upload,
+                        result.is_ok() as usize,
+                        result.is_err() as usize,
+                    );
                 }
             })
             .detach();
@@ -295,12 +302,18 @@ impl LoploadApp {
         cx.background_executor()
             .spawn(async move {
                 let id = transfer.id.clone();
-                let _ = resume_download(&connection, transfer, &control, |updated| {
+                let result = resume_download(&connection, transfer, &control, |updated| {
                     let _ =
                         sender.send_blocking(TransferEvent::Update(updated, event_control.clone()));
                 });
                 if control.is_cancelled() {
                     let _ = sender.send_blocking(TransferEvent::Removed(id));
+                } else {
+                    notify_transfer_completion(
+                        TransferDirection::Download,
+                        result.is_ok() as usize,
+                        result.is_err() as usize,
+                    );
                 }
             })
             .detach();
@@ -741,18 +754,21 @@ impl LoploadApp {
                         "Folder drops aren't available in the native build yet".into(),
                     ));
                 }
+                let mut succeeded = 0;
+                let mut failed = 0;
                 for group in files.chunks(concurrency) {
-                    std::thread::scope(|scope| {
+                    let results = std::thread::scope(|scope| {
+                        let mut handles = Vec::new();
                         for (path, relative_key) in group.iter().cloned() {
                             let connection = connection.clone();
                             let prefix = prefix.clone();
                             let sender = sender.clone();
-                            scope.spawn(move || {
+                            handles.push(scope.spawn(move || {
                                 let key = format!("{prefix}{relative_key}");
                                 let control = TransferControl::default();
                                 let event_control = control.clone();
                                 let mut transfer_id = None;
-                                let _ =
+                                let result =
                                     upload_file(&connection, &path, &key, &control, |transfer| {
                                         transfer_id = Some(transfer.id.clone());
                                         let _ = sender.send_blocking(TransferEvent::Update(
@@ -764,11 +780,26 @@ impl LoploadApp {
                                     if let Some(id) = transfer_id {
                                         let _ = sender.send_blocking(TransferEvent::Removed(id));
                                     }
+                                    None
+                                } else {
+                                    Some(result.is_ok())
                                 }
-                            });
+                            }));
                         }
+                        handles
+                            .into_iter()
+                            .map(|handle| handle.join().unwrap_or(None))
+                            .collect::<Vec<_>>()
                     });
+                    for result in results.into_iter().flatten() {
+                        if result {
+                            succeeded += 1;
+                        } else {
+                            failed += 1;
+                        }
+                    }
                 }
+                notify_transfer_completion(TransferDirection::Upload, succeeded, failed);
             })
             .detach();
     }
@@ -796,7 +827,7 @@ impl LoploadApp {
                 let control = TransferControl::default();
                 let event_control = control.clone();
                 let mut transfer_id = None;
-                let _ = download_file(
+                let result = download_file(
                     &connection,
                     &entry.key,
                     &destination,
@@ -812,6 +843,12 @@ impl LoploadApp {
                     if let Some(id) = transfer_id {
                         let _ = sender.send_blocking(TransferEvent::Removed(id));
                     }
+                } else {
+                    notify_transfer_completion(
+                        TransferDirection::Download,
+                        result.is_ok() as usize,
+                        result.is_err() as usize,
+                    );
                 }
             })
             .detach();
@@ -1063,16 +1100,19 @@ impl LoploadApp {
                         "Skipped {skipped} unsafe file names"
                     )));
                 }
+                let mut succeeded = 0;
+                let mut failed = 0;
                 for group in downloads.chunks(concurrency) {
-                    std::thread::scope(|scope| {
+                    let results = std::thread::scope(|scope| {
+                        let mut handles = Vec::new();
                         for (key, size, destination) in group.iter().cloned() {
                             let connection = connection.clone();
                             let sender = sender.clone();
-                            scope.spawn(move || {
+                            handles.push(scope.spawn(move || {
                                 let control = TransferControl::default();
                                 let event_control = control.clone();
                                 let mut transfer_id = None;
-                                let _ = download_file(
+                                let result = download_file(
                                     &connection,
                                     &key,
                                     &destination,
@@ -1090,11 +1130,26 @@ impl LoploadApp {
                                     if let Some(id) = transfer_id {
                                         let _ = sender.send_blocking(TransferEvent::Removed(id));
                                     }
+                                    None
+                                } else {
+                                    Some(result.is_ok())
                                 }
-                            });
+                            }));
                         }
+                        handles
+                            .into_iter()
+                            .map(|handle| handle.join().unwrap_or(None))
+                            .collect::<Vec<_>>()
                     });
+                    for result in results.into_iter().flatten() {
+                        if result {
+                            succeeded += 1;
+                        } else {
+                            failed += 1;
+                        }
+                    }
                 }
+                notify_transfer_completion(TransferDirection::Download, succeeded, failed);
             })
             .detach();
     }
@@ -3173,6 +3228,60 @@ fn transfer_summary(transfers: &[Transfer]) -> String {
     format!("Transfers · {}", parts.join(" · "))
 }
 
+fn transfer_completion_message(
+    direction: &TransferDirection,
+    succeeded: usize,
+    failed: usize,
+) -> Option<(String, String)> {
+    let total = succeeded + failed;
+    if total == 0 {
+        return None;
+    }
+    let action = match direction {
+        TransferDirection::Upload => "upload",
+        TransferDirection::Download => "download",
+    };
+    let title = if total == 1 {
+        format!("{} complete", uppercase_first(action))
+    } else {
+        format!("{}s complete", uppercase_first(action))
+    };
+    let completed = match direction {
+        TransferDirection::Upload => "uploaded",
+        TransferDirection::Download => "downloaded",
+    };
+    let files = |count| if count == 1 { "file" } else { "files" };
+    let body = match (succeeded, failed) {
+        (0, failed) => format!("{failed} {} failed", files(failed)),
+        (succeeded, 0) => format!("{succeeded} {} {completed}", files(succeeded)),
+        (succeeded, failed) => format!(
+            "{succeeded} {} {completed} · {failed} {} failed",
+            files(succeeded),
+            files(failed)
+        ),
+    };
+    Some((title, body))
+}
+
+fn notify_transfer_completion(direction: TransferDirection, succeeded: usize, failed: usize) {
+    let Some((title, body)) = transfer_completion_message(&direction, succeeded, failed) else {
+        return;
+    };
+    let _ = Notification::new()
+        .appname("Lopload")
+        .summary(&title)
+        .body(&body)
+        .show();
+}
+
+fn uppercase_first(value: &str) -> String {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
+        .unwrap_or_default()
+}
+
 fn transfer_state_label(state: &TransferState, speed: Option<u64>) -> String {
     match state {
         TransferState::Queued => "Waiting".into(),
@@ -3348,6 +3457,21 @@ mod tests {
         assert_eq!(
             transfer_state_label(&TransferState::Sending { percent: 50.0 }, Some(1024)),
             "Transferring… 50% · 1.0 KB/s"
+        );
+        assert_eq!(
+            transfer_completion_message(&TransferDirection::Upload, 2, 1),
+            Some((
+                "Uploads complete".into(),
+                "2 files uploaded · 1 file failed".into()
+            ))
+        );
+        assert_eq!(
+            transfer_completion_message(&TransferDirection::Download, 1, 0),
+            Some(("Download complete".into(), "1 file downloaded".into()))
+        );
+        assert_eq!(
+            transfer_completion_message(&TransferDirection::Upload, 0, 0),
+            None
         );
     }
 }
