@@ -15,6 +15,8 @@ async-channel = "2"
 chrono = "0.4"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 gpui-component = "0.5.1"
+image-crate = { package = "image", version = "0.25.9", default-features = false, features = ["png"] }
 lopload-native = { path = "../crates/lopload-native" }
 notify-rust = "=4.11.7"
 rfd = "0.15"
+tray-icon = "=0.24.1"

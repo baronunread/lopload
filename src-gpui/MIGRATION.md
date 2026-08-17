@@ -41,6 +41,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Deterministic Rustls/WebPKI networking verified against real MinIO
 - Cinder run/check commands and version lockstep with the production app
 - Native release manifest for macOS, Linux, and Windows packaging through Cinder
+- Cross-platform tray with live transfer status, failure state, show, and explicit quit
 
 GPUI's `runtime_shaders` feature is enabled so local development works with
 Apple Command Line Tools alone. Release builds can compile Metal shaders ahead
@@ -48,7 +49,7 @@ of time on machines with full Xcode once native packaging is introduced.
 
 ## Required for parity
 
-- Guarded recursive folder drops, tray, and auto-updates
+- Guarded recursive folder drops and auto-updates
 - Remaining polished browser states
 - Scenario coverage equivalent to the current Host-seam suite
 - Platform signing and release-workflow validation on macOS, Linux, and Windows

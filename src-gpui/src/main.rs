@@ -1,3 +1,5 @@
+mod tray;
+
 use chrono::{Local, TimeZone};
 use gpui::{
     App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, ExternalPaths,
@@ -245,6 +247,7 @@ impl LoploadApp {
         self.transfer_controls.clear();
         self.transfer_speed_samples.clear();
         self.transfer_speeds.clear();
+        tray::update_status(&self.transfers, cx);
         self.previews.clear();
         self.preview_failures.clear();
         self.current_connection = Some(connection);
@@ -374,6 +377,7 @@ impl LoploadApp {
         } else {
             self.transfers.push(transfer.clone());
         }
+        tray::update_status(&self.transfers, cx);
         if matches!(transfer.state, TransferState::Uploaded) {
             self.load_prefix(self.prefix.clone(), cx);
         } else {
@@ -733,6 +737,7 @@ impl LoploadApp {
                             this.transfer_controls.remove(&id);
                             this.transfer_speed_samples.remove(&id);
                             this.transfer_speeds.remove(&id);
+                            tray::update_status(&this.transfers, cx);
                             cx.notify();
                         }
                         TransferEvent::Status(status) => {
@@ -2509,6 +2514,10 @@ impl LoploadApp {
                                                                     .remove(&dismiss_id);
                                                                 this.transfer_speeds
                                                                     .remove(&dismiss_id);
+                                                                tray::update_status(
+                                                                    &this.transfers,
+                                                                    cx,
+                                                                );
                                                             }
                                                             cx.notify();
                                                         },
@@ -3665,21 +3674,50 @@ fn main() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some("Lopload".into()),
+        let window_handle = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("Lopload".into()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |window, cx| {
-                let view = cx.new(|cx| LoploadApp::new(window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        )
-        .expect("failed to open Lopload window");
+                },
+                |window, cx| {
+                    let view = cx.new(|cx| LoploadApp::new(window, cx));
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            )
+            .expect("failed to open Lopload window");
+        match tray::setup(cx) {
+            Ok(receiver) => {
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    window.on_window_should_close(cx, |_, cx| {
+                        cx.hide();
+                        false
+                    });
+                });
+                cx.spawn(async move |cx| {
+                    while let Ok(command) = receiver.recv().await {
+                        match command {
+                            tray::TrayCommand::Show => {
+                                let _ = cx.update(|cx| cx.activate(false));
+                                let _ = window_handle.update(cx, |_, window, _| {
+                                    window.activate_window();
+                                });
+                            }
+                            tray::TrayCommand::Quit => {
+                                let _ = cx.update(|cx| cx.quit());
+                                break;
+                            }
+                        }
+                    }
+                })
+                .detach();
+            }
+            Err(error) => eprintln!("Lopload tray unavailable: {error}"),
+        }
         cx.activate(true);
     });
 }
