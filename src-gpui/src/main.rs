@@ -2498,6 +2498,7 @@ impl LoploadApp {
                                 let selected = self.share_expiry_seconds == seconds;
                                 div()
                                     .id(("share-expiry", index))
+                                    .debug_selector(move || format!("share-expiry-{index}"))
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
@@ -2987,6 +2988,7 @@ impl LoploadApp {
                             .child(
                                 div()
                                     .id(("select-entry", index))
+                                    .debug_selector(move || format!("select-entry-{index}"))
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
@@ -3054,6 +3056,7 @@ impl LoploadApp {
                                 row.child(
                                     div()
                                         .id(("share-file", index))
+                                        .debug_selector(move || format!("share-file-{index}"))
                                         .cursor_pointer()
                                         .rounded_lg()
                                         .border_1()
@@ -4134,6 +4137,20 @@ mod tests {
         }
     }
 
+    fn browser_initial_state() -> InitialAppState {
+        let mut initial = empty_initial_state();
+        initial.connections.push(StorageConnection {
+            id: "connection".into(),
+            name: "Storage".into(),
+            endpoint: "https://storage.example.com".into(),
+            bucket: "files".into(),
+            region: "auto".into(),
+            last_prefix: "docs/".into(),
+            created_at: 0,
+        });
+        initial
+    }
+
     fn transfer(state: TransferState) -> Transfer {
         Transfer {
             id: "transfer".into(),
@@ -4180,18 +4197,8 @@ mod tests {
     #[gpui::test]
     fn closes_settings_back_to_the_native_browser(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
-        let mut initial = empty_initial_state();
-        initial.connections.push(StorageConnection {
-            id: "connection".into(),
-            name: "Storage".into(),
-            endpoint: "https://storage.example.com".into(),
-            bucket: "files".into(),
-            region: "auto".into(),
-            last_prefix: "docs/".into(),
-            created_at: 0,
-        });
         let (view, cx) = cx.add_window_view(|window, cx| {
-            LoploadApp::new_with_initial_state(window, cx, initial, false)
+            LoploadApp::new_with_initial_state(window, cx, browser_initial_state(), false)
         });
         cx.update(|_, app| assert_eq!(view.read(app).screen, Screen::Browser));
 
@@ -4212,6 +4219,56 @@ mod tests {
             .expect("painted New folder control");
         cx.simulate_click(new_folder.center(), gpui::Modifiers::none());
         cx.update(|_, app| assert!(view.read(app).new_folder_open));
+    }
+
+    #[gpui::test]
+    fn selects_and_shares_a_file_through_the_native_browser(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            LoploadApp::new_with_initial_state(window, cx, browser_initial_state(), false)
+        });
+        let entry = RemoteEntry {
+            kind: RemoteEntryKind::File,
+            name: "report.pdf".into(),
+            key: "docs/report.pdf".into(),
+            size: Some(128),
+            last_modified: Some(1_700_000_000_000),
+        };
+        view.update(cx, |this, cx| {
+            this.entries = vec![entry.clone()];
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let select = cx
+            .debug_bounds("select-entry-0")
+            .expect("painted Select control");
+        cx.simulate_click(select.center(), gpui::Modifiers::none());
+        cx.update(|_, app| {
+            assert!(view.read(app).selected_keys.contains("docs/report.pdf"));
+        });
+
+        let share = cx
+            .debug_bounds("share-file-0")
+            .expect("painted Copy link control");
+        cx.simulate_click(share.center(), gpui::Modifiers::none());
+        cx.update(|_, app| {
+            assert_eq!(
+                view.read(app)
+                    .pending_share
+                    .as_ref()
+                    .map(|entry| entry.key.as_str()),
+                Some("docs/report.pdf")
+            );
+        });
+
+        let seven_days = cx
+            .debug_bounds("share-expiry-2")
+            .expect("painted 7 days control");
+        cx.simulate_click(seven_days.center(), gpui::Modifiers::none());
+        cx.update(|_, app| {
+            assert_eq!(view.read(app).share_expiry_seconds, 7 * 24 * 60 * 60);
+        });
     }
 
     #[test]
