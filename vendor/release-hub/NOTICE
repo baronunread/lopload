@@ -1,0 +1,27 @@
+NOTICE
+
+This project includes third-party code with the following attributions:
+
+Source: tauri-apps/tauri-plugion-updater (https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/updater)
+License: MIT OR Apache-2.0
+Copyright: Copyright (c) 2015 - Present - The Tauri Programme within The Commons Conservancy
+
+This crate is copied and modified from Tauri Programme's
+project tauri-plugin-updater (https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/updater).
+
+Original License Information:
+- MIT License: https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/updater/LICENSE_MIT
+- Apache License 2.0: https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/updater/LICENSE_APACHE-2.0
+
+Usage && Modifications:
+- Adapt for universal Rust crate instead of Tauri
+- Modify API interfaces for BibCiTeX application requirements
+- Remove Tauri-specific dependencies and runtime integration
+- Use crate `octocrab` for GitHub API interaction
+- Remove Linux support and its corresponding deps
+
+
+For complete license texts and additional attribution details, please see:
+- LICENSE-MIT (MIT License)
+- LICENSE-APACHE (Apache License 2.0)
+- README.md (Third-Party Code Attribution section)

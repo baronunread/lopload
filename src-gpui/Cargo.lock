@@ -6484,8 +6484,6 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "release-hub"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c2cc310d260435958cbd68545702d67090fd7c3be7792ef982caae3201b8ebb"
 dependencies = [
  "flate2",
  "fs-err",

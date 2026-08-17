@@ -24,6 +24,9 @@ tokio = { version = "1", features = ["rt", "time"] }
 tray-icon = "=0.24.1"
 url = "2"
 
+[patch.crates-io]
+release-hub = { path = "../vendor/release-hub" }
+
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["runtime_shaders", "test-support"] }
 minisign-verify = "=0.2.5"
