@@ -1,8 +1,6 @@
-// Sets the app version. package.json is the single source of truth: the macOS
-// About panel + updater read it because src-tauri/tauri.conf.json is set to
-// "version": "../package.json", so that file isn't touched here. The Rust
-// application crates (Cargo.toml + Cargo.lock) are kept in lockstep so CARGO_PKG_VERSION
-// never drifts from the app version.
+// Sets the shipping GPUI crate, package manifest, and package.json version in
+// lockstep. The preserved legacy Tauri crate is updated too so its reference
+// build remains reproducible while it stays in the repository.
 //
 // Run locally with an explicit version:
 //

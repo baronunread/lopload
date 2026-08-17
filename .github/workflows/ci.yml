@@ -4,49 +4,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Lets build.yml run these same jobs as a gate before tag releases.
-  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Typecheck, the pure unit tests, and the scenario suite — the last of which
-  # drives the real app against a real MinIO. `ensureMinio()` starts the
-  # container itself (docker is preinstalled on the runner), so there's no
-  # service block here; that keeps the local and CI paths identical.
-  check:
+  native:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Tests
-        run: bun run test
-
-  # Never ran in CI before this: the Rust half of the app — the tray status
-  # line, positional file writes (fastfs), and the upload fast path's header
-  # parsing and cancel registry (fasthttp) — was covered only by whatever a
-  # developer happened to run locally.
-  rust:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
@@ -56,22 +25,11 @@ jobs:
       - name: Install Cinder
         run: cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            src-tauri
-            crates/lopload-native
+          workspaces: crates/lopload-native
 
-      - name: Cinder native tests
+      - name: Native tests
         working-directory: crates/lopload-native
         run: cinder test
 
@@ -87,7 +45,7 @@ jobs:
           done
           curl --fail http://127.0.0.1:9400/minio/health/live
 
-      - name: Cinder native S3 integration
+      - name: Native S3 integration
         working-directory: crates/lopload-native
         run: |
           cinder test lists_real_minio_objects -- --ignored
@@ -95,16 +53,17 @@ jobs:
           cinder test moves_real_minio_objects_without_downloading_them -- --ignored
           cinder test trashes_restores_and_permanently_deletes_real_minio_folders -- --ignored
 
-      - name: Cinder test
-        working-directory: src-tauri
-        run: cinder test
-
   gpui:
-    runs-on: macos-14
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-26, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -114,12 +73,35 @@ jobs:
       - name: Install Cinder
         run: cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxdo-dev \
+            libxkbcommon-x11-dev \
+            libayatana-appindicator3-dev \
+            libzstd-dev
+
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-gpui
+          workspaces: |
+            src-gpui
+            crates/lopload-native
 
-      - name: Cinder check and test
+      - name: GPUI check and tests
         working-directory: src-gpui
         run: |
-          cinder check
-          cinder test
+          cinder check --locked
+          cinder test --locked

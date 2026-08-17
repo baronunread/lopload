@@ -1,4 +1,5 @@
 mod tray;
+mod updater;
 
 use chrono::{Local, TimeZone};
 use gpui::{
@@ -64,6 +65,16 @@ enum Screen {
 enum BrowserStatus {
     Idle,
     Loading,
+    Failed(String),
+}
+
+#[derive(Clone)]
+enum AppUpdateState {
+    Idle,
+    Checking,
+    Current,
+    Available(updater::AvailableUpdate),
+    Installing,
     Failed(String),
 }
 
@@ -174,6 +185,7 @@ struct LoploadApp {
     theme_mode: Option<ThemeMode>,
     system_is_dark: bool,
     auto_update_enabled: bool,
+    update_state: AppUpdateState,
     default_download_dir: Option<String>,
     settings_status: Option<String>,
     cleaning_stale_uploads: bool,
@@ -294,6 +306,7 @@ impl LoploadApp {
             theme_mode,
             system_is_dark,
             auto_update_enabled,
+            update_state: AppUpdateState::Idle,
             default_download_dir,
             settings_status: None,
             cleaning_stale_uploads: false,
@@ -330,8 +343,71 @@ impl LoploadApp {
                 app.resume_pending_uploads(cx);
             }
             start_trash_sweep(cx);
+            if app.auto_update_enabled {
+                app.check_for_updates(false, cx);
+            }
         }
         app
+    }
+
+    fn check_for_updates(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if matches!(
+            self.update_state,
+            AppUpdateState::Checking | AppUpdateState::Installing
+        ) {
+            return;
+        }
+        self.update_state = AppUpdateState::Checking;
+        cx.notify();
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(updater::check());
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = receiver.recv().await else {
+                return;
+            };
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.update_state = match result {
+                        Ok(Some(update)) => AppUpdateState::Available(update),
+                        Ok(None) if manual => AppUpdateState::Current,
+                        Ok(None) => AppUpdateState::Idle,
+                        Err(error) if manual => AppUpdateState::Failed(error),
+                        Err(_) => AppUpdateState::Idle,
+                    };
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.update_state, AppUpdateState::Available(_)) {
+            return;
+        }
+        self.update_state = AppUpdateState::Installing;
+        cx.notify();
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(updater::install_and_relaunch());
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = receiver.recv().await else {
+                return;
+            };
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.update_state = match result {
+                        Ok(()) => AppUpdateState::Current,
+                        Err(error) => AppUpdateState::Failed(error),
+                    };
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn open_connection(&mut self, connection: StorageConnection, cx: &mut Context<Self>) {
@@ -3381,6 +3457,28 @@ impl LoploadApp {
             .default_download_dir
             .clone()
             .unwrap_or_else(|| "Ask each time".into());
+        let update_state = self.update_state.clone();
+        let update_action = update_state.clone();
+        let update_busy = matches!(
+            update_state,
+            AppUpdateState::Checking | AppUpdateState::Installing
+        );
+        let update_status = match &update_state {
+            AppUpdateState::Idle => format!("Version {}", env!("CARGO_PKG_VERSION")),
+            AppUpdateState::Checking => "Checking for updates…".into(),
+            AppUpdateState::Current => "Lopload is up to date".into(),
+            AppUpdateState::Available(update) => {
+                format!("Version {} is ready to install", update.version)
+            }
+            AppUpdateState::Installing => "Installing the signed update…".into(),
+            AppUpdateState::Failed(error) => error.clone(),
+        };
+        let update_button = match &update_state {
+            AppUpdateState::Available(_) => "Update and restart",
+            AppUpdateState::Checking => "Checking…",
+            AppUpdateState::Installing => "Installing…",
+            _ => "Check now",
+        };
         div()
             .flex_1()
             .flex()
@@ -3516,9 +3614,51 @@ impl LoploadApp {
                                         let enabled = !this.auto_update_enabled;
                                         if set_auto_update_enabled(enabled).is_ok() {
                                             this.auto_update_enabled = enabled;
+                                            if enabled {
+                                                this.check_for_updates(false, cx);
+                                            }
                                         }
                                         cx.notify();
                                     })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Updates")
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::NORMAL)
+                                            .text_color(subtle_color())
+                                            .child(update_status),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("check-update")
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(strong_border_color())
+                                    .px_3()
+                                    .py_2()
+                                    .child(update_button)
+                                    .when(!update_busy, |button| {
+                                        button.cursor_pointer().on_click(cx.listener(
+                                            move |this, _, _, cx| match update_action {
+                                                AppUpdateState::Available(_) => {
+                                                    this.install_update(cx)
+                                                }
+                                                _ => this.check_for_updates(true, cx),
+                                            },
+                                        ))
+                                    }),
                             ),
                     )
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("Maintenance"))
@@ -3585,6 +3725,10 @@ impl Render for LoploadApp {
             Screen::Browser => self.render_browser(cx).into_any_element(),
             Screen::Trash => self.render_trash(cx).into_any_element(),
             Screen::Settings => self.render_settings(cx).into_any_element(),
+        };
+        let available_update = match &self.update_state {
+            AppUpdateState::Available(update) => Some(update.clone()),
+            _ => None,
         };
 
         div()
@@ -3665,6 +3809,40 @@ impl Render for LoploadApp {
                             ),
                     ),
             )
+            .when_some(available_update, |app, update| {
+                let version = update.version.clone();
+                app.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_6()
+                        .py_3()
+                        .bg(warning_surface_color())
+                        .text_color(warning_text_color())
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(format!("Lopload {version} is available"))
+                                .when_some(update.notes, |message, notes| {
+                                    message.child(div().text_sm().max_w(px(720.0)).child(notes))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("install-update")
+                                .debug_selector(|| "install-update".into())
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(accent_color())
+                                .px_3()
+                                .py_2()
+                                .text_color(on_accent_color())
+                                .child("Update and restart")
+                                .on_click(cx.listener(|this, _, _, cx| this.install_update(cx))),
+                        ),
+                )
+            })
             .child(content)
     }
 }
@@ -4285,6 +4463,24 @@ mod tests {
     }
 
     #[gpui::test]
+    fn presents_a_signed_update_in_the_native_window(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            LoploadApp::new_with_initial_state(window, cx, browser_initial_state(), false)
+        });
+        view.update(cx, |this, cx| {
+            this.update_state = AppUpdateState::Available(updater::AvailableUpdate {
+                version: "0.3.0".into(),
+                notes: Some("Security and reliability improvements".into()),
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        assert!(cx.debug_bounds("install-update").is_some());
+    }
+
+    #[gpui::test]
     fn selects_and_shares_a_file_through_the_native_browser(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
         let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4397,6 +4593,29 @@ mod tests {
                 .expect("expand selected folder")
                 .is_empty()
         );
+
+        std::fs::remove_dir_all(root).expect("remove test folders");
+    }
+
+    #[test]
+    fn rejects_folders_beyond_the_upload_depth_limit() {
+        let root = std::env::temp_dir().join(format!(
+            "lopload-folder-depth-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let mut nested = root.join("selected");
+        for level in 0..=MAX_UPLOAD_DEPTH {
+            nested.push(format!("level-{level}"));
+        }
+        std::fs::create_dir_all(&nested).expect("create deeply nested folders");
+
+        let error =
+            expand_upload_paths(&[root.join("selected")]).expect_err("reject deeply nested folder");
+        assert!(error.contains("32 levels"));
 
         std::fs::remove_dir_all(root).expect("remove test folders");
     }

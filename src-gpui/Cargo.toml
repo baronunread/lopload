@@ -2,8 +2,8 @@
 name = "lopload-gpui"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
-description = "Experimental native GPUI frontend for Lopload"
+rust-version = "1.88"
+description = "Native GPUI desktop client for Lopload"
 license = "MIT"
 
 [[bin]]
@@ -18,8 +18,12 @@ gpui-component = "0.5.1"
 image-crate = { package = "image", version = "0.25.9", default-features = false, features = ["png"] }
 lopload-native = { path = "../crates/lopload-native" }
 notify-rust = "=4.11.7"
+release-hub = "=0.3.0"
 rfd = "0.15"
+tokio = { version = "1", features = ["rt", "time"] }
 tray-icon = "=0.24.1"
+url = "2"
 
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["runtime_shaders", "test-support"] }
+minisign-verify = "=0.2.5"

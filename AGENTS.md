@@ -1,146 +1,97 @@
 # Lopload — agent guide
 
-Production: Tauri v2 + React 19 + TypeScript + `@cloudflare/kumo` + `@aws-sdk/client-s3`.
-Experimental: native Rust UI in `src-gpui/`, built with GPUI and Cinder.
+Native Rust desktop application built with GPUI and Cinder. Storage, transfer,
+SQLite, and credential logic lives in `crates/lopload-native/`; the shipping UI
+lives in `src-gpui/`.
+
+The former Tauri + React implementation is retained temporarily as a legacy
+reference and test corpus. Production development, CI, packaging, and releases
+must use the GPUI path.
 
 ## Quick start
 
 ```sh
-cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder  # one-time bootstrap
+cargo install --git https://github.com/CapSoftware/cinder --rev 2a96b0551fd7bf1ae6e4115a74bfd33b078bb58a --locked cinder
 bun install
-bun run tauri dev       # desktop app with hot-reload
-bun run gpui            # experimental native GPUI app
-bun run gpui:check      # compile-check the GPUI crate with Cinder
-bun run dev              # Vite only, browser tab — shows a "requires the desktop app" notice
-bun run check            # typecheck + the whole suite — CI gates on this
-bun run selftest         # the scenarios, inside the real Tauri binary (desktop Linux/macOS/Windows — needs OS keychain)
+bun run dev
+bun run check
+bun run build
+bun run package
 ```
 
-Tests need Docker running (a real MinIO — see Testing below).
-
-Everything uses `bun` — never `npm`/`npx`/`node`.
+Everything invoked from the repository root uses `bun`; never use npm or npx.
+Inside Rust crates, use Cinder for run/check/build/test/fmt commands.
 
 ## Credential backend
 
-Single native backend, selected at compile time per platform — no env vars, no config:
+One native backend is selected at compile time per platform:
 
 | Platform | Crate | Store |
 |---|---|---|
-| macOS | `security-framework` (standard `SecItemAdd`) | login keychain |
+| macOS | `security-framework` | Login keychain |
 | Windows | `keyring` with `windows-native` | Credential Manager |
-| Linux | `keyring` with `sync-secret-service` | Secret Service (gnome-keyring / KWallet) |
+| Linux | `keyring` with `sync-secret-service` | Secret Service |
 
-On macOS the login keychain's ACL trusts the app's code-signing identity, so
-local builds are signed with the self-signed `Lopload Dev` identity
-(`bundle.macOS.signingIdentity` in `tauri.conf.json`) — a stable identity
-means updates keep keychain access without re-prompting. CI overrides to
-ad-hoc signing via `APPLE_SIGNING_IDENTITY=-`. Migrating to the prompt-free
-Data Protection keychain requires a provisioning profile (paid Developer ID),
-tracked in the improvement plan.
+Credentials never belong in SQLite, config files, environment variables, or
+logs.
 
 ## Architectural decisions
 
-1. **S3 in the frontend** — `@aws-sdk/client-s3` with single-part uploads. Fetch injected via `requestHandler` (Tauri HTTP plugin in app, global fetch in tests).
-2. **No CORS** — the Tauri webview uses `@tauri-apps/plugin-http` which goes through Rust.
-3. **SQLite** via `@tauri-apps/plugin-sql` for connection metadata + transfer state. **No secrets in SQLite.**
-4. **Credentials** only in OS keychain. Never SQLite, config files, or logs.
-5. **Transfer state machine**: `queued → sending → checking → uploaded | failed`. Transient network errors fail the transfer immediately (sticky until the user acts).
-6. **Verification before "Uploaded ✓"**: local MD5 vs ETag.
-7. **Error classes**: `offline`, `credentials`, `storage-full`, `connection-dropped`, `verification`, `not-found`, `unknown`. Raw SDK text never reaches the UI.
+1. S3 operations run in native Rust through the AWS SDK.
+2. SQLite stores connection metadata and transfer state, never secrets.
+3. Transfers persist through `queued → sending → checking → uploaded | failed`.
+4. Upload completion requires local MD5 versus server ETag verification.
+5. Errors shown in the UI use the stable classes `offline`, `credentials`,
+   `storage-full`, `connection-dropped`, `verification`, `not-found`, and
+   `unknown`; raw SDK text never reaches users.
+6. Updates come only from the configured HTTPS GitHub Release manifest and are
+   Minisign-verified with the embedded public key before installation.
 
 ## Directory layout
 
-```
-src/lib/            framework-free TS engine (S3, stores, state machine)
-src/tauri/          thin wrappers around Tauri plugins (keychain, fs, HTTP, notifications)
-src/services/       host.ts (the platform boundary) + appServices.ts (wires engine → AppServices)
-src/ui/             React components on Kumo, pastel palette
-src-tauri/          Rust: plugins, keychain commands, tray, macOS entitlements, fastfs + fasthttp (zero-copy file writes / request bodies over IPC)
-src-gpui/           experimental native GPUI application
-crates/lopload-native/ shared SQLite connection store + OS-keychain backend
-tests/scenarios/    what the app does, driven through the real UI
-tests/support/      MinIO, the Node host, fault injection, the app harness
-tests/unit/         pure functions only
+```text
+crates/lopload-native/  native S3, SQLite, keychain, settings, and transfers
+src-gpui/               production GPUI application and package manifest
+src-gpui/src/updater.rs signed update trust boundary
+src-tauri/icons/        shared desktop and tray icon assets
+src/                    legacy React implementation, not shipped
+src-tauri/              legacy Tauri implementation, not shipped
+tests/                  legacy Host-seam test corpus
 ```
 
 ## Testing
 
-**There are no fake services, and no fake bucket.** Tests run the real UI against
-the real services against the real engine against a real MinIO. If you find
-yourself writing a double for something the app owns, you're solving it wrong.
-
-The one substitution boundary is `Host` (`src/services/host.ts`) — the ~12 things
-that genuinely cannot run outside a webview (OS keychain, native dialogs, tray,
-notifications, local fs, the Rust fetch path). It has two real implementations:
-`createTauriHost()` for the app, `createNodeHost()` for tests. Everything above
-it — `appServices.ts`, the engine, the S3 client, the React tree — is the same code in
-both.
-
-**Scenarios** (`tests/scenarios/`) are plain functions over a `ScenarioCtx`, not
-bun tests, because the same file runs in two places:
-
 ```sh
-bun test                   # Node host → MinIO. Seconds. The inner loop.
-bun run selftest           # the REAL Tauri binary → real Rust IPC → MinIO.
-bun run test:remote        # the same scenarios → a real R2/S3 bucket.
+bun run check
+cd crates/lopload-native && cinder test
+cd src-gpui && cinder check && cinder test
 ```
 
-> **Linux note:** `bun run selftest` needs the OS keychain (Secret Service / gnome-keyring).
-> Without a running D-Bus session bus and `org.freedesktop.secrets` provider,
-> the selftest will fail. Run it on a desktop Linux, macOS, or Windows machine.
+Native S3 integration tests use a real MinIO container on port 9400. CI starts
+MinIO and runs the ignored listing, transfer, move, and Trash scenarios. Tests
+must assert against actual storage state rather than a fake service.
 
-`test:remote` needs a `.env.remote` (see `.env.remote.example`) and is run
-manually, on demand. `bun run selftest` honours the same `LOPLOAD_TEST_REMOTE=1`
-gate, pointed at a real bucket. The remote path exists because
-MinIO is an excellent S3 impersonator right up until it isn't — checksum middleware, ETag formats on multipart, redirects — and those
-bugs are invisible to a local-only suite. It confines itself to
-`lopload-test/<run>/` and deletes that prefix when it's done; it cannot touch a
-key outside it.
+Linux keychain tests need a D-Bus session and an `org.freedesktop.secrets`
+provider. Tests that touch the real OS keychain remain ignored unless that
+environment is available.
 
-Write a scenario once; both runners pick it up from `tests/scenarios/index.ts`.
-Assert on the **bucket**, not just the DOM — `bucketProbe` reads the bucket with
-its own S3 client, so a bug in the app's client can't hide itself.
+## Building and releases
 
-**Arrange with real state; produce failures with faults.** To test an error path,
-don't fake a service — inject a fault at the fetch seam (`tests/support/faultyFetch.ts`):
-`s3Error` returns genuine S3 error XML (so `classifyError()` is really exercised),
-`stall` opens a window for a cancel, `corruptEtag` / `truncateBody` break
-verification.
+`bun run package` uses cargo-packager. Release CI produces:
 
-MinIO (port 9400) is **persistent** — `ensureMinio()` reuses a healthy container
-and never stops it, so only the first run of the day pays startup. Isolation
-comes from `freshBucket()` per suite, not from restarting anything. Docker must
-be running; the suite **fails** rather than skipping if it isn't, because a suite
-that silently passes without its storage backend is worse than no suite at all.
-`bun run minio:stop` tears it down.
+- macOS: `.app`, `.dmg`, and a signed `.app.zip` updater bundle
+- Windows: WiX `.msi`, NSIS `.exe`, and a portable `.exe`
+- Linux: `.deb` and AppImage
 
-`tests/unit/` is now only genuinely pure functions (error classification, MD5,
-tuning, update policy, sort/filter, trash key parsing). No mocks, no I/O.
-
-Rust tests: `cd src-tauri && cinder test` (keychain tests that touch the real OS
-keychain are `#[ignore]`). These run in CI.
-
-## Building for production
-
-```sh
-bun run tauri build
-```
-
-Credentials are always stored in the OS-native secure storage — no env vars, no build flags.
-
-Set `signingIdentity` in `src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity` for macOS code signing.
-
-Bump the version with `bun run set-version <x.y.z>`. `package.json` is the single source of truth (`tauri.conf.json` points at it) and the Rust crate is kept in lockstep. CI runs it with no argument, reading the version from the pushed git tag.
-
-On Windows, `tauri build` produces:
-- `.msi` — WiX installer
-- `.exe` — NSIS installer (in `bundle/nsis/`)
-- `Lopload_portable.exe` — raw binary, no install needed (copied into `bundle/msi/` by CI)
+Bump versions with `bun run set-version <x.y.z>`. Tagged CI builds signed
+updater packages and generates `latest.json`; ordinary CI never needs the
+private signing key.
 
 ## Conventions
 
-- No comments in source code unless the "why" isn't obvious from the code.
-- UI strings say folder/file/storage — never bucket, object, key, prefix, ETag, multipart.
-- React components: Kumo primitives, Tailwind, pastel tokens from `src/ui/theme.css`.
-- TypeScript: strict mode, zod for validation where needed.
-- Imports: path aliases not used — all imports are relative.
+- No comments in source unless the reason is not evident from the code.
+- UI strings say folder, file, and storage—never bucket, object, key, prefix,
+  ETag, or multipart.
+- Keep native operations out of rendering code when they can live in
+  `lopload-native`.
+- Preserve existing user changes in a dirty worktree.

@@ -1,6 +1,6 @@
-# GPUI migration status
+# GPUI cutover status
 
-This crate is the experimental native replacement for the Tauri and React application. The existing app remains the production implementation until the native path reaches behavioral parity.
+This crate is the production native application. The Tauri and React implementation remains in the repository as a temporary legacy reference and test corpus, but production development, CI, packaging, and releases use GPUI.
 
 ## Implemented
 
@@ -29,6 +29,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Bounded parallel multipart uploads and ranged downloads driven by the selected speed preset
 - Manual retry for failed uploads and downloads, including persisted ranged-download recovery
 - Native OS file drops onto the current folder
+- Guarded recursive folder drops with symlink skipping and depth, item, and byte limits
 - Name filtering and name/size/modified-date sorting
 - File information and recursively calculated folder information
 - Authenticated native image thumbnails with a 25 MB memory guard
@@ -48,15 +49,16 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Silent 30-day Trash retention sweep at startup and every 24 hours
 - Real-MinIO native scenarios for listing, folder markers, previews, transfers, resume, moves, Trash, restore, purge, and maintenance cleanup
 - Isolated GPUI window harness with painted-control interaction and onboarding-form validation coverage
+- Signed GitHub Release update checks, Minisign verification, platform installation, and relaunch
+- Production CI and packaging matrices for Linux, macOS, and Windows
 
 GPUI's `runtime_shaders` feature is enabled so local development works with
 Apple Command Line Tools alone. Release builds can compile Metal shaders ahead
 of time on machines with full Xcode once native packaging is introduced.
 
-## Required for parity
+## Follow-up validation
 
-- Guarded recursive folder drops
-- Signed auto-update download, verification, installation, and relaunch
 - Dock/taskbar failure badge if GPUI exposes a cross-platform API; the tray already carries the failure count and state
-- GPUI window-level interaction coverage equivalent to the current Host-seam UI suite
-- Platform signing and release-workflow validation on macOS, Linux, and Windows
+- Continue expanding GPUI window-level interaction coverage as UI behavior changes
+- Validate signing and installers on all three hosted CI operating systems after the branch is pushed
+- Retire the preserved legacy Tauri/React sources and tests in a dedicated cleanup after the first GPUI release
