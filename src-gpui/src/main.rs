@@ -14,8 +14,8 @@ use lopload_native::{
     list_connections,
     operations::{
         TrashItem, delete_trash_item, empty_trash, files_in_folder, folder_info, list_folders,
-        list_trash, move_entry, move_to_trash, rename_file, rename_folder, restore_trash_item,
-        share_link,
+        list_trash, move_entry_with_progress, move_to_trash, rename_file, rename_folder,
+        restore_trash_item, share_link,
     },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
@@ -829,13 +829,32 @@ impl LoploadApp {
             return;
         }
         self.operation_status = Some("Moving…".into());
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
         let operation = cx.background_executor().spawn(async move {
             for entry in entries {
-                move_entry(
+                move_entry_with_progress(
                     &connection,
                     &entry.key,
                     matches!(entry.kind, RemoteEntryKind::Folder),
                     &destination,
+                    |progress| {
+                        let detail = if progress.total_bytes > 0 {
+                            format!(
+                                "Moving… {} of {} · {} of {}",
+                                progress.completed_items,
+                                progress.total_items,
+                                format_bytes(progress.completed_bytes),
+                                format_bytes(progress.total_bytes)
+                            )
+                        } else {
+                            format!(
+                                "Moving… {} of {}",
+                                progress.completed_items, progress.total_items
+                            )
+                        };
+                        let _ = sender.send_blocking(TransferEvent::Status(detail));
+                    },
                 )?;
             }
             Ok::<_, String>(())

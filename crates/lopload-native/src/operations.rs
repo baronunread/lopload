@@ -31,6 +31,14 @@ pub struct RemoteFile {
     pub size: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationProgress {
+    pub completed_items: usize,
+    pub total_items: usize,
+    pub completed_bytes: u64,
+    pub total_bytes: u64,
+}
+
 #[derive(Clone)]
 struct ObjectRef {
     key: String,
@@ -101,6 +109,16 @@ pub fn move_entry(
     is_folder: bool,
     destination_prefix: &str,
 ) -> Result<(), String> {
+    move_entry_with_progress(connection, from_key, is_folder, destination_prefix, |_| {})
+}
+
+pub fn move_entry_with_progress(
+    connection: &StorageConnection,
+    from_key: &str,
+    is_folder: bool,
+    destination_prefix: &str,
+    mut on_progress: impl FnMut(OperationProgress),
+) -> Result<(), String> {
     let name = base_name(from_key);
     let destination = format!(
         "{destination_prefix}{name}{}",
@@ -117,6 +135,7 @@ pub fn move_entry(
         from_key,
         is_folder,
         &destination,
+        &mut on_progress,
     ))
 }
 
@@ -126,6 +145,7 @@ async fn move_entry_with_client(
     from_key: &str,
     is_folder: bool,
     destination: &str,
+    on_progress: &mut dyn FnMut(OperationProgress),
 ) -> Result<(), String> {
     let occupied = if is_folder {
         client
@@ -153,9 +173,27 @@ async fn move_entry_with_client(
     }
     if is_folder {
         let objects = list_objects(client, connection, from_key).await?;
+        let total_items = objects.len();
+        let total_bytes = objects.iter().map(|object| object.size).sum();
+        let mut completed_items = 0;
+        let mut completed_bytes = 0;
+        on_progress(OperationProgress {
+            completed_items,
+            total_items,
+            completed_bytes,
+            total_bytes,
+        });
         for object in &objects {
             let target = format!("{destination}{}", &object.key[from_key.len()..]);
             copy_object(client, connection, object, &target).await?;
+            completed_items += 1;
+            completed_bytes += object.size;
+            on_progress(OperationProgress {
+                completed_items,
+                total_items,
+                completed_bytes,
+                total_bytes,
+            });
         }
         delete_keys(
             client,
@@ -164,7 +202,40 @@ async fn move_entry_with_client(
         )
         .await
     } else {
-        copy_key(client, connection, from_key, destination).await?;
+        let head = client
+            .head_object()
+            .bucket(&connection.bucket)
+            .key(from_key)
+            .send()
+            .await
+            .map_err(|_| "This file could not be read".to_string())?;
+        let size = head
+            .content_length()
+            .and_then(|size| u64::try_from(size).ok())
+            .unwrap_or_default();
+        on_progress(OperationProgress {
+            completed_items: 0,
+            total_items: 1,
+            completed_bytes: 0,
+            total_bytes: size,
+        });
+        copy_object(
+            client,
+            connection,
+            &ObjectRef {
+                key: from_key.to_string(),
+                size,
+                modified: None,
+            },
+            destination,
+        )
+        .await?;
+        on_progress(OperationProgress {
+            completed_items: 1,
+            total_items: 1,
+            completed_bytes: size,
+            total_bytes: size,
+        });
         delete_key(client, connection, from_key).await
     }
 }
@@ -706,6 +777,7 @@ mod tests {
                     "renamed/file name.txt",
                     false,
                     "moved/file name.txt",
+                    &mut |_| {},
                 )
                 .await?;
                 assert!(
