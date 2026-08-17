@@ -62,6 +62,28 @@ enum TransferEvent {
     Status(String),
 }
 
+#[derive(Clone)]
+struct DraggedEntries {
+    entries: Vec<RemoteEntry>,
+}
+
+impl Render for DraggedEntries {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let label = if self.entries.len() == 1 {
+            self.entries[0].name.clone()
+        } else {
+            format!("{} items", self.entries.len())
+        };
+        div()
+            .rounded_lg()
+            .bg(rgb(0x5c4f8f))
+            .px_3()
+            .py_2()
+            .text_color(rgb(0xffffff))
+            .child(label)
+    }
+}
+
 struct LoploadApp {
     screen: Screen,
     connections: Vec<StorageConnection>,
@@ -841,11 +863,20 @@ impl LoploadApp {
     }
 
     fn confirm_move(&mut self, destination: String, cx: &mut Context<Self>) {
+        let entries = std::mem::take(&mut self.pending_move);
+        self.move_destinations.clear();
+        self.start_move(entries, destination, cx);
+    }
+
+    fn start_move(
+        &mut self,
+        entries: Vec<RemoteEntry>,
+        destination: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(connection) = self.current_connection.clone() else {
             return;
         };
-        let entries = std::mem::take(&mut self.pending_move);
-        self.move_destinations.clear();
         if entries.is_empty() {
             return;
         }
@@ -1641,6 +1672,9 @@ impl LoploadApp {
                             })),
                     )
                     .when(!prefix.is_empty(), |toolbar| {
+                        let navigate_parent = parent.clone();
+                        let drop_parent = parent.clone();
+                        let allowed_parent = parent.clone();
                         toolbar.child(
                             div()
                                 .id("up")
@@ -1651,8 +1685,20 @@ impl LoploadApp {
                                 .px_3()
                                 .py_2()
                                 .child("Up")
+                                .can_drop(move |value, _, _| {
+                                    value.downcast_ref::<DraggedEntries>().is_some_and(|drag| {
+                                        can_move_entries_to(&drag.entries, &allowed_parent)
+                                    })
+                                })
+                                .drag_over::<DraggedEntries>(|style, _, _, _| {
+                                    style.bg(rgb(0xded7f5)).border_color(rgb(0x5c4f8f))
+                                })
+                                .on_drop(cx.listener(move |this, drag: &DraggedEntries, _, cx| {
+                                    cx.stop_propagation();
+                                    this.start_move(drag.entries.clone(), drop_parent.clone(), cx);
+                                }))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.load_prefix(parent.clone(), cx);
+                                    this.load_prefix(navigate_parent.clone(), cx);
                                 })),
                         )
                     })
@@ -2288,6 +2334,13 @@ impl LoploadApp {
                         let renameable = entry.clone();
                         let inspectable = entry.clone();
                         let movable = entry.clone();
+                        let dragged_entries = if selected {
+                            self.selected_entries()
+                        } else {
+                            vec![entry.clone()]
+                        };
+                        let drop_destination = entry.key.clone();
+                        let allowed_destination = entry.key.clone();
                         div()
                             .id(("entry", index))
                             .flex()
@@ -2298,6 +2351,12 @@ impl LoploadApp {
                             .bg(rgb(0xffffff))
                             .px_4()
                             .py_3()
+                            .on_drag(
+                                DraggedEntries {
+                                    entries: dragged_entries,
+                                },
+                                |drag, _, _, cx| cx.new(|_| drag.clone()),
+                            )
                             .when(folder, |row| row.cursor_pointer())
                             .child(div().w(px(28.0)).text_center().child(if folder {
                                 if selected { "✓" } else { "▸" }
@@ -2430,9 +2489,27 @@ impl LoploadApp {
                                     })),
                             )
                             .when(folder, |row| {
-                                row.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.load_prefix(key.clone(), cx);
+                                row.can_drop(move |value, _, _| {
+                                    value.downcast_ref::<DraggedEntries>().is_some_and(|drag| {
+                                        can_move_entries_to(&drag.entries, &allowed_destination)
+                                    })
+                                })
+                                .drag_over::<DraggedEntries>(|style, _, _, _| {
+                                    style.bg(rgb(0xeeeafa)).border_color(rgb(0x5c4f8f))
+                                })
+                                .on_drop(cx.listener(move |this, drag: &DraggedEntries, _, cx| {
+                                    cx.stop_propagation();
+                                    this.start_move(
+                                        drag.entries.clone(),
+                                        drop_destination.clone(),
+                                        cx,
+                                    );
                                 }))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.load_prefix(key.clone(), cx);
+                                    },
+                                ))
                             })
                     })),
             )
@@ -3001,6 +3078,15 @@ fn parent_of_key(key: &str) -> String {
         .unwrap_or_default()
 }
 
+fn can_move_entries_to(entries: &[RemoteEntry], destination: &str) -> bool {
+    !entries.is_empty()
+        && entries.iter().all(|entry| {
+            parent_of_key(&entry.key) != destination
+                && (!matches!(entry.kind, RemoteEntryKind::Folder)
+                    || !destination.starts_with(&entry.key))
+        })
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
@@ -3037,5 +3123,35 @@ mod tests {
         );
         assert_eq!(safe_destination(root, "../private.txt"), None);
         assert_eq!(safe_destination(root, "/absolute.txt"), None);
+    }
+
+    #[test]
+    fn guards_internal_move_destinations() {
+        let file = RemoteEntry {
+            kind: RemoteEntryKind::File,
+            name: "notes.txt".into(),
+            key: "work/notes.txt".into(),
+            size: Some(4),
+            last_modified: None,
+        };
+        let folder = RemoteEntry {
+            kind: RemoteEntryKind::Folder,
+            name: "photos".into(),
+            key: "work/photos/".into(),
+            size: None,
+            last_modified: None,
+        };
+
+        assert!(can_move_entries_to(std::slice::from_ref(&file), "archive/"));
+        assert!(!can_move_entries_to(std::slice::from_ref(&file), "work/"));
+        assert!(!can_move_entries_to(
+            std::slice::from_ref(&folder),
+            "work/photos/"
+        ));
+        assert!(!can_move_entries_to(
+            std::slice::from_ref(&folder),
+            "work/photos/edited/"
+        ));
+        assert!(!can_move_entries_to(&[], "archive/"));
     }
 }
