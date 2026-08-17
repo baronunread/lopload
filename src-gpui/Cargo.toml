@@ -6,6 +6,10 @@ rust-version = "1.85"
 description = "Experimental native GPUI frontend for Lopload"
 license = "MIT"
 
+[[bin]]
+name = "lopload"
+path = "src/main.rs"
+
 [dependencies]
 async-channel = "2"
 chrono = "0.4"

@@ -38,6 +38,7 @@ const targets = [
   // manifest are never touched.
   { path: "src-tauri/Cargo.toml", re: /(\[package\][\s\S]*?\r?\nversion = )"[^"]*"/ },
   { path: "src-gpui/Cargo.toml", re: /(\[package\][\s\S]*?\r?\nversion = )"[^"]*"/ },
+  { path: "src-gpui/packager.toml", re: /(^version = )"[^"]*"/m },
   // The workspace's own entry in the lockfile, matched by package name so the
   // hundreds of dependency entries are left alone. `\r?\n` because Windows CI
   // checks out with CRLF line endings.

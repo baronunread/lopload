@@ -17,6 +17,8 @@
     "tauri-inner": "tauri",
     "gpui": "cd src-gpui && cinder run",
     "gpui:check": "cd src-gpui && cinder check",
+    "gpui:build": "cd src-gpui && cinder build --release",
+    "gpui:package": "cd src-gpui && cargo-packager --config packager.toml",
     "test": "bun test tests/unit tests/app.test.ts src",
     "test:remote": "bun --env-file=.env.remote test tests/app.test.ts",
     "selftest": "bun run scripts/selftest.ts",
