@@ -121,6 +121,8 @@ struct LoploadApp {
     trash_items: Vec<TrashItem>,
     trash_loading: bool,
     pending_trash: Option<RemoteEntry>,
+    pending_share: Option<RemoteEntry>,
+    share_expiry_seconds: u64,
     pending_rename: Option<RemoteEntry>,
     pending_delete: Option<TrashItem>,
     confirm_empty_trash: bool,
@@ -206,6 +208,8 @@ impl LoploadApp {
             trash_items: Vec::new(),
             trash_loading: false,
             pending_trash: None,
+            pending_share: None,
+            share_expiry_seconds: 24 * 60 * 60,
             pending_rename: None,
             pending_delete: None,
             confirm_empty_trash: false,
@@ -523,14 +527,20 @@ impl LoploadApp {
         .detach();
     }
 
-    fn copy_share_link(&mut self, entry: RemoteEntry, cx: &mut Context<Self>) {
+    fn copy_share_link(
+        &mut self,
+        entry: RemoteEntry,
+        expires_in_seconds: u64,
+        cx: &mut Context<Self>,
+    ) {
         let Some(connection) = self.current_connection.clone() else {
             return;
         };
+        self.pending_share = None;
         self.operation_status = Some("Creating link…".into());
         let operation = cx
             .background_executor()
-            .spawn(async move { share_link(&connection, &entry.key, 24 * 60 * 60) });
+            .spawn(async move { share_link(&connection, &entry.key, expires_in_seconds) });
         cx.spawn(async move |this, cx| {
             let result = operation.await;
             if let Some(this) = this.upgrade() {
@@ -538,7 +548,10 @@ impl LoploadApp {
                     match result {
                         Ok(link) => {
                             cx.write_to_clipboard(ClipboardItem::new_string(link));
-                            this.operation_status = Some("Link copied — valid for 24 hours".into());
+                            this.operation_status = Some(format!(
+                                "Link copied — valid for {}",
+                                share_expiry_label(expires_in_seconds)
+                            ));
                         }
                         Err(error) => this.operation_status = Some(error),
                     }
@@ -1934,6 +1947,7 @@ impl LoploadApp {
         let pending_move_count = self.pending_move.len();
         let move_destinations = self.move_destinations.clone();
         let pending_trash = self.pending_trash.clone();
+        let pending_share = self.pending_share.clone();
         let pending_rename = self.pending_rename.clone();
         let operation_status = self.operation_status.clone();
         let info_entry = self.info_entry.clone();
@@ -2370,6 +2384,89 @@ impl LoploadApp {
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.confirm_move_to_trash(cx)),
                                 ),
+                        ),
+                )
+            })
+            .when_some(pending_share, |browser, entry| {
+                browser.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(border_color())
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(format!("Copy link — {}", entry.name))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(subtle_color())
+                                        .child("Expires after"),
+                                ),
+                        )
+                        .children(
+                            [
+                                ("1 hour", 60 * 60),
+                                ("1 day", 24 * 60 * 60),
+                                ("7 days", 7 * 24 * 60 * 60),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (label, seconds))| {
+                                let selected = self.share_expiry_seconds == seconds;
+                                div()
+                                    .id(("share-expiry", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(if selected {
+                                        accent_color()
+                                    } else {
+                                        strong_border_color()
+                                    })
+                                    .when(selected, |button| button.bg(tint_color()))
+                                    .px_3()
+                                    .py_2()
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.share_expiry_seconds = seconds;
+                                        cx.notify();
+                                    }))
+                            }),
+                        )
+                        .child(
+                            div()
+                                .id("cancel-share")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_2()
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_share = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("create-share-link")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(accent_color())
+                                .px_3()
+                                .py_2()
+                                .text_color(on_accent_color())
+                                .child("Create link")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.copy_share_link(
+                                        entry.clone(),
+                                        this.share_expiry_seconds,
+                                        cx,
+                                    );
+                                })),
                         ),
                 )
             })
@@ -2854,7 +2951,9 @@ impl LoploadApp {
                                         .py_1()
                                         .child("Copy link")
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.copy_share_link(shareable.clone(), cx);
+                                            cx.stop_propagation();
+                                            this.pending_share = Some(shareable.clone());
+                                            cx.notify();
                                         })),
                                 )
                             })
@@ -3459,6 +3558,14 @@ fn is_dark_appearance(window: &Window) -> bool {
     )
 }
 
+fn share_expiry_label(seconds: u64) -> &'static str {
+    match seconds {
+        3_600 => "1 hour",
+        604_800 => "7 days",
+        _ => "1 day",
+    }
+}
+
 fn set_dark_appearance(mode: Option<ThemeMode>, system_is_dark: bool) {
     let is_dark = match mode {
         Some(ThemeMode::Light) => false,
@@ -3875,6 +3982,13 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    #[test]
+    fn labels_each_supported_share_link_expiry() {
+        assert_eq!(share_expiry_label(60 * 60), "1 hour");
+        assert_eq!(share_expiry_label(24 * 60 * 60), "1 day");
+        assert_eq!(share_expiry_label(7 * 24 * 60 * 60), "7 days");
     }
 
     #[test]
