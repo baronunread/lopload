@@ -137,6 +137,7 @@ impl Render for DraggedEntries {
 
 struct LoploadApp {
     screen: Screen,
+    settings_return_screen: Screen,
     connections: Vec<StorageConnection>,
     current_connection: Option<StorageConnection>,
     prefix: String,
@@ -245,12 +246,18 @@ impl LoploadApp {
             .as_ref()
             .map(|connection| connection.last_prefix.clone())
             .unwrap_or_default();
-        let transfers = current_connection
-            .as_ref()
-            .and_then(|connection| list_transfers(&connection.id).ok())
-            .unwrap_or_default();
+        let transfers = if start_background_services {
+            current_connection
+                .as_ref()
+                .and_then(|connection| list_transfers(&connection.id).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let screen = initial_screen(first_run);
         let mut app = Self {
-            screen: initial_screen(first_run),
+            screen,
+            settings_return_screen: screen,
             connections,
             current_connection,
             prefix,
@@ -313,12 +320,12 @@ impl LoploadApp {
             celebration_connection: None,
             _subscriptions: vec![filter_subscription, appearance_subscription],
         };
-        if let Some(connection) = app.current_connection.clone() {
-            tray::update_status(&app.transfers, cx);
-            app.load_prefix(connection.last_prefix, cx);
-            app.resume_pending_uploads(cx);
-        }
         if start_background_services {
+            if let Some(connection) = app.current_connection.clone() {
+                tray::update_status(&app.transfers, cx);
+                app.load_prefix(connection.last_prefix, cx);
+                app.resume_pending_uploads(cx);
+            }
             start_trash_sweep(cx);
         }
         app
@@ -3536,6 +3543,7 @@ impl LoploadApp {
                     .child(
                         div()
                             .id("close-settings")
+                            .debug_selector(|| "close-settings".into())
                             .cursor_pointer()
                             .rounded_lg()
                             .bg(accent_color())
@@ -3544,7 +3552,7 @@ impl LoploadApp {
                             .text_color(on_accent_color())
                             .child("Done")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.screen = Screen::Home;
+                                this.screen = this.settings_return_screen;
                                 cx.notify();
                             })),
                     ),
@@ -3626,6 +3634,7 @@ impl Render for LoploadApp {
                             .child(
                                 div()
                                     .id("open-settings")
+                                    .debug_selector(|| "open-settings".into())
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .border_1()
@@ -3634,6 +3643,7 @@ impl Render for LoploadApp {
                                     .py_2()
                                     .child("Settings")
                                     .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings_return_screen = this.screen;
                                         this.screen = Screen::Settings;
                                         this.settings_status = None;
                                         cx.notify();
@@ -4164,6 +4174,37 @@ mod tests {
             );
             assert_eq!(view.read(app).screen, Screen::AddStorage);
         });
+    }
+
+    #[gpui::test]
+    fn closes_settings_back_to_the_native_browser(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let mut initial = empty_initial_state();
+        initial.connections.push(StorageConnection {
+            id: "connection".into(),
+            name: "Storage".into(),
+            endpoint: "https://storage.example.com".into(),
+            bucket: "files".into(),
+            region: "auto".into(),
+            last_prefix: "docs/".into(),
+            created_at: 0,
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            LoploadApp::new_with_initial_state(window, cx, initial, false)
+        });
+        cx.update(|_, app| assert_eq!(view.read(app).screen, Screen::Browser));
+
+        let settings = cx
+            .debug_bounds("open-settings")
+            .expect("painted Settings control");
+        cx.simulate_click(settings.center(), gpui::Modifiers::none());
+        cx.update(|_, app| assert_eq!(view.read(app).screen, Screen::Settings));
+
+        let done = cx
+            .debug_bounds("close-settings")
+            .expect("painted Done control");
+        cx.simulate_click(done.center(), gpui::Modifiers::none());
+        cx.update(|_, app| assert_eq!(view.read(app).screen, Screen::Browser));
     }
 
     #[test]
