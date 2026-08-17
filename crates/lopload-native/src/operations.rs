@@ -307,126 +307,147 @@ pub fn move_to_trash_with_progress(
     mut on_progress: impl FnMut(OperationProgress),
 ) -> Result<(), String> {
     let client = s3::client(connection)?;
-    s3::runtime()?.block_on(async {
-        if !is_folder {
-            let head = client
-                .head_object()
-                .bucket(&connection.bucket)
-                .key(key)
-                .send()
-                .await
-                .map_err(|_| "This file could not be read".to_string())?;
-            let size = head
-                .content_length()
-                .and_then(|size| u64::try_from(size).ok())
-                .unwrap_or_default();
-            report_progress(&mut on_progress, 0, 1, 0, size);
-            let destination = trash_key(deleted_at, key);
-            copy_object(
-                &client,
-                connection,
-                &ObjectRef {
-                    key: key.to_string(),
-                    size,
-                    modified: None,
-                },
-                &destination,
-            )
-            .await?;
-            delete_key(&client, connection, key).await?;
-            report_progress(&mut on_progress, 1, 1, size, size);
-            return Ok(());
-        }
+    s3::runtime()?.block_on(move_to_trash_with_client(
+        &client,
+        connection,
+        key,
+        is_folder,
+        deleted_at,
+        &mut on_progress,
+    ))
+}
 
-        client
-            .put_object()
+async fn move_to_trash_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    key: &str,
+    is_folder: bool,
+    deleted_at: i64,
+    on_progress: &mut dyn FnMut(OperationProgress),
+) -> Result<(), String> {
+    if !is_folder {
+        let head = client
+            .head_object()
             .bucket(&connection.bucket)
-            .key(trash_key(deleted_at, key))
-            .body(ByteStream::from_static(b""))
+            .key(key)
             .send()
             .await
-            .map_err(|_| "This folder could not be moved to Trash".to_string())?;
-        let objects = list_objects(&client, connection, key).await?;
-        let total_items = objects.len();
-        let total_bytes = objects.iter().map(|object| object.size).sum();
-        let mut completed_items = 0;
-        let mut completed_bytes = 0;
+            .map_err(|_| "This file could not be read".to_string())?;
+        let size = head
+            .content_length()
+            .and_then(|size| u64::try_from(size).ok())
+            .unwrap_or_default();
+        report_progress(on_progress, 0, 1, 0, size);
+        let destination = trash_key(deleted_at, key);
+        copy_object(
+            client,
+            connection,
+            &ObjectRef {
+                key: key.to_string(),
+                size,
+                modified: None,
+            },
+            &destination,
+        )
+        .await?;
+        delete_key(client, connection, key).await?;
+        report_progress(on_progress, 1, 1, size, size);
+        return Ok(());
+    }
+
+    client
+        .put_object()
+        .bucket(&connection.bucket)
+        .key(trash_key(deleted_at, key))
+        .body(ByteStream::from_static(b""))
+        .send()
+        .await
+        .map_err(|_| "This folder could not be moved to Trash".to_string())?;
+    let objects = list_objects(client, connection, key).await?;
+    let total_items = objects.len();
+    let total_bytes = objects.iter().map(|object| object.size).sum();
+    let mut completed_items = 0;
+    let mut completed_bytes = 0;
+    report_progress(
+        on_progress,
+        completed_items,
+        total_items,
+        completed_bytes,
+        total_bytes,
+    );
+    for object in &objects {
+        copy_object(
+            client,
+            connection,
+            object,
+            &trash_key(deleted_at, &object.key),
+        )
+        .await?;
+        completed_items += 1;
+        completed_bytes += object.size;
         report_progress(
-            &mut on_progress,
+            on_progress,
             completed_items,
             total_items,
             completed_bytes,
             total_bytes,
         );
-        for object in &objects {
-            copy_object(
-                &client,
-                connection,
-                object,
-                &trash_key(deleted_at, &object.key),
-            )
-            .await?;
-            completed_items += 1;
-            completed_bytes += object.size;
-            report_progress(
-                &mut on_progress,
-                completed_items,
-                total_items,
-                completed_bytes,
-                total_bytes,
-            );
-        }
-        delete_keys(
-            &client,
-            connection,
-            objects.into_iter().map(|object| object.key).collect(),
-        )
-        .await
-    })
+    }
+    delete_keys(
+        client,
+        connection,
+        objects.into_iter().map(|object| object.key).collect(),
+    )
+    .await
 }
 
 pub fn list_trash(connection: &StorageConnection) -> Result<Vec<TrashItem>, String> {
     let client = s3::client(connection)?;
-    s3::runtime()?.block_on(async {
-        let objects = list_objects(&client, connection, TRASH_PREFIX).await?;
-        let mut parsed = Vec::new();
-        for object in objects {
-            if let Some((deleted_at, original_key)) = parse_trash_key(&object.key) {
-                parsed.push((deleted_at, original_key, object.size));
-            }
-        }
-        let mut folders = parsed
-            .iter()
-            .filter(|(_, key, _)| key.ends_with('/'))
-            .map(|(deleted_at, key, _)| (*deleted_at, key.clone()))
-            .collect::<Vec<_>>();
-        folders.sort_by_key(|(_, key)| key.len());
+    s3::runtime()?.block_on(list_trash_with_client(&client, connection))
+}
 
-        let mut groups = BTreeMap::<String, TrashItem>::new();
-        for (deleted_at, original_key, size) in parsed {
-            let grouped_folder = folders.iter().find(|(folder_time, folder_key)| {
-                *folder_time == deleted_at && original_key.starts_with(folder_key.as_str())
-            });
-            let (root_key, is_folder) = grouped_folder
-                .map(|(_, key)| (key.clone(), true))
-                .unwrap_or_else(|| (original_key.clone(), original_key.ends_with('/')));
-            let id = format!("{deleted_at}:{root_key}");
-            groups
-                .entry(id.clone())
-                .and_modify(|item| item.size += size)
-                .or_insert_with(|| TrashItem {
-                    id,
-                    name: base_name(&root_key),
-                    original_key: root_key,
-                    is_folder,
-                    deleted_at,
-                    size,
-                });
+async fn list_trash_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+) -> Result<Vec<TrashItem>, String> {
+    let objects = list_objects(client, connection, TRASH_PREFIX).await?;
+    let mut parsed = Vec::new();
+    for object in objects {
+        if let Some((deleted_at, original_key)) = parse_trash_key(&object.key) {
+            parsed.push((deleted_at, original_key, object.size));
         }
-        let mut items = groups.into_values().collect::<Vec<_>>();
-        items.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
-        Ok(items)
-    })
+    }
+    let mut folders = parsed
+        .iter()
+        .filter(|(_, key, _)| key.ends_with('/'))
+        .map(|(deleted_at, key, _)| (*deleted_at, key.clone()))
+        .collect::<Vec<_>>();
+    folders.sort_by_key(|(_, key)| key.len());
+
+    let mut groups = BTreeMap::<String, TrashItem>::new();
+    for (deleted_at, original_key, size) in parsed {
+        let grouped_folder = folders.iter().find(|(folder_time, folder_key)| {
+            *folder_time == deleted_at && original_key.starts_with(folder_key.as_str())
+        });
+        let (root_key, is_folder) = grouped_folder
+            .map(|(_, key)| (key.clone(), true))
+            .unwrap_or_else(|| (original_key.clone(), original_key.ends_with('/')));
+        let id = format!("{deleted_at}:{root_key}");
+        groups
+            .entry(id.clone())
+            .and_modify(|item| item.size += size)
+            .or_insert_with(|| TrashItem {
+                id,
+                name: base_name(&root_key),
+                original_key: root_key,
+                is_folder,
+                deleted_at,
+                size,
+            });
+    }
+    let mut items = groups.into_values().collect::<Vec<_>>();
+    items.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+    Ok(items)
 }
 
 pub fn restore_trash_item(connection: &StorageConnection, item: &TrashItem) -> Result<(), String> {
@@ -439,58 +460,69 @@ pub fn restore_trash_item_with_progress(
     mut on_progress: impl FnMut(OperationProgress),
 ) -> Result<(), String> {
     let client = s3::client(connection)?;
-    s3::runtime()?.block_on(async {
-        if destination_exists(&client, connection, item).await? {
-            return Err(
-                "Something's already there — restore skipped, the trashed copy is untouched."
-                    .into(),
-            );
-        }
-        if !item.is_folder {
-            report_progress(&mut on_progress, 0, 1, 0, item.size);
-            let source = trash_key(item.deleted_at, &item.original_key);
-            copy_key(&client, connection, &source, &item.original_key).await?;
-            delete_key(&client, connection, &source).await?;
-            report_progress(&mut on_progress, 1, 1, item.size, item.size);
-            return Ok(());
-        }
-        let source_prefix = trash_key(item.deleted_at, &item.original_key);
-        let objects = list_objects(&client, connection, &source_prefix).await?;
-        let total_items = objects.len();
-        let total_bytes = objects.iter().map(|object| object.size).sum();
-        let mut completed_items = 0;
-        let mut completed_bytes = 0;
+    s3::runtime()?.block_on(restore_trash_item_with_client(
+        &client,
+        connection,
+        item,
+        &mut on_progress,
+    ))
+}
+
+async fn restore_trash_item_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    item: &TrashItem,
+    on_progress: &mut dyn FnMut(OperationProgress),
+) -> Result<(), String> {
+    if destination_exists(client, connection, item).await? {
+        return Err(
+            "Something's already there — restore skipped, the trashed copy is untouched.".into(),
+        );
+    }
+    if !item.is_folder {
+        report_progress(on_progress, 0, 1, 0, item.size);
+        let source = trash_key(item.deleted_at, &item.original_key);
+        copy_key(client, connection, &source, &item.original_key).await?;
+        delete_key(client, connection, &source).await?;
+        report_progress(on_progress, 1, 1, item.size, item.size);
+        return Ok(());
+    }
+    let source_prefix = trash_key(item.deleted_at, &item.original_key);
+    let objects = list_objects(client, connection, &source_prefix).await?;
+    let total_items = objects.len();
+    let total_bytes = objects.iter().map(|object| object.size).sum();
+    let mut completed_items = 0;
+    let mut completed_bytes = 0;
+    report_progress(
+        on_progress,
+        completed_items,
+        total_items,
+        completed_bytes,
+        total_bytes,
+    );
+    for object in &objects {
+        let destination = format!(
+            "{}{}",
+            item.original_key,
+            &object.key[source_prefix.len()..]
+        );
+        copy_object(client, connection, object, &destination).await?;
+        completed_items += 1;
+        completed_bytes += object.size;
         report_progress(
-            &mut on_progress,
+            on_progress,
             completed_items,
             total_items,
             completed_bytes,
             total_bytes,
         );
-        for object in &objects {
-            let destination = format!(
-                "{}{}",
-                item.original_key,
-                &object.key[source_prefix.len()..]
-            );
-            copy_object(&client, connection, object, &destination).await?;
-            completed_items += 1;
-            completed_bytes += object.size;
-            report_progress(
-                &mut on_progress,
-                completed_items,
-                total_items,
-                completed_bytes,
-                total_bytes,
-            );
-        }
-        delete_keys(
-            &client,
-            connection,
-            objects.into_iter().map(|object| object.key).collect(),
-        )
-        .await
-    })
+    }
+    delete_keys(
+        client,
+        connection,
+        objects.into_iter().map(|object| object.key).collect(),
+    )
+    .await
 }
 
 pub fn delete_trash_item(connection: &StorageConnection, item: &TrashItem) -> Result<(), String> {
@@ -503,39 +535,51 @@ pub fn delete_trash_item_with_progress(
     mut on_progress: impl FnMut(OperationProgress),
 ) -> Result<(), String> {
     let client = s3::client(connection)?;
-    s3::runtime()?.block_on(async {
-        let key = trash_key(item.deleted_at, &item.original_key);
-        if !item.is_folder {
-            report_progress(&mut on_progress, 0, 1, 0, item.size);
-            delete_key(&client, connection, &key).await?;
-            report_progress(&mut on_progress, 1, 1, item.size, item.size);
-            return Ok(());
-        }
-        let objects = list_objects(&client, connection, &key).await?;
-        let total_items = objects.len();
-        let total_bytes = objects.iter().map(|object| object.size).sum();
-        report_progress(&mut on_progress, 0, total_items, 0, total_bytes);
-        let mut completed_items = 0;
-        let mut completed_bytes = 0;
-        for batch in objects.chunks(1000) {
-            delete_keys(
-                &client,
-                connection,
-                batch.iter().map(|object| object.key.clone()).collect(),
-            )
-            .await?;
-            completed_items += batch.len();
-            completed_bytes += batch.iter().map(|object| object.size).sum::<u64>();
-            report_progress(
-                &mut on_progress,
-                completed_items,
-                total_items,
-                completed_bytes,
-                total_bytes,
-            );
-        }
-        Ok(())
-    })
+    s3::runtime()?.block_on(delete_trash_item_with_client(
+        &client,
+        connection,
+        item,
+        &mut on_progress,
+    ))
+}
+
+async fn delete_trash_item_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    item: &TrashItem,
+    on_progress: &mut dyn FnMut(OperationProgress),
+) -> Result<(), String> {
+    let key = trash_key(item.deleted_at, &item.original_key);
+    if !item.is_folder {
+        report_progress(on_progress, 0, 1, 0, item.size);
+        delete_key(client, connection, &key).await?;
+        report_progress(on_progress, 1, 1, item.size, item.size);
+        return Ok(());
+    }
+    let objects = list_objects(client, connection, &key).await?;
+    let total_items = objects.len();
+    let total_bytes = objects.iter().map(|object| object.size).sum();
+    report_progress(on_progress, 0, total_items, 0, total_bytes);
+    let mut completed_items = 0;
+    let mut completed_bytes = 0;
+    for batch in objects.chunks(1000) {
+        delete_keys(
+            client,
+            connection,
+            batch.iter().map(|object| object.key.clone()).collect(),
+        )
+        .await?;
+        completed_items += batch.len();
+        completed_bytes += batch.iter().map(|object| object.size).sum::<u64>();
+        report_progress(
+            on_progress,
+            completed_items,
+            total_items,
+            completed_bytes,
+            total_bytes,
+        );
+    }
+    Ok(())
 }
 
 pub fn empty_trash(connection: &StorageConnection) -> Result<(), String> {
@@ -962,5 +1006,142 @@ mod tests {
                 Ok::<_, Box<dyn std::error::Error>>(())
             })
             .expect("move objects");
+    }
+
+    #[test]
+    #[ignore]
+    fn trashes_restores_and_permanently_deletes_real_minio_folders() {
+        let suffix = Uuid::new_v4().to_string();
+        let bucket = format!("lopload-trash-{suffix}");
+        let connection = StorageConnection {
+            id: format!("integration-{suffix}"),
+            name: "Integration test".into(),
+            endpoint: "http://127.0.0.1:9400".into(),
+            bucket: bucket.clone(),
+            region: "us-east-1".into(),
+            last_prefix: String::new(),
+            created_at: 0,
+        };
+        let client =
+            s3::client_with_credentials(&connection, "minioadmin".into(), "minioadmin".into());
+        s3::runtime()
+            .expect("runtime")
+            .block_on(async {
+                client.create_bucket().bucket(&bucket).send().await?;
+                for (key, body) in [
+                    ("folder/alpha.txt", b"alpha".as_slice()),
+                    ("folder/nested/beta.txt", b"beta".as_slice()),
+                ] {
+                    client
+                        .put_object()
+                        .bucket(&bucket)
+                        .key(key)
+                        .body(ByteStream::from(body.to_vec()))
+                        .send()
+                        .await?;
+                }
+
+                let mut trash_progress = Vec::new();
+                move_to_trash_with_client(
+                    &client,
+                    &connection,
+                    "folder/",
+                    true,
+                    123_456,
+                    &mut |progress| trash_progress.push(progress),
+                )
+                .await?;
+                assert_eq!(
+                    trash_progress
+                        .first()
+                        .map(|progress| progress.completed_items),
+                    Some(0)
+                );
+                assert_eq!(
+                    trash_progress
+                        .last()
+                        .map(|progress| progress.completed_items),
+                    Some(2)
+                );
+                assert!(
+                    client
+                        .head_object()
+                        .bucket(&bucket)
+                        .key("folder/alpha.txt")
+                        .send()
+                        .await
+                        .is_err()
+                );
+
+                let items = list_trash_with_client(&client, &connection).await?;
+                assert_eq!(items.len(), 1);
+                assert!(items[0].is_folder);
+                assert_eq!(items[0].original_key, "folder/");
+                assert_eq!(items[0].size, 9);
+
+                let mut restore_progress = Vec::new();
+                restore_trash_item_with_client(&client, &connection, &items[0], &mut |progress| {
+                    restore_progress.push(progress)
+                })
+                .await?;
+                assert_eq!(
+                    restore_progress
+                        .first()
+                        .map(|progress| progress.completed_items),
+                    Some(0)
+                );
+                assert_eq!(
+                    restore_progress
+                        .last()
+                        .map(|progress| progress.completed_items),
+                    restore_progress.last().map(|progress| progress.total_items)
+                );
+                let restored = client
+                    .get_object()
+                    .bucket(&bucket)
+                    .key("folder/nested/beta.txt")
+                    .send()
+                    .await?
+                    .body
+                    .collect()
+                    .await?
+                    .into_bytes();
+                assert_eq!(restored.as_ref(), b"beta");
+                assert!(
+                    list_trash_with_client(&client, &connection)
+                        .await?
+                        .is_empty()
+                );
+
+                move_to_trash_with_client(
+                    &client,
+                    &connection,
+                    "folder/",
+                    true,
+                    234_567,
+                    &mut |_| {},
+                )
+                .await?;
+                let item = list_trash_with_client(&client, &connection)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .expect("trashed folder");
+                let mut delete_progress = Vec::new();
+                delete_trash_item_with_client(&client, &connection, &item, &mut |progress| {
+                    delete_progress.push(progress)
+                })
+                .await?;
+                assert_eq!(
+                    delete_progress
+                        .last()
+                        .map(|progress| progress.completed_items),
+                    delete_progress.last().map(|progress| progress.total_items)
+                );
+                assert!(list_objects(&client, &connection, "").await?.is_empty());
+                client.delete_bucket().bucket(&bucket).send().await?;
+                Ok::<_, Box<dyn std::error::Error>>(())
+            })
+            .expect("trash lifecycle");
     }
 }
