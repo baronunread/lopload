@@ -2217,6 +2217,7 @@ impl LoploadApp {
                     .child(
                         div()
                             .id("new-folder")
+                            .debug_selector(|| "new-folder".into())
                             .cursor_pointer()
                             .rounded_lg()
                             .border_1()
@@ -4205,6 +4206,12 @@ mod tests {
             .expect("painted Done control");
         cx.simulate_click(done.center(), gpui::Modifiers::none());
         cx.update(|_, app| assert_eq!(view.read(app).screen, Screen::Browser));
+
+        let new_folder = cx
+            .debug_bounds("new-folder")
+            .expect("painted New folder control");
+        cx.simulate_click(new_folder.center(), gpui::Modifiers::none());
+        cx.update(|_, app| assert!(view.read(app).new_folder_open));
     }
 
     #[test]
