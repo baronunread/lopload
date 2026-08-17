@@ -1,10 +1,12 @@
+use chrono::{Local, TimeZone};
 use gpui::{
     App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, ExternalPaths,
-    FontWeight, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    FontWeight, Render, Subscription, Window, WindowBounds, WindowOptions, div, prelude::*, px,
+    rgb, size,
 };
 use gpui_component::{
     Root,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
 };
 use lopload_native::{
@@ -43,6 +45,13 @@ enum BrowserStatus {
     Failed(String),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortColumn {
+    Name,
+    Size,
+    Modified,
+}
+
 enum TransferEvent {
     Update(Transfer, TransferControl),
     Removed(String),
@@ -70,6 +79,8 @@ struct LoploadApp {
     auto_update_enabled: bool,
     default_download_dir: Option<String>,
     settings_status: Option<String>,
+    sort_column: SortColumn,
+    sort_descending: bool,
     name: Entity<InputState>,
     endpoint: Entity<InputState>,
     bucket: Entity<InputState>,
@@ -78,6 +89,7 @@ struct LoploadApp {
     secret_key: Entity<InputState>,
     folder_name: Entity<InputState>,
     rename_name: Entity<InputState>,
+    filter: Entity<InputState>,
     form_error: Option<String>,
     editing_connection_id: Option<String>,
     connection_test_status: Option<String>,
@@ -85,6 +97,7 @@ struct LoploadApp {
     folder_error: Option<String>,
     new_folder_open: bool,
     home_error: Option<String>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl LoploadApp {
@@ -99,6 +112,12 @@ impl LoploadApp {
         let tuning = transfer_tuning().unwrap_or_default();
         let auto_update_enabled = auto_update_enabled().unwrap_or(true);
         let default_download_dir = default_download_dir().unwrap_or_default();
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter files"));
+        let filter_subscription = cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         Self {
             screen: Screen::Home,
             connections,
@@ -120,6 +139,8 @@ impl LoploadApp {
             auto_update_enabled,
             default_download_dir,
             settings_status: None,
+            sort_column: SortColumn::Name,
+            sort_descending: false,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("My storage")),
             endpoint: cx
                 .new(|cx| InputState::new(window, cx).placeholder("https://storage.example.com")),
@@ -133,6 +154,7 @@ impl LoploadApp {
             }),
             folder_name: cx.new(|cx| InputState::new(window, cx).placeholder("Folder name")),
             rename_name: cx.new(|cx| InputState::new(window, cx).placeholder("New name")),
+            filter,
             form_error: None,
             editing_connection_id: None,
             connection_test_status: None,
@@ -140,6 +162,7 @@ impl LoploadApp {
             folder_error: None,
             new_folder_open: false,
             home_error,
+            _subscriptions: vec![filter_subscription],
         }
     }
 
@@ -493,6 +516,16 @@ impl LoploadApp {
                 self.settings_status = Some("Transfer settings saved".into());
             }
             Err(_) => self.settings_status = Some("Settings could not be saved".into()),
+        }
+        cx.notify();
+    }
+
+    fn change_sort(&mut self, column: SortColumn, cx: &mut Context<Self>) {
+        if self.sort_column == column {
+            self.sort_descending = !self.sort_descending;
+        } else {
+            self.sort_column = column;
+            self.sort_descending = false;
         }
         cx.notify();
     }
@@ -1136,7 +1169,36 @@ impl LoploadApp {
             .unwrap_or_default();
         let prefix = self.prefix.clone();
         let parent = self.parent_prefix();
-        let entries = self.entries.clone();
+        let query = self.filter.read(cx).value().trim().to_lowercase();
+        let mut entries = self
+            .entries
+            .iter()
+            .filter(|entry| query.is_empty() || entry.name.to_lowercase().contains(&query))
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            let folder_order = matches!(right.kind, RemoteEntryKind::Folder)
+                .cmp(&matches!(left.kind, RemoteEntryKind::Folder));
+            if !folder_order.is_eq() {
+                return folder_order;
+            }
+            let order = match self.sort_column {
+                SortColumn::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+                SortColumn::Size => left
+                    .size
+                    .unwrap_or_default()
+                    .cmp(&right.size.unwrap_or_default()),
+                SortColumn::Modified => left
+                    .last_modified
+                    .unwrap_or_default()
+                    .cmp(&right.last_modified.unwrap_or_default()),
+            };
+            if self.sort_descending {
+                order.reverse()
+            } else {
+                order
+            }
+        });
         let transfers = self.transfers.clone();
         let current_connection = self.current_connection.clone();
         let pending_trash = self.pending_trash.clone();
@@ -1232,6 +1294,7 @@ impl LoploadApp {
                                 },
                             )),
                     )
+                    .child(Input::new(&self.filter).w(px(180.0)))
                     .child(
                         div()
                             .id("upload-files")
@@ -1536,6 +1599,49 @@ impl LoploadApp {
                     .min_h_0()
                     .overflow_y_scrollbar()
                     .p_6()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .border_b_1()
+                            .border_color(rgb(0xd4cee8))
+                            .px_4()
+                            .py_2()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(div().w(px(28.0)))
+                            .child(
+                                div()
+                                    .id("sort-name")
+                                    .flex_1()
+                                    .cursor_pointer()
+                                    .child("Name")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.change_sort(SortColumn::Name, cx)
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("sort-size")
+                                    .w(px(90.0))
+                                    .cursor_pointer()
+                                    .child("Size")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.change_sort(SortColumn::Size, cx)
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("sort-modified")
+                                    .w(px(90.0))
+                                    .cursor_pointer()
+                                    .child("Modified")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.change_sort(SortColumn::Modified, cx)
+                                    })),
+                            ),
+                    )
                     .when_some(status, |list, message| {
                         list.child(
                             div()
@@ -1574,6 +1680,11 @@ impl LoploadApp {
                                     .text_sm()
                                     .text_color(rgb(0x766d91))
                                     .child(entry.size.map(format_bytes).unwrap_or_default()),
+                            )
+                            .child(
+                                div().w(px(90.0)).text_sm().text_color(rgb(0x766d91)).child(
+                                    entry.last_modified.map(format_date).unwrap_or_default(),
+                                ),
                             )
                             .when(!folder, |row| {
                                 row.child(
@@ -2126,6 +2237,14 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+fn format_date(timestamp: i64) -> String {
+    Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .map(|date| date.format("%d/%m/%Y").to_string())
+        .unwrap_or_default()
 }
 
 fn transfer_name(transfer: &Transfer) -> String {

@@ -8,6 +8,7 @@ license = "MIT"
 
 [dependencies]
 async-channel = "2"
+chrono = "0.4"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 gpui-component = "0.5.1"
 lopload-native = { path = "../crates/lopload-native" }

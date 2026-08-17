@@ -24,6 +24,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Bounded parallel multipart uploads and ranged downloads driven by the selected speed preset
 - Manual retry for failed uploads and downloads, including persisted ranged-download recovery
 - Native OS file drops onto the current folder
+- Name filtering and name/size/modified-date sorting
 - Deterministic Rustls/WebPKI networking verified against real MinIO
 - Cinder run/check commands and version lockstep with the production app
 
@@ -36,7 +37,7 @@ of time on machines with full Xcode once native packaging is introduced.
 - Move-to-folder controls and progress for recursive storage operations
 - Guarded recursive folder drops, internal drag-to-move, tray, notifications, and auto-updates
 - Multi-selection and bulk download/Trash/move actions
-- Name/size/date sorting, name filtering, file and folder information, and media previews
+- File and folder information and media previews
 - Credential re-entry, optimistic mutations with rollback, and stale-list protection
 - Transfer speed display, collapsed batch summaries, and completion notifications
 - First-run celebration, system theme handling, and the remaining polished browser states
