@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Application, Bounds, Context, Entity, FontWeight, Render, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, AppContext, Application, Bounds, ClipboardItem, Context, Entity, FontWeight, Render,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_component::{
     Root,
@@ -10,6 +10,10 @@ use gpui_component::{
 use lopload_native::{
     NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
     list_connections,
+    operations::{
+        TrashItem, delete_trash_item, empty_trash, list_trash, move_to_trash, rename_file,
+        rename_folder, restore_trash_item, share_link,
+    },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
     transfer::{
@@ -25,6 +29,7 @@ enum Screen {
     Home,
     AddStorage,
     Browser,
+    Trash,
 }
 
 enum BrowserStatus {
@@ -48,6 +53,13 @@ struct LoploadApp {
     load_generation: u64,
     transfers: Vec<Transfer>,
     transfer_controls: HashMap<String, TransferControl>,
+    trash_items: Vec<TrashItem>,
+    trash_loading: bool,
+    pending_trash: Option<RemoteEntry>,
+    pending_rename: Option<RemoteEntry>,
+    pending_delete: Option<TrashItem>,
+    confirm_empty_trash: bool,
+    operation_status: Option<String>,
     name: Entity<InputState>,
     endpoint: Entity<InputState>,
     bucket: Entity<InputState>,
@@ -55,6 +67,7 @@ struct LoploadApp {
     access_key: Entity<InputState>,
     secret_key: Entity<InputState>,
     folder_name: Entity<InputState>,
+    rename_name: Entity<InputState>,
     form_error: Option<String>,
     editing_connection_id: Option<String>,
     connection_test_status: Option<String>,
@@ -83,6 +96,13 @@ impl LoploadApp {
             load_generation: 0,
             transfers: Vec::new(),
             transfer_controls: HashMap::new(),
+            trash_items: Vec::new(),
+            trash_loading: false,
+            pending_trash: None,
+            pending_rename: None,
+            pending_delete: None,
+            confirm_empty_trash: false,
+            operation_status: None,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("My storage")),
             endpoint: cx
                 .new(|cx| InputState::new(window, cx).placeholder("https://storage.example.com")),
@@ -95,6 +115,7 @@ impl LoploadApp {
                     .masked(true)
             }),
             folder_name: cx.new(|cx| InputState::new(window, cx).placeholder("Folder name")),
+            rename_name: cx.new(|cx| InputState::new(window, cx).placeholder("New name")),
             form_error: None,
             editing_connection_id: None,
             connection_test_status: None,
@@ -154,10 +175,8 @@ impl LoploadApp {
                 let mut transfer_id = Some(transfer.id.clone());
                 let _ = resume_upload(&connection, transfer, &control, |updated| {
                     transfer_id = Some(updated.id.clone());
-                    let _ = sender.send_blocking(TransferEvent::Update(
-                        updated,
-                        event_control.clone(),
-                    ));
+                    let _ =
+                        sender.send_blocking(TransferEvent::Update(updated, event_control.clone()));
                 });
                 if control.is_cancelled() {
                     if let Some(id) = transfer_id {
@@ -183,6 +202,207 @@ impl LoploadApp {
         } else {
             cx.notify();
         }
+    }
+
+    fn open_trash(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        self.screen = Screen::Trash;
+        self.trash_loading = true;
+        let load = cx
+            .background_executor()
+            .spawn(async move { list_trash(&connection) });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.trash_loading = false;
+                    match result {
+                        Ok(items) => this.trash_items = items,
+                        Err(error) => this.operation_status = Some(error),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn confirm_move_to_trash(&mut self, cx: &mut Context<Self>) {
+        let (Some(connection), Some(entry)) =
+            (self.current_connection.clone(), self.pending_trash.take())
+        else {
+            return;
+        };
+        self.operation_status = Some("Moving to Trash…".into());
+        let key = entry.key.clone();
+        let is_folder = matches!(entry.kind, RemoteEntryKind::Folder);
+        let deleted_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or_default();
+        let operation = cx
+            .background_executor()
+            .spawn(async move { move_to_trash(&connection, &key, is_folder, deleted_at) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(()) => {
+                        this.operation_status = Some("Moved to Trash".into());
+                        this.load_prefix(this.prefix.clone(), cx);
+                    }
+                    Err(error) => {
+                        this.operation_status = Some(error);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn submit_rename(&mut self, cx: &mut Context<Self>) {
+        let (Some(connection), Some(entry)) =
+            (self.current_connection.clone(), self.pending_rename.take())
+        else {
+            return;
+        };
+        let name = self.rename_name.read(cx).value().trim().to_string();
+        if name.is_empty() || name.contains('/') {
+            self.operation_status = Some("Enter a name without /".into());
+            cx.notify();
+            return;
+        }
+        let is_folder = matches!(entry.kind, RemoteEntryKind::Folder);
+        let trimmed = entry.key.trim_end_matches('/');
+        let parent = trimmed
+            .rsplit_once('/')
+            .map(|(parent, _)| format!("{parent}/"))
+            .unwrap_or_default();
+        let destination = format!("{parent}{name}{}", if is_folder { "/" } else { "" });
+        if destination == entry.key {
+            self.operation_status = Some("Choose a different name".into());
+            cx.notify();
+            return;
+        }
+        self.operation_status = Some("Renaming…".into());
+        let operation = cx.background_executor().spawn(async move {
+            if is_folder {
+                rename_folder(&connection, &entry.key, &destination)
+            } else {
+                rename_file(&connection, &entry.key, &destination)
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(()) => {
+                        this.operation_status = Some("Renamed".into());
+                        this.load_prefix(this.prefix.clone(), cx);
+                    }
+                    Err(error) => {
+                        this.operation_status = Some(error);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn copy_share_link(&mut self, entry: RemoteEntry, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        self.operation_status = Some("Creating link…".into());
+        let operation = cx
+            .background_executor()
+            .spawn(async move { share_link(&connection, &entry.key, 24 * 60 * 60) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    match result {
+                        Ok(link) => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(link));
+                            this.operation_status = Some("Link copied — valid for 24 hours".into());
+                        }
+                        Err(error) => this.operation_status = Some(error),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn restore_from_trash(&mut self, item: TrashItem, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        self.operation_status = Some("Restoring…".into());
+        let operation = cx
+            .background_executor()
+            .spawn(async move { restore_trash_item(&connection, &item) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.operation_status = Some(match result {
+                        Ok(()) => "Restored".into(),
+                        Err(error) => error,
+                    });
+                    this.open_trash(cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn permanently_delete(&mut self, cx: &mut Context<Self>) {
+        let (Some(connection), Some(item)) =
+            (self.current_connection.clone(), self.pending_delete.take())
+        else {
+            return;
+        };
+        self.operation_status = Some("Deleting…".into());
+        let operation = cx
+            .background_executor()
+            .spawn(async move { delete_trash_item(&connection, &item) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.operation_status = result.err();
+                    this.open_trash(cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn permanently_empty_trash(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        self.confirm_empty_trash = false;
+        self.operation_status = Some("Emptying Trash…".into());
+        let operation = cx
+            .background_executor()
+            .spawn(async move { empty_trash(&connection) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.operation_status = result.err();
+                    this.open_trash(cx);
+                });
+            }
+        })
+        .detach();
     }
 
     fn listen_for_transfers(
@@ -791,6 +1011,9 @@ impl LoploadApp {
         let entries = self.entries.clone();
         let transfers = self.transfers.clone();
         let current_connection = self.current_connection.clone();
+        let pending_trash = self.pending_trash.clone();
+        let pending_rename = self.pending_rename.clone();
+        let operation_status = self.operation_status.clone();
         let status = match &self.browser_status {
             BrowserStatus::Idle if entries.is_empty() => Some("This folder is empty".to_string()),
             BrowserStatus::Idle => None,
@@ -826,6 +1049,21 @@ impl LoploadApp {
                                 this.screen = Screen::Home;
                                 this.load_generation += 1;
                                 cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("open-trash")
+                            .cursor_pointer()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(0xd4cee8))
+                            .px_3()
+                            .py_2()
+                            .child("Trash")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.operation_status = None;
+                                this.open_trash(cx);
                             })),
                     )
                     .when(!prefix.is_empty(), |toolbar| {
@@ -904,6 +1142,113 @@ impl LoploadApp {
                             })),
                     ),
             )
+            .when_some(operation_status, |browser, status| {
+                browser.child(
+                    div()
+                        .px_6()
+                        .py_2()
+                        .bg(rgb(0xfff4d8))
+                        .text_color(rgb(0x6e5520))
+                        .child(status),
+                )
+            })
+            .when_some(pending_trash, |browser, entry| {
+                browser.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(rgb(0xe9b9c4))
+                        .bg(rgb(0xffedf1))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(format!("Move {} to Trash?", entry.name)),
+                        )
+                        .child(
+                            div()
+                                .id("cancel-trash")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(0xd4cee8))
+                                .px_3()
+                                .py_2()
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_trash = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("confirm-trash")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(rgb(0xa33b53))
+                                .px_3()
+                                .py_2()
+                                .text_color(rgb(0xffffff))
+                                .child("Move to Trash")
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.confirm_move_to_trash(cx)),
+                                ),
+                        ),
+                )
+            })
+            .when_some(pending_rename, |browser, entry| {
+                browser.child(
+                    div()
+                        .flex()
+                        .items_end()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(rgb(0xe3def2))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(field("Rename", Input::new(&self.rename_name).w_full())),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(0x766d91))
+                                .child(format!("Current: {}", entry.name)),
+                        )
+                        .child(
+                            div()
+                                .id("cancel-rename")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(0xd4cee8))
+                                .px_3()
+                                .py_2()
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_rename = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("confirm-rename")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(rgb(0x5c4f8f))
+                                .px_3()
+                                .py_2()
+                                .text_color(rgb(0xffffff))
+                                .child("Rename")
+                                .on_click(cx.listener(|this, _, _, cx| this.submit_rename(cx))),
+                        ),
+                )
+            })
             .when(!transfers.is_empty(), |browser| {
                 browser.child(
                     div()
@@ -925,10 +1270,8 @@ impl LoploadApp {
                                     | TransferState::Sending { .. }
                                     | TransferState::Checking
                             );
-                            let resumable = matches!(
-                                transfer.state,
-                                TransferState::Failed { .. }
-                            ) && transfer.upload_id.is_some();
+                            let resumable = matches!(transfer.state, TransferState::Failed { .. })
+                                && transfer.upload_id.is_some();
                             let retry_connection = current_connection.clone();
                             let control = self.transfer_controls.get(&id).cloned();
                             div()
@@ -1062,6 +1405,9 @@ impl LoploadApp {
                         let folder = matches!(entry.kind, RemoteEntryKind::Folder);
                         let key = entry.key.clone();
                         let downloadable = entry.clone();
+                        let shareable = entry.clone();
+                        let trashable = entry.clone();
+                        let renameable = entry.clone();
                         div()
                             .id(("entry", index))
                             .flex()
@@ -1101,11 +1447,294 @@ impl LoploadApp {
                                         })),
                                 )
                             })
+                            .when(!folder, |row| {
+                                row.child(
+                                    div()
+                                        .id(("share-file", index))
+                                        .cursor_pointer()
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(rgb(0xd4cee8))
+                                        .px_3()
+                                        .py_1()
+                                        .child("Copy link")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.copy_share_link(shareable.clone(), cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id(("rename-entry", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_3()
+                                    .py_1()
+                                    .child("Rename")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.rename_name.update(cx, |input, cx| {
+                                            input.set_value(&renameable.name, window, cx)
+                                        });
+                                        this.pending_rename = Some(renameable.clone());
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id(("trash-entry", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xe9b9c4))
+                                    .px_3()
+                                    .py_1()
+                                    .text_color(rgb(0xa33b53))
+                                    .child("Trash")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.pending_trash = Some(trashable.clone());
+                                        cx.notify();
+                                    })),
+                            )
                             .when(folder, |row| {
                                 row.on_click(cx.listener(move |this, _, _, cx| {
                                     this.load_prefix(key.clone(), cx);
                                 }))
                             })
+                    })),
+            )
+    }
+
+    fn render_trash(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let items = self.trash_items.clone();
+        let status = self.operation_status.clone();
+        let pending_delete = self.pending_delete.clone();
+        let confirm_empty = self.confirm_empty_trash;
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_6()
+                    .py_4()
+                    .border_b_1()
+                    .border_color(rgb(0xe3def2))
+                    .child(
+                        div()
+                            .id("back-to-storage")
+                            .cursor_pointer()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(0xd4cee8))
+                            .px_3()
+                            .py_2()
+                            .child("Back")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.screen = Screen::Browser;
+                                this.load_prefix(this.prefix.clone(), cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Trash"),
+                    )
+                    .when(!items.is_empty(), |toolbar| {
+                        toolbar.child(
+                            div()
+                                .id("empty-trash")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(0xe9b9c4))
+                                .px_3()
+                                .py_2()
+                                .text_color(rgb(0xa33b53))
+                                .child("Empty Trash")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_empty_trash = true;
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            .when_some(status, |view, message| {
+                view.child(
+                    div()
+                        .px_6()
+                        .py_2()
+                        .bg(rgb(0xfff4d8))
+                        .text_color(rgb(0x6e5520))
+                        .child(message),
+                )
+            })
+            .when(confirm_empty, |view| {
+                view.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .bg(rgb(0xffedf1))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child("Permanently delete everything in Trash?"),
+                        )
+                        .child(
+                            div()
+                                .id("cancel-empty-trash")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_2()
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_empty_trash = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("confirm-empty-trash")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(rgb(0xa33b53))
+                                .px_3()
+                                .py_2()
+                                .text_color(rgb(0xffffff))
+                                .child("Delete permanently")
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.permanently_empty_trash(cx)),
+                                ),
+                        ),
+                )
+            })
+            .when_some(pending_delete, |view, item| {
+                view.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .bg(rgb(0xffedf1))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(format!("Permanently delete {}?", item.name)),
+                        )
+                        .child(
+                            div()
+                                .id("cancel-delete-trash")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_2()
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_delete = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("confirm-delete-trash")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(rgb(0xa33b53))
+                                .px_3()
+                                .py_2()
+                                .text_color(rgb(0xffffff))
+                                .child("Delete permanently")
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.permanently_delete(cx)),
+                                ),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p_6()
+                    .when(self.trash_loading, |list| {
+                        list.child(div().p_6().text_center().child("Loading…"))
+                    })
+                    .when(!self.trash_loading && items.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .p_6()
+                                .text_center()
+                                .text_color(rgb(0x766d91))
+                                .child("Trash is empty"),
+                        )
+                    })
+                    .children(items.into_iter().enumerate().map(|(index, item)| {
+                        let restorable = item.clone();
+                        let deletable = item.clone();
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .border_b_1()
+                            .border_color(rgb(0xeeeafa))
+                            .bg(rgb(0xffffff))
+                            .px_4()
+                            .py_3()
+                            .child(div().w(px(28.0)).child(if item.is_folder {
+                                "▸"
+                            } else {
+                                "·"
+                            }))
+                            .child(
+                                div().flex_1().child(item.name).child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(0x766d91))
+                                        .child(format_bytes(item.size)),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .id(("restore-trash", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .bg(rgb(0x5c4f8f))
+                                    .px_3()
+                                    .py_2()
+                                    .text_color(rgb(0xffffff))
+                                    .child("Restore")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.restore_from_trash(restorable.clone(), cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id(("delete-trash", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xe9b9c4))
+                                    .px_3()
+                                    .py_2()
+                                    .text_color(rgb(0xa33b53))
+                                    .child("Delete now")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.pending_delete = Some(deletable.clone());
+                                        cx.notify();
+                                    })),
+                            )
                     })),
             )
     }
@@ -1117,6 +1746,7 @@ impl Render for LoploadApp {
             Screen::Home => self.render_home(cx).into_any_element(),
             Screen::AddStorage => self.render_add_storage(cx).into_any_element(),
             Screen::Browser => self.render_browser(cx).into_any_element(),
+            Screen::Trash => self.render_trash(cx).into_any_element(),
         };
 
         div()

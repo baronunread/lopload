@@ -92,6 +92,7 @@ jobs:
         run: |
           cinder test lists_real_minio_objects -- --ignored
           cinder test uploads_and_downloads_real_minio_bytes -- --ignored
+          cinder test moves_real_minio_objects_without_downloading_them -- --ignored
 
       - name: Cinder test
         working-directory: src-tauri
