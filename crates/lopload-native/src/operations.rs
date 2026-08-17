@@ -6,7 +6,10 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 const TRASH_PREFIX: &str = ".lopload-trash/";
 const COPY_MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
@@ -65,6 +68,105 @@ pub fn files_in_folder(
             })
             .collect())
     })
+}
+
+pub fn list_folders(connection: &StorageConnection) -> Result<Vec<String>, String> {
+    let client = s3::client(connection)?;
+    s3::runtime()?.block_on(async {
+        let objects = list_objects(&client, connection, "").await?;
+        let mut folders = BTreeSet::new();
+        folders.insert(String::new());
+        for object in objects {
+            if object.key.starts_with(TRASH_PREFIX) {
+                continue;
+            }
+            let mut prefix = String::new();
+            let mut segments = object.key.split('/').peekable();
+            while let Some(segment) = segments.next() {
+                if segment.is_empty() || segments.peek().is_none() {
+                    break;
+                }
+                prefix.push_str(segment);
+                prefix.push('/');
+                folders.insert(prefix.clone());
+            }
+        }
+        Ok(folders.into_iter().collect())
+    })
+}
+
+pub fn move_entry(
+    connection: &StorageConnection,
+    from_key: &str,
+    is_folder: bool,
+    destination_prefix: &str,
+) -> Result<(), String> {
+    let name = base_name(from_key);
+    let destination = format!(
+        "{destination_prefix}{name}{}",
+        if is_folder { "/" } else { "" }
+    );
+    validate_destination(from_key, &destination)?;
+    if is_folder && destination_prefix.starts_with(from_key) {
+        return Err("A folder can't be moved inside itself".into());
+    }
+    let client = s3::client(connection)?;
+    s3::runtime()?.block_on(move_entry_with_client(
+        &client,
+        connection,
+        from_key,
+        is_folder,
+        &destination,
+    ))
+}
+
+async fn move_entry_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    from_key: &str,
+    is_folder: bool,
+    destination: &str,
+) -> Result<(), String> {
+    let occupied = if is_folder {
+        client
+            .list_objects_v2()
+            .bucket(&connection.bucket)
+            .prefix(destination)
+            .max_keys(1)
+            .send()
+            .await
+            .map_err(|_| "The destination could not be checked".to_string())?
+            .key_count()
+            .unwrap_or_default()
+            > 0
+    } else {
+        client
+            .head_object()
+            .bucket(&connection.bucket)
+            .key(destination)
+            .send()
+            .await
+            .is_ok()
+    };
+    if occupied {
+        return Err("Something's already there — move skipped.".into());
+    }
+    if is_folder {
+        let objects = list_objects(client, connection, from_key).await?;
+        for object in &objects {
+            let target = format!("{destination}{}", &object.key[from_key.len()..]);
+            copy_object(client, connection, object, &target).await?;
+        }
+        delete_keys(
+            client,
+            connection,
+            objects.into_iter().map(|object| object.key).collect(),
+        )
+        .await
+    } else {
+        copy_key(client, connection, from_key, destination).await?;
+        delete_key(client, connection, from_key).await
+    }
 }
 
 pub fn rename_file(
@@ -598,10 +700,38 @@ mod tests {
                     .await?
                     .into_bytes();
                 assert_eq!(copied.as_ref(), b"native move");
+                move_entry_with_client(
+                    &client,
+                    &connection,
+                    "renamed/file name.txt",
+                    false,
+                    "moved/file name.txt",
+                )
+                .await?;
+                assert!(
+                    client
+                        .head_object()
+                        .bucket(&bucket)
+                        .key("renamed/file name.txt")
+                        .send()
+                        .await
+                        .is_err()
+                );
+                let moved = client
+                    .get_object()
+                    .bucket(&bucket)
+                    .key("moved/file name.txt")
+                    .send()
+                    .await?
+                    .body
+                    .collect()
+                    .await?
+                    .into_bytes();
+                assert_eq!(moved.as_ref(), b"native move");
                 client
                     .delete_object()
                     .bucket(&bucket)
-                    .key("renamed/file name.txt")
+                    .key("moved/file name.txt")
                     .send()
                     .await?;
                 client.delete_bucket().bucket(&bucket).send().await?;

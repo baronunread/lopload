@@ -13,8 +13,9 @@ use lopload_native::{
     NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
     list_connections,
     operations::{
-        TrashItem, delete_trash_item, empty_trash, files_in_folder, folder_info, list_trash,
-        move_to_trash, rename_file, rename_folder, restore_trash_item, share_link,
+        TrashItem, delete_trash_item, empty_trash, files_in_folder, folder_info, list_folders,
+        list_trash, move_entry, move_to_trash, rename_file, rename_folder, restore_trash_item,
+        share_link,
     },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
@@ -82,6 +83,9 @@ struct LoploadApp {
     info_loading: bool,
     selected_keys: HashSet<String>,
     pending_bulk_trash: Vec<RemoteEntry>,
+    pending_move: Vec<RemoteEntry>,
+    move_destinations: Vec<String>,
+    move_loading: bool,
     tuning: TransferTuning,
     auto_update_enabled: bool,
     default_download_dir: Option<String>,
@@ -146,6 +150,9 @@ impl LoploadApp {
             info_loading: false,
             selected_keys: HashSet::new(),
             pending_bulk_trash: Vec::new(),
+            pending_move: Vec::new(),
+            move_destinations: Vec::new(),
+            move_loading: false,
             tuning,
             auto_update_enabled,
             default_download_dir,
@@ -760,6 +767,86 @@ impl LoploadApp {
                     Ok(()) => {
                         this.selected_keys.clear();
                         this.operation_status = Some("Moved selected items to Trash".into());
+                        this.load_prefix(this.prefix.clone(), cx);
+                    }
+                    Err(error) => {
+                        this.operation_status = Some(error);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn prepare_move(&mut self, entries: Vec<RemoteEntry>, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        if entries.is_empty() {
+            return;
+        }
+        self.pending_move = entries;
+        self.move_destinations.clear();
+        self.move_loading = true;
+        let operation = cx
+            .background_executor()
+            .spawn(async move { list_folders(&connection) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.move_loading = false;
+                    match result {
+                        Ok(folders) => {
+                            this.move_destinations = folders
+                                .into_iter()
+                                .filter(|folder| {
+                                    this.pending_move.iter().all(|entry| {
+                                        parent_of_key(&entry.key) != *folder
+                                            && (!matches!(entry.kind, RemoteEntryKind::Folder)
+                                                || !folder.starts_with(&entry.key))
+                                    })
+                                })
+                                .collect();
+                        }
+                        Err(error) => this.operation_status = Some(error),
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn confirm_move(&mut self, destination: String, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let entries = std::mem::take(&mut self.pending_move);
+        self.move_destinations.clear();
+        if entries.is_empty() {
+            return;
+        }
+        self.operation_status = Some("Moving…".into());
+        let operation = cx.background_executor().spawn(async move {
+            for entry in entries {
+                move_entry(
+                    &connection,
+                    &entry.key,
+                    matches!(entry.kind, RemoteEntryKind::Folder),
+                    &destination,
+                )?;
+            }
+            Ok::<_, String>(())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(()) => {
+                        this.selected_keys.clear();
+                        this.operation_status = Some("Moved".into());
                         this.load_prefix(this.prefix.clone(), cx);
                     }
                     Err(error) => {
@@ -1411,6 +1498,8 @@ impl LoploadApp {
         let current_connection = self.current_connection.clone();
         let selected_count = self.selected_keys.len();
         let pending_bulk_count = self.pending_bulk_trash.len();
+        let pending_move_count = self.pending_move.len();
+        let move_destinations = self.move_destinations.clone();
         let pending_trash = self.pending_trash.clone();
         let pending_rename = self.pending_rename.clone();
         let operation_status = self.operation_status.clone();
@@ -1527,6 +1616,20 @@ impl LoploadApp {
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.start_bulk_download(cx)),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .id("bulk-move")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_3()
+                                    .py_2()
+                                    .child("Move")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.prepare_move(this.selected_entries(), cx)
+                                    })),
                             )
                             .child(
                                 div()
@@ -1699,6 +1802,75 @@ impl LoploadApp {
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.confirm_bulk_trash(cx)),
                                 ),
+                        ),
+                )
+            })
+            .when(pending_move_count > 0, |browser| {
+                browser.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(rgb(0xe3def2))
+                        .bg(rgb(0xffffff))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(format!("Move {pending_move_count} item(s) to…")),
+                                )
+                                .child(
+                                    div()
+                                        .id("cancel-move")
+                                        .cursor_pointer()
+                                        .px_3()
+                                        .py_2()
+                                        .child("Cancel")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.pending_move.clear();
+                                            this.move_destinations.clear();
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .when(self.move_loading, |panel| panel.child("Loading folders…"))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .max_h(px(220.0))
+                                .overflow_y_scrollbar()
+                                .children(move_destinations.into_iter().enumerate().map(
+                                    |(index, destination)| {
+                                        let selected_destination = destination.clone();
+                                        div()
+                                            .id(("move-destination", index))
+                                            .cursor_pointer()
+                                            .rounded_lg()
+                                            .bg(rgb(0xeeeafa))
+                                            .px_3()
+                                            .py_2()
+                                            .child(if destination.is_empty() {
+                                                "Home".to_string()
+                                            } else {
+                                                format!(
+                                                    "Home / {}",
+                                                    destination.trim_end_matches('/')
+                                                )
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.confirm_move(selected_destination.clone(), cx)
+                                            }))
+                                    },
+                                )),
                         ),
                 )
             })
@@ -2016,6 +2188,7 @@ impl LoploadApp {
                         let trashable = entry.clone();
                         let renameable = entry.clone();
                         let inspectable = entry.clone();
+                        let movable = entry.clone();
                         div()
                             .id(("entry", index))
                             .flex()
@@ -2032,6 +2205,21 @@ impl LoploadApp {
                             } else {
                                 if selected { "✓" } else { "·" }
                             }))
+                            .child(
+                                div()
+                                    .id(("move-entry", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_3()
+                                    .py_1()
+                                    .child("Move")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.prepare_move(vec![movable.clone()], cx);
+                                    })),
+                            )
                             .child(
                                 div()
                                     .id(("select-entry", index))
@@ -2704,6 +2892,14 @@ fn safe_destination(root: &Path, relative: &str) -> Option<PathBuf> {
         }
     }
     found_name.then_some(destination)
+}
+
+fn parent_of_key(key: &str) -> String {
+    let trimmed = key.trim_end_matches('/');
+    trimmed
+        .rsplit_once('/')
+        .map(|(parent, _)| format!("{parent}/"))
+        .unwrap_or_default()
 }
 
 fn main() {
