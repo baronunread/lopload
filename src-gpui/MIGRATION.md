@@ -46,6 +46,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Restore the last-used storage and folder at startup
 - Silent 30-day Trash retention sweep at startup and every 24 hours
 - Real-MinIO native scenarios for listing, folder markers, previews, transfers, resume, moves, Trash, restore, purge, and maintenance cleanup
+- Isolated GPUI window harness with painted-control interaction and onboarding-form validation coverage
 
 GPUI's `runtime_shaders` feature is enabled so local development works with
 Apple Command Line Tools alone. Release builds can compile Metal shaders ahead

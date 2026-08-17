@@ -20,3 +20,6 @@ lopload-native = { path = "../crates/lopload-native" }
 notify-rust = "=4.11.7"
 rfd = "0.15"
 tray-icon = "=0.24.1"
+
+[dev-dependencies]
+gpui = { version = "0.2.2", features = ["runtime_shaders", "test-support"] }

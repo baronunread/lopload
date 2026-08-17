@@ -87,6 +87,37 @@ struct TransferSpeedSample {
     bytes: u64,
 }
 
+struct InitialAppState {
+    connections: Vec<StorageConnection>,
+    home_error: Option<String>,
+    tuning: TransferTuning,
+    theme_mode: Option<ThemeMode>,
+    auto_update_enabled: bool,
+    default_download_dir: Option<String>,
+    last_connection_id: Option<String>,
+}
+
+impl InitialAppState {
+    fn load() -> Self {
+        let (connections, home_error) = match list_connections() {
+            Ok(connections) => (connections, None),
+            Err(_) => (
+                Vec::new(),
+                Some("Saved storage connections could not be loaded".to_string()),
+            ),
+        };
+        Self {
+            connections,
+            home_error,
+            tuning: transfer_tuning().unwrap_or_default(),
+            theme_mode: theme_mode().unwrap_or_default(),
+            auto_update_enabled: auto_update_enabled().unwrap_or(true),
+            default_download_dir: default_download_dir().unwrap_or_default(),
+            last_connection_id: last_connection_id().ok().flatten(),
+        }
+    }
+}
+
 impl Render for DraggedEntries {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let label = if self.entries.len() == 1 {
@@ -166,17 +197,24 @@ struct LoploadApp {
 
 impl LoploadApp {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (connections, home_error) = match list_connections() {
-            Ok(connections) => (connections, None),
-            Err(_) => (
-                Vec::new(),
-                Some("Saved storage connections could not be loaded".to_string()),
-            ),
-        };
-        let tuning = transfer_tuning().unwrap_or_default();
-        let theme_mode = theme_mode().unwrap_or_default();
-        let auto_update_enabled = auto_update_enabled().unwrap_or(true);
-        let default_download_dir = default_download_dir().unwrap_or_default();
+        Self::new_with_initial_state(window, cx, InitialAppState::load(), true)
+    }
+
+    fn new_with_initial_state(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        initial: InitialAppState,
+        start_background_services: bool,
+    ) -> Self {
+        let InitialAppState {
+            connections,
+            home_error,
+            tuning,
+            theme_mode,
+            auto_update_enabled,
+            default_download_dir,
+            last_connection_id,
+        } = initial;
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter files"));
         let filter_subscription = cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -194,8 +232,7 @@ impl LoploadApp {
         let current_connection = if first_run {
             None
         } else {
-            let last_id = last_connection_id().ok().flatten();
-            last_id
+            last_connection_id
                 .and_then(|id| {
                     connections
                         .iter()
@@ -281,7 +318,9 @@ impl LoploadApp {
             app.load_prefix(connection.last_prefix, cx);
             app.resume_pending_uploads(cx);
         }
-        start_trash_sweep(cx);
+        if start_background_services {
+            start_trash_sweep(cx);
+        }
         app
     }
 
@@ -1859,6 +1898,7 @@ impl LoploadApp {
                             .child(
                                 div()
                                     .id("save-storage")
+                                    .debug_selector(|| "save-storage".into())
                                     .cursor_pointer()
                                     .rounded_lg()
                                     .bg(accent_color())
@@ -4071,6 +4111,18 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn empty_initial_state() -> InitialAppState {
+        InitialAppState {
+            connections: Vec::new(),
+            home_error: None,
+            tuning: TransferTuning::default(),
+            theme_mode: None,
+            auto_update_enabled: true,
+            default_download_dir: None,
+            last_connection_id: None,
+        }
+    }
+
     fn transfer(state: TransferState) -> Transfer {
         Transfer {
             id: "transfer".into(),
@@ -4092,6 +4144,26 @@ mod tests {
         assert_eq!(share_expiry_label(60 * 60), "1 hour");
         assert_eq!(share_expiry_label(24 * 60 * 60), "1 day");
         assert_eq!(share_expiry_label(7 * 24 * 60 * 60), "7 days");
+    }
+
+    #[gpui::test]
+    fn validates_the_storage_form_through_a_native_window(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            LoploadApp::new_with_initial_state(window, cx, empty_initial_state(), false)
+        });
+        cx.update(|_, app| assert_eq!(view.read(app).screen, Screen::AddStorage));
+        let save = cx
+            .debug_bounds("save-storage")
+            .expect("painted Save storage control");
+        cx.simulate_click(save.center(), gpui::Modifiers::none());
+        cx.update(|_, app| {
+            assert_eq!(
+                view.read(app).form_error.as_deref(),
+                Some("Enter a storage name")
+            );
+            assert_eq!(view.read(app).screen, Screen::AddStorage);
+        });
     }
 
     #[test]
