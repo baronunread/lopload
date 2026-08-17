@@ -8,9 +8,10 @@ use gpui_component::{
     scroll::ScrollableElement,
 };
 use lopload_native::{
-    NewStorageConnection, StorageConnection, delete_connection, list_connections,
+    NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
+    list_connections,
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
-    save_connection, set_last_prefix,
+    save_connection, set_last_prefix, update_connection,
 };
 
 #[derive(Clone, Copy)]
@@ -42,6 +43,9 @@ struct LoploadApp {
     secret_key: Entity<InputState>,
     folder_name: Entity<InputState>,
     form_error: Option<String>,
+    editing_connection_id: Option<String>,
+    connection_test_status: Option<String>,
+    testing_connection: bool,
     folder_error: Option<String>,
     new_folder_open: bool,
     home_error: Option<String>,
@@ -68,7 +72,7 @@ impl LoploadApp {
             endpoint: cx
                 .new(|cx| InputState::new(window, cx).placeholder("https://storage.example.com")),
             bucket: cx.new(|cx| InputState::new(window, cx).placeholder("Bucket name")),
-            region: cx.new(|cx| InputState::new(window, cx).placeholder("auto")),
+            region: cx.new(|cx| InputState::new(window, cx).default_value("auto")),
             access_key: cx.new(|cx| InputState::new(window, cx).placeholder("Access key")),
             secret_key: cx.new(|cx| {
                 InputState::new(window, cx)
@@ -77,6 +81,9 @@ impl LoploadApp {
             }),
             folder_name: cx.new(|cx| InputState::new(window, cx).placeholder("Folder name")),
             form_error: None,
+            editing_connection_id: None,
+            connection_test_status: None,
+            testing_connection: false,
             folder_error: None,
             new_folder_open: false,
             home_error,
@@ -88,6 +95,99 @@ impl LoploadApp {
         self.current_connection = Some(connection);
         self.screen = Screen::Browser;
         self.load_prefix(prefix, cx);
+    }
+
+    fn begin_add_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing_connection_id = None;
+        self.form_error = None;
+        self.connection_test_status = None;
+        for input in [
+            &self.name,
+            &self.endpoint,
+            &self.bucket,
+            &self.access_key,
+            &self.secret_key,
+        ] {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        self.region
+            .update(cx, |input, cx| input.set_value("auto", window, cx));
+        self.screen = Screen::AddStorage;
+        cx.notify();
+    }
+
+    fn begin_edit_connection(
+        &mut self,
+        connection: StorageConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editing_connection_id = Some(connection.id);
+        self.form_error = None;
+        self.connection_test_status = None;
+        for (input, value) in [
+            (&self.name, connection.name),
+            (&self.endpoint, connection.endpoint),
+            (&self.bucket, connection.bucket),
+            (&self.region, connection.region),
+            (&self.access_key, String::new()),
+            (&self.secret_key, String::new()),
+        ] {
+            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        self.screen = Screen::AddStorage;
+        cx.notify();
+    }
+
+    fn test_connection_form(&mut self, cx: &mut Context<Self>) {
+        let endpoint = self.endpoint.read(cx).value().to_string();
+        let bucket = self.bucket.read(cx).value().to_string();
+        let region = self.region.read(cx).value().to_string();
+        let access_key = self.access_key.read(cx).value().to_string();
+        let secret_key = self.secret_key.read(cx).value().to_string();
+        let saved_connection = self.editing_connection_id.as_ref().and_then(|id| {
+            self.connections
+                .iter()
+                .find(|connection| &connection.id == id)
+                .cloned()
+        });
+        self.testing_connection = true;
+        self.connection_test_status = Some("Testing connection…".into());
+        cx.notify();
+        let test = cx.background_executor().spawn(async move {
+            if access_key.is_empty() && secret_key.is_empty() {
+                if let Some(mut connection) = saved_connection {
+                    connection.endpoint = endpoint;
+                    connection.bucket = bucket;
+                    connection.region = region;
+                    lopload_native::s3::test_connection(&connection)
+                } else {
+                    Err("Enter both credential fields before testing".into())
+                }
+            } else {
+                lopload_native::s3::test_connection_details(
+                    &endpoint,
+                    &bucket,
+                    &region,
+                    &access_key,
+                    &secret_key,
+                )
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = test.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.testing_connection = false;
+                    this.connection_test_status = Some(match result {
+                        Ok(()) => "Connection successful".into(),
+                        Err(error) => error,
+                    });
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn load_prefix(&mut self, prefix: String, cx: &mut Context<Self>) {
@@ -200,6 +300,7 @@ impl LoploadApp {
                         .enumerate()
                         .map(|(index, connection)| {
                             let selected = connection.clone();
+                            let edited = connection.clone();
                             div()
                                 .id(("connection", index))
                                 .flex()
@@ -215,6 +316,26 @@ impl LoploadApp {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
+                                        .child(
+                                            div()
+                                                .id(("edit-connection", index))
+                                                .cursor_pointer()
+                                                .rounded_lg()
+                                                .border_1()
+                                                .border_color(rgb(0xd4cee8))
+                                                .px_3()
+                                                .py_2()
+                                                .child("Edit")
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.begin_edit_connection(
+                                                            edited.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        )
                                         .child(
                                             div()
                                                 .font_weight(FontWeight::SEMIBOLD)
@@ -285,15 +406,15 @@ impl LoploadApp {
                         .py_2()
                         .text_color(rgb(0xffffff))
                         .child("Add storage")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.screen = Screen::AddStorage;
-                            cx.notify();
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.begin_add_connection(window, cx);
                         })),
                 ),
         )
     }
 
     fn render_add_storage(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let editing = self.editing_connection_id.is_some();
         div()
             .flex_1()
             .flex()
@@ -316,12 +437,16 @@ impl LoploadApp {
                         div()
                             .text_2xl()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Add storage"),
+                            .child(if editing { "Edit storage" } else { "Add storage" }),
                     )
                     .child(
                         div()
                             .text_color(rgb(0x766d91))
-                            .child("Connection details stay in the app database. Credentials go directly to your OS keychain."),
+                            .child(if editing {
+                                "Leave both credential fields blank to keep the credentials already in your OS keychain."
+                            } else {
+                                "Connection details stay in the app database. Credentials go directly to your OS keychain."
+                            }),
                     )
                     .child(field("Name", Input::new(&self.name).w_full()))
                     .child(field("Endpoint", Input::new(&self.endpoint).w_full()))
@@ -358,6 +483,9 @@ impl LoploadApp {
                     .when_some(self.form_error.clone(), |panel, error| {
                         panel.child(div().text_sm().text_color(rgb(0xa33b53)).child(error))
                     })
+                    .when_some(self.connection_test_status.clone(), |panel, status| {
+                        panel.child(div().text_sm().text_color(rgb(0x5c4f8f)).child(status))
+                    })
                     .child(
                         div()
                             .flex()
@@ -380,6 +508,26 @@ impl LoploadApp {
                             )
                             .child(
                                 div()
+                                    .id("test-storage")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_4()
+                                    .py_2()
+                                    .child(if self.testing_connection {
+                                        "Testing…"
+                                    } else {
+                                        "Test connection"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if !this.testing_connection {
+                                            this.test_connection_form(cx);
+                                        }
+                                    })),
+                            )
+                            .child(
+                                div()
                                     .id("save-storage")
                                     .cursor_pointer()
                                     .rounded_lg()
@@ -389,25 +537,53 @@ impl LoploadApp {
                                     .text_color(rgb(0xffffff))
                                     .child("Save storage")
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        let input = NewStorageConnection {
-                                            name: this.name.read(cx).value().to_string(),
-                                            endpoint: this.endpoint.read(cx).value().to_string(),
-                                            bucket: this.bucket.read(cx).value().to_string(),
-                                            region: this.region.read(cx).value().to_string(),
-                                            access_key: this.access_key.read(cx).value().to_string(),
-                                            secret_key: this.secret_key.read(cx).value().to_string(),
+                                        let name = this.name.read(cx).value().to_string();
+                                        let endpoint = this.endpoint.read(cx).value().to_string();
+                                        let bucket = this.bucket.read(cx).value().to_string();
+                                        let region = this.region.read(cx).value().to_string();
+                                        let access_key = this.access_key.read(cx).value().to_string();
+                                        let secret_key = this.secret_key.read(cx).value().to_string();
+                                        let result = if let Some(id) = this.editing_connection_id.clone() {
+                                            let keep_credentials = access_key.is_empty() && secret_key.is_empty();
+                                            update_connection(UpdateStorageConnection {
+                                                id,
+                                                name,
+                                                endpoint,
+                                                bucket,
+                                                region,
+                                                access_key: (!keep_credentials).then_some(access_key),
+                                                secret_key: (!keep_credentials).then_some(secret_key),
+                                            })
+                                        } else {
+                                            save_connection(NewStorageConnection {
+                                                name,
+                                                endpoint,
+                                                bucket,
+                                                region,
+                                                access_key,
+                                                secret_key,
+                                            })
                                         };
-                                        match save_connection(input) {
+                                        match result {
                                             Ok(connection) => {
-                                                this.connections.push(connection.clone());
+                                                if let Some(saved) = this
+                                                    .connections
+                                                    .iter_mut()
+                                                    .find(|saved| saved.id == connection.id)
+                                                {
+                                                    *saved = connection.clone();
+                                                } else {
+                                                    this.connections.push(connection.clone());
+                                                }
                                                 this.form_error = None;
+                                                this.editing_connection_id = None;
                                                 this.access_key.update(cx, |input, cx| {
                                                     input.set_value("", window, cx)
                                                 });
                                                 this.secret_key.update(cx, |input, cx| {
                                                     input.set_value("", window, cx)
                                                 });
-                                                this.open_connection(connection, cx);
+                                                this.screen = Screen::Home;
                                             }
                                             Err(error) => this.form_error = Some(error),
                                         }

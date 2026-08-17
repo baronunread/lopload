@@ -11,6 +11,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 - SQLite connection metadata with credentials stored only in the OS keychain
 - Shared native keychain crate used by both the GPUI and Tauri targets
 - Complete native connection schema, connection removal, and last-folder persistence
+- Connection editing, optional credential replacement, and live connection testing
 - Live paginated S3-compatible listing with folder navigation and refresh
 - Native folder creation and plain-language storage errors
 - Deterministic Rustls/WebPKI networking verified against real MinIO
@@ -23,7 +24,6 @@ of time on machines with full Xcode once native packaging is introduced.
 ## Required for parity
 
 - Uploads, downloads, resumable multipart state, and verification
-- Connection editing and credential re-entry
 - Rename, move, trash, restore, share-link, and empty-trash flows
 - Native file dialogs, drag and drop, tray, notifications, and auto-updates
 - Persistent connection, settings, and transfer stores

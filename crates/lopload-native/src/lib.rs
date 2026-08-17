@@ -39,6 +39,17 @@ pub struct NewStorageConnection {
 }
 
 #[cfg(feature = "storage")]
+pub struct UpdateStorageConnection {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    pub bucket: String,
+    pub region: String,
+    pub access_key: Option<String>,
+    pub secret_key: Option<String>,
+}
+
+#[cfg(feature = "storage")]
 pub fn save_connection(input: NewStorageConnection) -> Result<StorageConnection, String> {
     validate(&input)?;
     let connection = StorageConnection {
@@ -96,6 +107,64 @@ pub fn list_connections() -> Result<Vec<StorageConnection>, String> {
 }
 
 #[cfg(feature = "storage")]
+pub fn update_connection(input: UpdateStorageConnection) -> Result<StorageConnection, String> {
+    validate_fields(&input.name, &input.endpoint, &input.bucket, &input.region)?;
+    if input.access_key.is_some() != input.secret_key.is_some() {
+        return Err("Enter both credential fields or leave both blank".into());
+    }
+    let database = open_database()?;
+    let mut connection = connection_by_id(&database, &input.id)?
+        .ok_or_else(|| "This storage connection no longer exists".to_string())?;
+    connection.name = input.name.trim().to_string();
+    connection.endpoint = input.endpoint.trim().trim_end_matches('/').to_string();
+    connection.bucket = input.bucket.trim().to_string();
+    connection.region = input.region.trim().to_string();
+
+    let previous_credentials =
+        if let (Some(access_key), Some(secret_key)) = (input.access_key, input.secret_key) {
+            let previous = keychain::get(&connection.id).ok();
+            keychain::set(
+                &connection.id,
+                &keychain::Credentials {
+                    access_key,
+                    secret_key,
+                },
+            )
+            .map_err(|_| "Could not save credentials securely".to_string())?;
+            Some(previous)
+        } else {
+            None
+        };
+
+    if database
+        .execute(
+            "UPDATE connections
+         SET name = ?2, endpoint = ?3, bucket = ?4, region = ?5
+         WHERE id = ?1",
+            params![
+                connection.id,
+                connection.name,
+                connection.endpoint,
+                connection.bucket,
+                connection.region
+            ],
+        )
+        .is_err()
+    {
+        if let Some(previous) = previous_credentials {
+            if let Some(previous) = previous {
+                let _ = keychain::set(&connection.id, &previous);
+            } else {
+                let _ = keychain::delete(&connection.id);
+            }
+        }
+        return Err("Could not update this storage".into());
+    }
+
+    Ok(connection)
+}
+
+#[cfg(feature = "storage")]
 pub fn set_last_prefix(connection_id: &str, prefix: &str) -> Result<(), String> {
     let database = open_database()?;
     database
@@ -119,27 +188,59 @@ pub fn delete_connection(connection_id: &str) -> Result<(), String> {
 
 #[cfg(feature = "storage")]
 fn validate(input: &NewStorageConnection) -> Result<(), String> {
-    if input.name.trim().is_empty() {
-        return Err("Enter a storage name".into());
-    }
-    if input.endpoint.trim().is_empty() {
-        return Err("Enter an endpoint".into());
-    }
-    if !input.endpoint.trim().starts_with("https://")
-        && !input.endpoint.trim().starts_with("http://")
-    {
-        return Err("Endpoint must start with http:// or https://".into());
-    }
-    if input.region.trim().is_empty() {
-        return Err("Enter a region".into());
-    }
-    if input.bucket.trim().is_empty() {
-        return Err("Enter a storage bucket".into());
-    }
+    validate_fields(&input.name, &input.endpoint, &input.bucket, &input.region)?;
     if input.access_key.trim().is_empty() || input.secret_key.is_empty() {
         return Err("Enter both credential fields".into());
     }
     Ok(())
+}
+
+#[cfg(feature = "storage")]
+fn validate_fields(name: &str, endpoint: &str, bucket: &str, region: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("Enter a storage name".into());
+    }
+    if endpoint.trim().is_empty() {
+        return Err("Enter an endpoint".into());
+    }
+    if !endpoint.trim().starts_with("https://") && !endpoint.trim().starts_with("http://") {
+        return Err("Endpoint must start with http:// or https://".into());
+    }
+    if region.trim().is_empty() {
+        return Err("Enter a region".into());
+    }
+    if bucket.trim().is_empty() {
+        return Err("Enter a storage bucket".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "storage")]
+fn connection_by_id(
+    database: &Database,
+    connection_id: &str,
+) -> Result<Option<StorageConnection>, String> {
+    let mut statement = database
+        .prepare(
+            "SELECT id, name, endpoint, bucket, region, last_prefix, created_at
+             FROM connections WHERE id = ?1",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement
+        .query([connection_id])
+        .map_err(|error| error.to_string())?;
+    let Some(row) = rows.next().map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    Ok(Some(StorageConnection {
+        id: row.get(0).map_err(|error| error.to_string())?,
+        name: row.get(1).map_err(|error| error.to_string())?,
+        endpoint: row.get(2).map_err(|error| error.to_string())?,
+        bucket: row.get(3).map_err(|error| error.to_string())?,
+        region: row.get(4).map_err(|error| error.to_string())?,
+        last_prefix: row.get(5).map_err(|error| error.to_string())?,
+        created_at: row.get(6).map_err(|error| error.to_string())?,
+    }))
 }
 
 #[cfg(feature = "storage")]
@@ -226,5 +327,22 @@ mod tests {
             secret_key: String::new(),
         };
         assert_eq!(validate(&input).unwrap_err(), "Enter a storage name");
+    }
+
+    #[test]
+    fn rejects_partial_credential_updates() {
+        let input = UpdateStorageConnection {
+            id: "missing".into(),
+            name: "Storage".into(),
+            endpoint: "https://example.com".into(),
+            bucket: "files".into(),
+            region: "auto".into(),
+            access_key: Some("key".into()),
+            secret_key: None,
+        };
+        assert_eq!(
+            update_connection(input).unwrap_err(),
+            "Enter both credential fields or leave both blank"
+        );
     }
 }

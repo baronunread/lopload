@@ -51,6 +51,44 @@ pub fn test_connection(connection: &StorageConnection) -> Result<(), String> {
     })
 }
 
+pub fn test_connection_details(
+    endpoint: &str,
+    bucket: &str,
+    region: &str,
+    access_key: &str,
+    secret_key: &str,
+) -> Result<(), String> {
+    if endpoint.trim().is_empty()
+        || bucket.trim().is_empty()
+        || region.trim().is_empty()
+        || access_key.trim().is_empty()
+        || secret_key.is_empty()
+    {
+        return Err("Fill in every connection field before testing".into());
+    }
+    let connection = StorageConnection {
+        id: String::new(),
+        name: String::new(),
+        endpoint: endpoint.trim().trim_end_matches('/').to_string(),
+        bucket: bucket.trim().to_string(),
+        region: region.trim().to_string(),
+        last_prefix: String::new(),
+        created_at: 0,
+    };
+    let client =
+        client_with_credentials(&connection, access_key.to_string(), secret_key.to_string());
+    runtime()?.block_on(async move {
+        client
+            .list_objects_v2()
+            .bucket(&connection.bucket)
+            .max_keys(1)
+            .send()
+            .await
+            .map_err(|_| "Could not connect to this storage".to_string())?;
+        Ok(())
+    })
+}
+
 pub fn create_folder(
     connection: &StorageConnection,
     prefix: &str,
