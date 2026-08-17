@@ -18,7 +18,7 @@ use lopload_native::{
         TrashItem, delete_trash_item_with_progress, empty_trash_with_progress, files_in_folder,
         folder_info, list_folders, list_trash, move_entry_with_progress,
         move_to_trash_with_progress, rename_file, rename_folder, restore_trash_item_with_progress,
-        share_link,
+        share_link, sweep_expired_trash,
     },
     s3::{
         RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries,
@@ -43,7 +43,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 static DARK_APPEARANCE: AtomicBool = AtomicBool::new(false);
@@ -281,6 +281,7 @@ impl LoploadApp {
             app.load_prefix(connection.last_prefix, cx);
             app.resume_pending_uploads(cx);
         }
+        start_trash_sweep(cx);
         app
     }
 
@@ -3626,6 +3627,27 @@ fn share_expiry_label(seconds: u64) -> &'static str {
         604_800 => "7 days",
         _ => "1 day",
     }
+}
+
+fn start_trash_sweep(cx: &mut Context<LoploadApp>) {
+    let executor = cx.background_executor().clone();
+    let timer = executor.clone();
+    executor
+        .spawn(async move {
+            loop {
+                if let Ok(connections) = list_connections() {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_millis() as i64)
+                        .unwrap_or_default();
+                    for connection in connections {
+                        let _ = sweep_expired_trash(&connection, now);
+                    }
+                }
+                timer.timer(Duration::from_secs(24 * 60 * 60)).await;
+            }
+        })
+        .detach();
 }
 
 fn set_dark_appearance(mode: Option<ThemeMode>, system_is_dark: bool) {

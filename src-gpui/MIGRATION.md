@@ -43,6 +43,8 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Native release manifest for macOS, Linux, and Windows packaging through Cinder
 - Cross-platform tray with live transfer status, failure state, show, and explicit quit
 - Reveal completed downloads in Finder, Explorer, or the Linux file manager
+- Restore the last-used storage and folder at startup
+- Silent 30-day Trash retention sweep at startup and every 24 hours
 
 GPUI's `runtime_shaders` feature is enabled so local development works with
 Apple Command Line Tools alone. Release builds can compile Metal shaders ahead

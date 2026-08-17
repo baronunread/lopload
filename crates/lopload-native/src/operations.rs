@@ -12,6 +12,7 @@ use std::{
 };
 
 const TRASH_PREFIX: &str = ".lopload-trash/";
+const TRASH_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 const COPY_MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
 const COPY_PART_SIZE: u64 = 32 * 1024 * 1024;
 
@@ -37,6 +38,13 @@ pub struct OperationProgress {
     pub total_items: usize,
     pub completed_bytes: u64,
     pub total_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrashSweepStats {
+    pub scanned: usize,
+    pub purged: usize,
+    pub errors: usize,
 }
 
 #[derive(Clone)]
@@ -619,6 +627,41 @@ pub fn empty_trash_with_progress(
     })
 }
 
+pub fn sweep_expired_trash(
+    connection: &StorageConnection,
+    now_ms: i64,
+) -> Result<TrashSweepStats, String> {
+    let client = s3::client(connection)?;
+    s3::runtime()?.block_on(sweep_expired_trash_with_client(&client, connection, now_ms))
+}
+
+async fn sweep_expired_trash_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    now_ms: i64,
+) -> Result<TrashSweepStats, String> {
+    let objects = list_objects(client, connection, TRASH_PREFIX).await?;
+    let mut stats = TrashSweepStats {
+        scanned: objects.len(),
+        ..TrashSweepStats::default()
+    };
+    let expired = objects
+        .into_iter()
+        .filter(|object| {
+            parse_trash_key(&object.key)
+                .is_some_and(|(deleted_at, _)| is_trash_expired(deleted_at, now_ms))
+        })
+        .map(|object| object.key)
+        .collect::<Vec<_>>();
+    for batch in expired.chunks(1000) {
+        match delete_keys(client, connection, batch.to_vec()).await {
+            Ok(()) => stats.purged += batch.len(),
+            Err(_) => stats.errors += 1,
+        }
+    }
+    Ok(stats)
+}
+
 pub fn share_link(
     connection: &StorageConnection,
     key: &str,
@@ -878,6 +921,10 @@ fn parse_trash_key(key: &str) -> Option<(i64, String)> {
     Some((timestamp.parse().ok()?, original_key.to_string()))
 }
 
+fn is_trash_expired(deleted_at_ms: i64, now_ms: i64) -> bool {
+    now_ms.saturating_sub(deleted_at_ms) >= TRASH_RETENTION_MS
+}
+
 fn base_name(key: &str) -> String {
     key.trim_end_matches('/')
         .rsplit('/')
@@ -919,6 +966,14 @@ mod tests {
             copy_source("files", "folder/file name.txt"),
             "/files/folder/file%20name.txt"
         );
+    }
+
+    #[test]
+    fn expires_trash_at_thirty_days() {
+        let now = TRASH_RETENTION_MS + 100;
+        assert!(!is_trash_expired(101, now));
+        assert!(is_trash_expired(100, now));
+        assert!(!is_trash_expired(now + 1, now));
     }
 
     #[test]
@@ -1139,6 +1194,41 @@ mod tests {
                     delete_progress.last().map(|progress| progress.total_items)
                 );
                 assert!(list_objects(&client, &connection, "").await?.is_empty());
+
+                let now = TRASH_RETENTION_MS + 1_000;
+                for key in [trash_key(999, "expired.txt"), trash_key(now, "fresh.txt")] {
+                    client
+                        .put_object()
+                        .bucket(&bucket)
+                        .key(key)
+                        .body(ByteStream::from_static(b"trash"))
+                        .send()
+                        .await?;
+                }
+                let sweep = sweep_expired_trash_with_client(&client, &connection, now).await?;
+                assert_eq!(
+                    sweep,
+                    TrashSweepStats {
+                        scanned: 2,
+                        purged: 1,
+                        errors: 0
+                    }
+                );
+                assert!(
+                    client
+                        .head_object()
+                        .bucket(&bucket)
+                        .key(trash_key(999, "expired.txt"))
+                        .send()
+                        .await
+                        .is_err()
+                );
+                client
+                    .delete_object()
+                    .bucket(&bucket)
+                    .key(trash_key(now, "fresh.txt"))
+                    .send()
+                    .await?;
                 client.delete_bucket().bucket(&bucket).send().await?;
                 Ok::<_, Box<dyn std::error::Error>>(())
             })
