@@ -1294,6 +1294,8 @@ impl LoploadApp {
                     match result {
                         Ok(entries) => {
                             let preview_entries = entries.clone();
+                            this.selected_keys
+                                .retain(|key| entries.iter().any(|entry| &entry.key == key));
                             this.entries = entries;
                             this.browser_status = BrowserStatus::Idle;
                             if let Some(connection) = this.current_connection.as_mut() {
@@ -1872,12 +1874,12 @@ impl LoploadApp {
         let pending_rename = self.pending_rename.clone();
         let operation_status = self.operation_status.clone();
         let info_entry = self.info_entry.clone();
-        let status = match &self.browser_status {
-            BrowserStatus::Idle if entries.is_empty() => Some("This folder is empty".to_string()),
-            BrowserStatus::Idle => None,
-            BrowserStatus::Loading => Some("Loading…".to_string()),
-            BrowserStatus::Failed(error) => Some(error.clone()),
-        };
+        let status = browser_status_message(
+            &self.browser_status,
+            self.entries.len(),
+            entries.len(),
+            !query.is_empty(),
+        );
         let credential_error = matches!(
             &self.browser_status,
             BrowserStatus::Failed(error) if error.to_lowercase().contains("credential")
@@ -3589,6 +3591,25 @@ fn transfer_state_label(state: &TransferState, speed: Option<u64>) -> String {
     }
 }
 
+fn browser_status_message(
+    status: &BrowserStatus,
+    unfiltered_count: usize,
+    filtered_count: usize,
+    has_filter: bool,
+) -> Option<String> {
+    match status {
+        BrowserStatus::Idle if has_filter && unfiltered_count > 0 && filtered_count == 0 => {
+            Some("No matches — nothing in this folder matches your filter".into())
+        }
+        BrowserStatus::Idle if unfiltered_count == 0 => {
+            Some("This folder is empty — drag files in, or use Upload files".into())
+        }
+        BrowserStatus::Idle => None,
+        BrowserStatus::Loading => Some("Loading…".into()),
+        BrowserStatus::Failed(error) => Some(error.clone()),
+    }
+}
+
 fn expand_upload_paths(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
     paths
         .iter()
@@ -3755,6 +3776,22 @@ mod tests {
         );
         assert_eq!(
             transfer_completion_message(&TransferDirection::Upload, 0, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn distinguishes_empty_folders_from_empty_filter_results() {
+        assert_eq!(
+            browser_status_message(&BrowserStatus::Idle, 0, 0, false).as_deref(),
+            Some("This folder is empty — drag files in, or use Upload files")
+        );
+        assert_eq!(
+            browser_status_message(&BrowserStatus::Idle, 3, 0, true).as_deref(),
+            Some("No matches — nothing in this folder matches your filter")
+        );
+        assert_eq!(
+            browser_status_message(&BrowserStatus::Idle, 3, 2, true),
             None
         );
     }
