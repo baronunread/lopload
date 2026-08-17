@@ -426,11 +426,62 @@ fn download_file_with_client(
     if expected_size >= MULTIPART_THRESHOLD {
         return download_ranged(client, connection, transfer, control, on_update);
     }
+    download_streamed(client, connection, transfer, control, on_update)
+}
+
+pub fn resume_download(
+    connection: &StorageConnection,
+    transfer: Transfer,
+    control: &TransferControl,
+    on_update: impl FnMut(Transfer),
+) -> Result<Transfer, String> {
+    let client = s3::client(connection)?;
+    resume_download_with_client(&client, connection, transfer, control, on_update)
+}
+
+fn resume_download_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+    mut transfer: Transfer,
+    control: &TransferControl,
+    mut on_update: impl FnMut(Transfer),
+) -> Result<Transfer, String> {
+    if !matches!(transfer.direction, TransferDirection::Download)
+        || !matches!(transfer.state, TransferState::Failed { .. })
+    {
+        return Err("This transfer cannot be retried".into());
+    }
+    transfer.state = TransferState::Queued;
+    transfer.updated_at = now()?;
+    persist(&transfer)?;
+    emit(&transfer, &mut on_update);
+    transition(
+        &mut transfer,
+        TransferState::Sending { percent: 0.0 },
+        &mut on_update,
+    )?;
+    if transfer.size >= MULTIPART_THRESHOLD {
+        download_ranged(client, connection, transfer, control, on_update)
+    } else {
+        download_streamed(client, connection, transfer, control, on_update)
+    }
+}
+
+fn download_streamed(
+    client: &Client,
+    connection: &StorageConnection,
+    mut transfer: Transfer,
+    control: &TransferControl,
+    mut on_update: impl FnMut(Transfer),
+) -> Result<Transfer, String> {
+    let remote_key = transfer.remote_key.clone();
+    let expected_size = transfer.size;
+    let destination = PathBuf::from(&transfer.local_path);
     let result = s3::runtime()?.block_on(async {
         let output = client
             .get_object()
             .bucket(&connection.bucket)
-            .key(remote_key)
+            .key(&remote_key)
             .send()
             .await?;
         let etag = output
@@ -464,7 +515,7 @@ fn download_file_with_client(
         return fail(transfer, ErrorClass::Verification, &mut on_update);
     }
 
-    let temporary = temporary_path(destination);
+    let temporary = temporary_path(&destination);
     if let Some(parent) = destination.parent() {
         if fs::create_dir_all(parent).is_err() {
             return fail(transfer, ErrorClass::StorageFull, &mut on_update);
@@ -473,7 +524,7 @@ fn download_file_with_client(
     if fs::write(&temporary, &bytes).is_err() {
         return fail(transfer, ErrorClass::StorageFull, &mut on_update);
     }
-    if replace_file(&temporary, destination).is_err() {
+    if replace_file(&temporary, &destination).is_err() {
         let _ = fs::remove_file(&temporary);
         return fail(transfer, ErrorClass::Unknown, &mut on_update);
     }
@@ -1148,6 +1199,8 @@ mod tests {
 
         let source = std::env::temp_dir().join(format!("lopload-source-{suffix}.bin"));
         let destination = std::env::temp_dir().join(format!("lopload-download-{suffix}.bin"));
+        let resumed_destination =
+            std::env::temp_dir().join(format!("lopload-resumed-download-{suffix}.bin"));
         let payload = (0..=255)
             .cycle()
             .take(MULTIPART_THRESHOLD as usize + 1024)
@@ -1215,6 +1268,46 @@ mod tests {
             &TransferControl::default(),
             |transfer| events.push(transfer),
         );
+        let mut interrupted_download = new_transfer(
+            &connection,
+            &resumed_destination,
+            "round-trip.bin",
+            payload.len() as u64,
+            TransferDirection::Download,
+        )
+        .expect("persist interrupted download");
+        interrupted_download.state = TransferState::Failed {
+            error_class: ErrorClass::ConnectionDropped,
+        };
+        persist(&interrupted_download).expect("persist failed download");
+        let resumed_temporary = temporary_path(&resumed_destination);
+        let mut partial = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&resumed_temporary)
+            .expect("create partial download");
+        partial
+            .set_len(payload.len() as u64)
+            .expect("allocate partial download");
+        partial
+            .write_all(&payload[..DEFAULT_PART_SIZE as usize])
+            .expect("write first range");
+        drop(partial);
+        save_part(&TransferPart {
+            transfer_id: interrupted_download.id.clone(),
+            part_number: 1,
+            etag: String::new(),
+            size: DEFAULT_PART_SIZE,
+        })
+        .expect("persist first range");
+        let resumed_download = resume_download_with_client(
+            &client,
+            &connection,
+            interrupted_download,
+            &TransferControl::default(),
+            |transfer| events.push(transfer),
+        );
 
         s3::runtime()
             .expect("runtime")
@@ -1252,7 +1345,16 @@ mod tests {
             resumed.expect("resumed upload").state,
             TransferState::Uploaded
         ));
+        assert!(matches!(
+            resumed_download.expect("resumed download").state,
+            TransferState::Downloaded
+        ));
         assert_eq!(fs::read(&destination).expect("downloaded bytes"), payload);
+        assert_eq!(
+            fs::read(&resumed_destination).expect("resumed downloaded bytes"),
+            payload
+        );
         fs::remove_file(destination).expect("remove download");
+        fs::remove_file(resumed_destination).expect("remove resumed download");
     }
 }

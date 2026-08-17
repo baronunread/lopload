@@ -22,7 +22,7 @@ use lopload_native::{
     },
     transfer::{
         ErrorClass, Transfer, TransferControl, TransferDirection, TransferState, dismiss_transfer,
-        download_file, list_transfers, resume_upload, upload_file,
+        download_file, list_transfers, resume_download, resume_upload, upload_file,
     },
     update_connection,
 };
@@ -198,6 +198,32 @@ impl LoploadApp {
                     if let Some(id) = transfer_id {
                         let _ = sender.send_blocking(TransferEvent::Removed(id));
                     }
+                }
+            })
+            .detach();
+    }
+
+    fn start_resume_download(
+        &mut self,
+        connection: StorageConnection,
+        transfer: Transfer,
+        cx: &mut Context<Self>,
+    ) {
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        let control = TransferControl::default();
+        let event_control = control.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let id = transfer.id.clone();
+                let _ = resume_download(&connection, transfer, &control, |updated| {
+                    let _ = sender.send_blocking(TransferEvent::Update(
+                        updated,
+                        event_control.clone(),
+                    ));
+                });
+                if control.is_cancelled() {
+                    let _ = sender.send_blocking(TransferEvent::Removed(id));
                 }
             })
             .detach();
@@ -1344,7 +1370,10 @@ impl LoploadApp {
                                     | TransferState::Checking
                             );
                             let resumable = matches!(transfer.state, TransferState::Failed { .. })
-                                && transfer.upload_id.is_some();
+                                && (matches!(
+                                    transfer.direction,
+                                    TransferDirection::Download
+                                ) || transfer.upload_id.is_some());
                             let retry_connection = current_connection.clone();
                             let control = self.transfer_controls.get(&id).cloned();
                             div()
@@ -1394,11 +1423,22 @@ impl LoploadApp {
                                             .text_color(rgb(0xffffff))
                                             .child("Retry")
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.start_resume_upload(
-                                                    connection.clone(),
-                                                    retry_transfer.clone(),
-                                                    cx,
-                                                );
+                                                if matches!(
+                                                    retry_transfer.direction,
+                                                    TransferDirection::Download
+                                                ) {
+                                                    this.start_resume_download(
+                                                        connection.clone(),
+                                                        retry_transfer.clone(),
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    this.start_resume_upload(
+                                                        connection.clone(),
+                                                        retry_transfer.clone(),
+                                                        cx,
+                                                    );
+                                                }
                                             })),
                                     )
                                 })
