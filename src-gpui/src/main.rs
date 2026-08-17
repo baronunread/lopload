@@ -319,11 +319,14 @@ impl LoploadApp {
         };
         self.operation_status = Some("Moving to Trash…".into());
         let key = entry.key.clone();
+        let previous_entries = self.entries.clone();
+        self.entries.retain(|saved| saved.key != key);
         let is_folder = matches!(entry.kind, RemoteEntryKind::Folder);
         let deleted_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis() as i64)
             .unwrap_or_default();
+        cx.notify();
         let operation = cx
             .background_executor()
             .spawn(async move { move_to_trash(&connection, &key, is_folder, deleted_at) });
@@ -336,6 +339,7 @@ impl LoploadApp {
                         this.load_prefix(this.prefix.clone(), cx);
                     }
                     Err(error) => {
+                        this.entries = previous_entries;
                         this.operation_status = Some(error);
                         cx.notify();
                     }
@@ -369,7 +373,13 @@ impl LoploadApp {
             cx.notify();
             return;
         }
+        let previous_entries = self.entries.clone();
+        if let Some(saved) = self.entries.iter_mut().find(|saved| saved.key == entry.key) {
+            saved.key = destination.clone();
+            saved.name = name;
+        }
         self.operation_status = Some("Renaming…".into());
+        cx.notify();
         let operation = cx.background_executor().spawn(async move {
             if is_folder {
                 rename_folder(&connection, &entry.key, &destination)
@@ -386,6 +396,7 @@ impl LoploadApp {
                         this.load_prefix(this.prefix.clone(), cx);
                     }
                     Err(error) => {
+                        this.entries = previous_entries;
                         this.operation_status = Some(error);
                         cx.notify();
                     }
@@ -744,11 +755,20 @@ impl LoploadApp {
         if entries.is_empty() {
             return;
         }
+        let previous_entries = self.entries.clone();
+        let removing = entries
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect::<HashSet<_>>();
+        self.entries
+            .retain(|entry| !removing.contains(entry.key.as_str()));
+        drop(removing);
         self.operation_status = Some("Moving selected items to Trash…".into());
         let deleted_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis() as i64)
             .unwrap_or_default();
+        cx.notify();
         let operation = cx.background_executor().spawn(async move {
             for entry in entries {
                 move_to_trash(
@@ -770,6 +790,7 @@ impl LoploadApp {
                         this.load_prefix(this.prefix.clone(), cx);
                     }
                     Err(error) => {
+                        this.entries = previous_entries;
                         this.operation_status = Some(error);
                         cx.notify();
                     }
@@ -828,9 +849,18 @@ impl LoploadApp {
         if entries.is_empty() {
             return;
         }
+        let previous_entries = self.entries.clone();
+        let moving = entries
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect::<HashSet<_>>();
+        self.entries
+            .retain(|entry| !moving.contains(entry.key.as_str()));
+        drop(moving);
         self.operation_status = Some("Moving…".into());
         let (sender, receiver) = async_channel::unbounded();
         self.listen_for_transfers(receiver, cx);
+        cx.notify();
         let operation = cx.background_executor().spawn(async move {
             for entry in entries {
                 move_entry_with_progress(
@@ -869,6 +899,7 @@ impl LoploadApp {
                         this.load_prefix(this.prefix.clone(), cx);
                     }
                     Err(error) => {
+                        this.entries = previous_entries;
                         this.operation_status = Some(error);
                         cx.notify();
                     }
@@ -1129,8 +1160,32 @@ impl LoploadApp {
             return;
         };
         let prefix = self.prefix.clone();
-        let name = self.folder_name.read(cx).value().to_string();
+        let name = self.folder_name.read(cx).value().trim().to_string();
         self.folder_error = None;
+        if name.is_empty() {
+            self.folder_error = Some("Enter a folder name".into());
+            cx.notify();
+            return;
+        }
+        if name.contains('/') {
+            self.folder_error = Some("Folder names cannot contain /".into());
+            cx.notify();
+            return;
+        }
+        let previous_entries = self.entries.clone();
+        let key = format!("{prefix}{name}/");
+        if !self.entries.iter().any(|entry| entry.key == key) {
+            self.entries.push(RemoteEntry {
+                kind: RemoteEntryKind::Folder,
+                name: name.clone(),
+                key,
+                size: None,
+                last_modified: None,
+            });
+        }
+        self.new_folder_open = false;
+        self.operation_status = Some("Creating folder…".into());
+        cx.notify();
         let create = cx
             .background_executor()
             .spawn(async move { create_remote_folder(&connection, &prefix, &name) });
@@ -1139,10 +1194,12 @@ impl LoploadApp {
             if let Some(this) = this.upgrade() {
                 let _ = this.update(cx, |this, cx| match result {
                     Ok(()) => {
-                        this.new_folder_open = false;
+                        this.operation_status = Some("Folder created".into());
                         this.load_prefix(this.prefix.clone(), cx);
                     }
                     Err(error) => {
+                        this.entries = previous_entries;
+                        this.new_folder_open = true;
                         this.folder_error = Some(error);
                         cx.notify();
                     }
