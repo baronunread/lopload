@@ -41,6 +41,7 @@ use notify_rust::Notification;
 use std::{
     collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
     time::Instant,
 };
@@ -2562,6 +2563,7 @@ impl LoploadApp {
                                     let id = transfer.id.clone();
                                     let dismiss_id = id.clone();
                                     let retry_transfer = transfer.clone();
+                                    let reveal_path = transfer.local_path.clone();
                                     let active = matches!(
                                         transfer.state,
                                         TransferState::Queued
@@ -2574,6 +2576,10 @@ impl LoploadApp {
                                                 transfer.direction,
                                                 TransferDirection::Download
                                             ) || transfer.upload_id.is_some());
+                                    let downloaded = matches!(
+                                        transfer.direction,
+                                        TransferDirection::Download
+                                    ) && matches!(transfer.state, TransferState::Downloaded);
                                     let retry_connection = current_connection.clone();
                                     let control = self.transfer_controls.get(&id).cloned();
                                     let speed = transfer_speeds.get(&id).copied();
@@ -2641,6 +2647,34 @@ impl LoploadApp {
                                                                     cx,
                                                                 );
                                                             }
+                                                        },
+                                                    )),
+                                            )
+                                        })
+                                        .when(downloaded, |row| {
+                                            row.child(
+                                                div()
+                                                    .id(("reveal-download", index))
+                                                    .cursor_pointer()
+                                                    .rounded_lg()
+                                                    .border_1()
+                                                    .border_color(strong_border_color())
+                                                    .px_3()
+                                                    .py_1()
+                                                    .child("Show in folder")
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if reveal_in_file_manager(Path::new(
+                                                                &reveal_path,
+                                                            ))
+                                                            .is_err()
+                                                            {
+                                                                this.operation_status = Some(
+                                                                    "The downloaded file could not be shown"
+                                                                        .into(),
+                                                                );
+                                                            }
+                                                            cx.notify();
                                                         },
                                                     )),
                                             )
@@ -3893,6 +3927,25 @@ fn safe_destination(root: &Path, relative: &str) -> Option<PathBuf> {
         }
     }
     found_name.then_some(destination)
+}
+
+fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg("-R").arg(path).status();
+    #[cfg(target_os = "windows")]
+    let status = Command::new("explorer.exe")
+        .arg("/select,")
+        .arg(path)
+        .status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(path))
+        .status();
+    status
+        .map_err(|_| "The file manager could not be opened".to_string())?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "The file manager could not show this file".to_string())
 }
 
 fn parent_of_key(key: &str) -> String {
