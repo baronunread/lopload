@@ -31,8 +31,9 @@ use lopload_native::{
         theme_mode, transfer_tuning,
     },
     transfer::{
-        ErrorClass, Transfer, TransferControl, TransferDirection, TransferState, dismiss_transfer,
-        download_file, list_transfers, resume_download, resume_upload, upload_file,
+        ErrorClass, Transfer, TransferControl, TransferDirection, TransferState,
+        abort_stale_uploads, dismiss_transfer, download_file, list_transfers, resume_download,
+        resume_upload, upload_file,
     },
     update_connection,
 };
@@ -137,6 +138,7 @@ struct LoploadApp {
     auto_update_enabled: bool,
     default_download_dir: Option<String>,
     settings_status: Option<String>,
+    cleaning_stale_uploads: bool,
     sort_column: SortColumn,
     sort_descending: bool,
     name: Entity<InputState>,
@@ -221,6 +223,7 @@ impl LoploadApp {
             auto_update_enabled,
             default_download_dir,
             settings_status: None,
+            cleaning_stale_uploads: false,
             sort_column: SortColumn::Name,
             sort_descending: false,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("My storage")),
@@ -715,6 +718,53 @@ impl LoploadApp {
             Err(_) => self.settings_status = Some("Settings could not be saved".into()),
         }
         cx.notify();
+    }
+
+    fn clean_up_stale_uploads(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            self.settings_status = Some("Connect to a storage to run cleanup".into());
+            cx.notify();
+            return;
+        };
+        if self.cleaning_stale_uploads {
+            return;
+        }
+        self.cleaning_stale_uploads = true;
+        self.settings_status = Some("Cleaning up interrupted uploads…".into());
+        cx.notify();
+        let operation = cx
+            .background_executor()
+            .spawn(async move { abort_stale_uploads(&connection) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| {
+                    this.cleaning_stale_uploads = false;
+                    this.settings_status = Some(match result {
+                        Ok(stats) if stats.errors == 0 => format!(
+                            "Cleaned up {} interrupted upload{}",
+                            stats.aborted,
+                            if stats.aborted == 1 { "" } else { "s" }
+                        ),
+                        Ok(stats) => format!(
+                            "Cleaned up {} interrupted upload{}; {} could not be cleaned up",
+                            stats.aborted,
+                            if stats.aborted == 1 { "" } else { "s" },
+                            stats.errors
+                        ),
+                        Err(_) => "Interrupted uploads could not be cleaned up".into(),
+                    });
+                    this.transfers = this
+                        .current_connection
+                        .as_ref()
+                        .and_then(|connection| list_transfers(&connection.id).ok())
+                        .unwrap_or_default();
+                    tray::update_status(&this.transfers, cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn change_sort(&mut self, column: SortColumn, cx: &mut Context<Self>) {
@@ -3248,6 +3298,36 @@ impl LoploadApp {
                                     })),
                             ),
                     )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Maintenance"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(div().flex_1().child("Clean up interrupted uploads").child(
+                                div().text_sm().text_color(subtle_color()).child(
+                                    "Removes abandoned upload fragments that still use storage.",
+                                ),
+                            ))
+                            .child(
+                                div()
+                                    .id("clean-up-stale-uploads")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(strong_border_color())
+                                    .px_3()
+                                    .py_2()
+                                    .child(if self.cleaning_stale_uploads {
+                                        "Cleaning up…"
+                                    } else {
+                                        "Clean up"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.clean_up_stale_uploads(cx)
+                                    })),
+                            ),
+                    )
                     .when_some(self.settings_status.clone(), |panel, status| {
                         panel.child(div().text_sm().text_color(accent_color()).child(status))
                     })
@@ -3325,8 +3405,7 @@ impl Render for LoploadApp {
                                         "Dark mode"
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        let next = if DARK_APPEARANCE
-                                            .load(AtomicOrdering::Relaxed)
+                                        let next = if DARK_APPEARANCE.load(AtomicOrdering::Relaxed)
                                         {
                                             ThemeMode::Light
                                         } else {

@@ -124,7 +124,10 @@ mod tests {
 
     #[test]
     fn serializes_theme_modes_as_stable_setting_values() {
-        assert_eq!(serde_json::to_string(&ThemeMode::Light).unwrap(), "\"light\"");
+        assert_eq!(
+            serde_json::to_string(&ThemeMode::Light).unwrap(),
+            "\"light\""
+        );
         assert_eq!(
             serde_json::from_str::<ThemeMode>("\"dark\"").unwrap(),
             ThemeMode::Dark

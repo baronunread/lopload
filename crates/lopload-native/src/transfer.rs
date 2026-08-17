@@ -50,6 +50,12 @@ pub enum ErrorClass {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AbortStaleUploadsStats {
+    pub aborted: usize,
+    pub errors: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transfer {
     pub id: String,
@@ -748,6 +754,55 @@ pub fn dismiss_transfer(transfer_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn abort_stale_uploads(
+    connection: &StorageConnection,
+) -> Result<AbortStaleUploadsStats, String> {
+    let client = s3::client(connection)?;
+    abort_stale_uploads_with_client(&client, connection)
+}
+
+fn abort_stale_uploads_with_client(
+    client: &Client,
+    connection: &StorageConnection,
+) -> Result<AbortStaleUploadsStats, String> {
+    let mut stats = AbortStaleUploadsStats::default();
+    for mut transfer in list_transfers(&connection.id)?
+        .into_iter()
+        .filter(is_stale_upload)
+    {
+        let upload_id = transfer.upload_id.as_deref().unwrap_or_default();
+        let result = s3::runtime()?.block_on(
+            client
+                .abort_multipart_upload()
+                .bucket(&connection.bucket)
+                .key(&transfer.remote_key)
+                .upload_id(upload_id)
+                .send(),
+        );
+        if let Err(error) = result {
+            if !error
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("nosuchupload")
+            {
+                stats.errors += 1;
+                continue;
+            }
+        }
+        transfer.upload_id = None;
+        persist(&transfer)?;
+        clear_parts(&transfer.id)?;
+        stats.aborted += 1;
+    }
+    Ok(stats)
+}
+
+fn is_stale_upload(transfer: &Transfer) -> bool {
+    matches!(transfer.direction, TransferDirection::Upload)
+        && transfer.upload_id.is_some()
+        && matches!(transfer.state, TransferState::Failed { .. })
+}
+
 fn new_transfer(
     connection: &StorageConnection,
     local_path: &Path,
@@ -1177,6 +1232,33 @@ mod tests {
     }
 
     #[test]
+    fn only_failed_multipart_uploads_are_stale() {
+        let mut transfer = Transfer {
+            id: "transfer".into(),
+            connection_id: "connection".into(),
+            remote_key: "file.bin".into(),
+            local_path: "/tmp/file.bin".into(),
+            size: 32,
+            part_size: DEFAULT_PART_SIZE,
+            upload_id: Some("upload".into()),
+            direction: TransferDirection::Upload,
+            state: TransferState::Failed {
+                error_class: ErrorClass::ConnectionDropped,
+            },
+            created_at: 0,
+            updated_at: 0,
+        };
+        assert!(is_stale_upload(&transfer));
+        transfer.state = TransferState::Sending { percent: 50.0 };
+        assert!(!is_stale_upload(&transfer));
+        transfer.state = TransferState::Failed {
+            error_class: ErrorClass::ConnectionDropped,
+        };
+        transfer.direction = TransferDirection::Download;
+        assert!(!is_stale_upload(&transfer));
+    }
+
+    #[test]
     #[ignore]
     fn uploads_and_downloads_real_minio_bytes() {
         let suffix = Uuid::new_v4().to_string();
@@ -1259,6 +1341,35 @@ mod tests {
             &TransferControl::default(),
             |transfer| events.push(transfer),
         );
+        let stale_created = s3::runtime()
+            .expect("runtime")
+            .block_on(
+                client
+                    .create_multipart_upload()
+                    .bucket(&bucket)
+                    .key("stale.bin")
+                    .send(),
+            )
+            .expect("create stale upload");
+        let stale_upload_id = stale_created
+            .upload_id()
+            .expect("stale upload id")
+            .to_string();
+        let mut stale = new_transfer(
+            &connection,
+            &source,
+            "stale.bin",
+            payload.len() as u64,
+            TransferDirection::Upload,
+        )
+        .expect("persist stale transfer");
+        stale.upload_id = Some(stale_upload_id);
+        stale.state = TransferState::Failed {
+            error_class: ErrorClass::ConnectionDropped,
+        };
+        persist(&stale).expect("persist stale upload id");
+        let cleanup =
+            abort_stale_uploads_with_client(&client, &connection).expect("abort stale uploads");
         let downloaded = download_file_with_client(
             &client,
             &connection,
@@ -1337,6 +1448,20 @@ mod tests {
             uploaded.expect("upload").state,
             TransferState::Uploaded
         ));
+        assert_eq!(
+            cleanup,
+            AbortStaleUploadsStats {
+                aborted: 1,
+                errors: 0
+            }
+        );
+        assert!(
+            list_transfers(&connection.id)
+                .expect("list transfers")
+                .iter()
+                .find(|transfer| transfer.id == stale.id)
+                .is_some_and(|transfer| transfer.upload_id.is_none())
+        );
         assert!(matches!(
             downloaded.expect("download").state,
             TransferState::Downloaded
@@ -1356,5 +1481,6 @@ mod tests {
         );
         fs::remove_file(destination).expect("remove download");
         fs::remove_file(resumed_destination).expect("remove resumed download");
+        dismiss_transfer(&stale.id).expect("dismiss stale transfer");
     }
 }
