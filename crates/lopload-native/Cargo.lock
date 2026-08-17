@@ -1338,6 +1338,7 @@ dependencies = [
  "directories",
  "hyper-rustls 0.24.2",
  "keyring",
+ "md-5",
  "rusqlite",
  "security-framework 3.7.0",
  "serde",

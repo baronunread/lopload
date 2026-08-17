@@ -7,6 +7,8 @@ description = "Experimental native GPUI frontend for Lopload"
 license = "MIT"
 
 [dependencies]
+async-channel = "2"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 gpui-component = "0.5.1"
 lopload-native = { path = "../crates/lopload-native" }
+rfd = "0.15"

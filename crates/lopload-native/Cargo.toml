@@ -13,6 +13,7 @@ s3 = [
   "dep:aws-sdk-s3",
   "dep:aws-smithy-http-client",
   "dep:hyper-rustls",
+  "dep:md-5",
   "dep:tokio",
 ]
 
@@ -21,6 +22,7 @@ aws-sdk-s3 = { version = "=1.85.0", optional = true }
 aws-smithy-http-client = { version = "=1.1.4", features = ["legacy-rustls-ring"], optional = true }
 directories = { version = "6", optional = true }
 hyper-rustls = { version = "0.24.2", features = ["http1", "http2", "webpki-roots"], optional = true }
+md-5 = { version = "0.10", optional = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

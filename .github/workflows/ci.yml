@@ -89,7 +89,9 @@ jobs:
 
       - name: Cinder native S3 integration
         working-directory: crates/lopload-native
-        run: cinder test lists_real_minio_objects -- --ignored
+        run: |
+          cinder test lists_real_minio_objects -- --ignored
+          cinder test uploads_and_downloads_real_minio_bytes -- --ignored
 
       - name: Cinder test
         working-directory: src-tauri

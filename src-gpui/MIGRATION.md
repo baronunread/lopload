@@ -14,6 +14,9 @@ This crate is the experimental native replacement for the Tauri and React applic
 - Connection editing, optional credential replacement, and live connection testing
 - Live paginated S3-compatible listing with folder navigation and refresh
 - Native folder creation and plain-language storage errors
+- Native file-picker uploads and save-dialog downloads with persisted transfer state
+- Single-part and resumable multipart uploads with ETag verification, tested against real MinIO
+- Download size and plain-MD5 verification with temporary-file commits
 - Deterministic Rustls/WebPKI networking verified against real MinIO
 - Cinder run/check commands and version lockstep with the production app
 
@@ -23,7 +26,7 @@ of time on machines with full Xcode once native packaging is introduced.
 
 ## Required for parity
 
-- Uploads, downloads, resumable multipart state, and verification
+- Parallel upload parts, ranged resumable downloads, retry, and startup recovery
 - Rename, move, trash, restore, share-link, and empty-trash flows
 - Native file dialogs, drag and drop, tray, notifications, and auto-updates
 - Persistent connection, settings, and transfer stores

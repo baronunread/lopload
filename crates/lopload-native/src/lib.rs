@@ -1,6 +1,8 @@
 pub mod keychain;
 #[cfg(feature = "s3")]
 pub mod s3;
+#[cfg(feature = "s3")]
+pub mod transfer;
 
 #[cfg(feature = "storage")]
 use directories::ProjectDirs;
@@ -282,19 +284,58 @@ fn open_database() -> Result<Database, String> {
                 region TEXT NOT NULL,
                 last_prefix TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS transfers (
+                id TEXT PRIMARY KEY,
+                connection_id TEXT NOT NULL,
+                remote_key TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                part_size INTEGER NOT NULL DEFAULT 8388608,
+                upload_id TEXT,
+                direction TEXT NOT NULL,
+                state TEXT NOT NULL,
+                error_class TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS transfer_parts (
+                transfer_id TEXT NOT NULL,
+                part_number INTEGER NOT NULL,
+                etag TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                PRIMARY KEY (transfer_id, part_number),
+                FOREIGN KEY (transfer_id) REFERENCES transfers(id) ON DELETE CASCADE
             );",
         )
         .map_err(|error| error.to_string())?;
     ensure_column(&database, "bucket", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(&database, "last_prefix", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(&database, "created_at", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_table_column(
+        &database,
+        "transfers",
+        "part_size",
+        "INTEGER NOT NULL DEFAULT 8388608",
+    )?;
+    ensure_table_column(&database, "transfers", "upload_id", "TEXT")?;
     Ok(database)
 }
 
 #[cfg(feature = "storage")]
 fn ensure_column(database: &Database, name: &str, declaration: &str) -> Result<(), String> {
+    ensure_table_column(database, "connections", name, declaration)
+}
+
+#[cfg(feature = "storage")]
+fn ensure_table_column(
+    database: &Database,
+    table: &str,
+    name: &str,
+    declaration: &str,
+) -> Result<(), String> {
     let mut statement = database
-        .prepare("PRAGMA table_info(connections)")
+        .prepare(&format!("PRAGMA table_info({table})"))
         .map_err(|error| error.to_string())?;
     let columns = statement
         .query_map([], |row| row.get::<_, String>(1))
@@ -304,7 +345,7 @@ fn ensure_column(database: &Database, name: &str, declaration: &str) -> Result<(
     if !columns.iter().any(|column| column == name) {
         database
             .execute(
-                &format!("ALTER TABLE connections ADD COLUMN {name} {declaration}"),
+                &format!("ALTER TABLE {table} ADD COLUMN {name} {declaration}"),
                 [],
             )
             .map_err(|error| error.to_string())?;

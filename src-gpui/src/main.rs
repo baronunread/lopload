@@ -11,8 +11,14 @@ use lopload_native::{
     NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
     list_connections,
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
-    save_connection, set_last_prefix, update_connection,
+    save_connection, set_last_prefix,
+    transfer::{
+        ErrorClass, Transfer, TransferControl, TransferDirection, TransferState, dismiss_transfer,
+        download_file, list_transfers, upload_file,
+    },
+    update_connection,
 };
+use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 enum Screen {
@@ -27,6 +33,11 @@ enum BrowserStatus {
     Failed(String),
 }
 
+enum TransferEvent {
+    Update(Transfer, TransferControl),
+    Removed(String),
+}
+
 struct LoploadApp {
     screen: Screen,
     connections: Vec<StorageConnection>,
@@ -35,6 +46,8 @@ struct LoploadApp {
     entries: Vec<RemoteEntry>,
     browser_status: BrowserStatus,
     load_generation: u64,
+    transfers: Vec<Transfer>,
+    transfer_controls: HashMap<String, TransferControl>,
     name: Entity<InputState>,
     endpoint: Entity<InputState>,
     bucket: Entity<InputState>,
@@ -68,6 +81,8 @@ impl LoploadApp {
             entries: Vec::new(),
             browser_status: BrowserStatus::Idle,
             load_generation: 0,
+            transfers: Vec::new(),
+            transfer_controls: HashMap::new(),
             name: cx.new(|cx| InputState::new(window, cx).placeholder("My storage")),
             endpoint: cx
                 .new(|cx| InputState::new(window, cx).placeholder("https://storage.example.com")),
@@ -92,9 +107,126 @@ impl LoploadApp {
 
     fn open_connection(&mut self, connection: StorageConnection, cx: &mut Context<Self>) {
         let prefix = connection.last_prefix.clone();
+        self.transfers = list_transfers(&connection.id).unwrap_or_default();
+        self.transfer_controls.clear();
         self.current_connection = Some(connection);
         self.screen = Screen::Browser;
         self.load_prefix(prefix, cx);
+    }
+
+    fn record_transfer(&mut self, transfer: Transfer, cx: &mut Context<Self>) {
+        if let Some(saved) = self
+            .transfers
+            .iter_mut()
+            .find(|saved| saved.id == transfer.id)
+        {
+            *saved = transfer.clone();
+        } else {
+            self.transfers.push(transfer.clone());
+        }
+        if matches!(transfer.state, TransferState::Uploaded) {
+            self.load_prefix(self.prefix.clone(), cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn listen_for_transfers(
+        &mut self,
+        receiver: async_channel::Receiver<TransferEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            while let Ok(event) = receiver.recv().await {
+                if let Some(this) = this.upgrade() {
+                    let _ = this.update(cx, |this, cx| match event {
+                        TransferEvent::Update(transfer, control) => {
+                            this.transfer_controls.insert(transfer.id.clone(), control);
+                            this.record_transfer(transfer, cx);
+                        }
+                        TransferEvent::Removed(id) => {
+                            this.transfers.retain(|transfer| transfer.id != id);
+                            this.transfer_controls.remove(&id);
+                            cx.notify();
+                        }
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn start_upload(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let prefix = self.prefix.clone();
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        cx.background_executor()
+            .spawn(async move {
+                let Some(paths) = rfd::FileDialog::new().pick_files() else {
+                    return;
+                };
+                for path in paths {
+                    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                        continue;
+                    };
+                    let key = format!("{prefix}{name}");
+                    let control = TransferControl::default();
+                    let event_control = control.clone();
+                    let mut transfer_id = None;
+                    let _ = upload_file(&connection, &path, &key, &control, |transfer| {
+                        transfer_id = Some(transfer.id.clone());
+                        let _ = sender
+                            .send_blocking(TransferEvent::Update(transfer, event_control.clone()));
+                    });
+                    if control.is_cancelled() {
+                        if let Some(id) = transfer_id {
+                            let _ = sender.send_blocking(TransferEvent::Removed(id));
+                        }
+                    }
+                }
+            })
+            .detach();
+    }
+
+    fn start_download(&mut self, entry: RemoteEntry, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        cx.background_executor()
+            .spawn(async move {
+                let Some(destination) = rfd::FileDialog::new()
+                    .set_file_name(&entry.name)
+                    .save_file()
+                else {
+                    return;
+                };
+                let control = TransferControl::default();
+                let event_control = control.clone();
+                let mut transfer_id = None;
+                let _ = download_file(
+                    &connection,
+                    &entry.key,
+                    &destination,
+                    entry.size.unwrap_or_default(),
+                    &control,
+                    |transfer| {
+                        transfer_id = Some(transfer.id.clone());
+                        let _ = sender
+                            .send_blocking(TransferEvent::Update(transfer, event_control.clone()));
+                    },
+                );
+                if control.is_cancelled() {
+                    if let Some(id) = transfer_id {
+                        let _ = sender.send_blocking(TransferEvent::Removed(id));
+                    }
+                }
+            })
+            .detach();
     }
 
     fn begin_add_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -603,6 +735,7 @@ impl LoploadApp {
         let prefix = self.prefix.clone();
         let parent = self.parent_prefix();
         let entries = self.entries.clone();
+        let transfers = self.transfers.clone();
         let status = match &self.browser_status {
             BrowserStatus::Idle if entries.is_empty() => Some("This folder is empty".to_string()),
             BrowserStatus::Idle => None,
@@ -676,6 +809,18 @@ impl LoploadApp {
                     )
                     .child(
                         div()
+                            .id("upload-files")
+                            .cursor_pointer()
+                            .rounded_lg()
+                            .bg(rgb(0x5c4f8f))
+                            .px_3()
+                            .py_2()
+                            .text_color(rgb(0xffffff))
+                            .child("Upload files")
+                            .on_click(cx.listener(|this, _, _, cx| this.start_upload(cx))),
+                    )
+                    .child(
+                        div()
                             .id("new-folder")
                             .cursor_pointer()
                             .rounded_lg()
@@ -704,6 +849,85 @@ impl LoploadApp {
                             })),
                     ),
             )
+            .when(!transfers.is_empty(), |browser| {
+                browser.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(rgb(0xe3def2))
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Transfers"))
+                        .children(transfers.into_iter().enumerate().map(|(index, transfer)| {
+                            let id = transfer.id.clone();
+                            let dismiss_id = id.clone();
+                            let active = matches!(
+                                transfer.state,
+                                TransferState::Queued
+                                    | TransferState::Sending { .. }
+                                    | TransferState::Checking
+                            );
+                            let control = self.transfer_controls.get(&id).cloned();
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .rounded_lg()
+                                .bg(rgb(0xeeeafa))
+                                .px_3()
+                                .py_2()
+                                .child(
+                                    div().flex_1().child(transfer_name(&transfer)).child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(0x766d91))
+                                            .child(transfer_state_label(&transfer.state)),
+                                    ),
+                                )
+                                .when(active && control.is_some(), |row| {
+                                    let control = control.expect("checked above");
+                                    row.child(
+                                        div()
+                                            .id(("cancel-transfer", index))
+                                            .cursor_pointer()
+                                            .rounded_lg()
+                                            .border_1()
+                                            .border_color(rgb(0xd4cee8))
+                                            .px_3()
+                                            .py_1()
+                                            .child("Cancel")
+                                            .on_click(move |_, _, cx| {
+                                                control.cancel();
+                                                cx.stop_propagation();
+                                            }),
+                                    )
+                                })
+                                .when(!active, |row| {
+                                    row.child(
+                                        div()
+                                            .id(("dismiss-transfer", index))
+                                            .cursor_pointer()
+                                            .rounded_lg()
+                                            .border_1()
+                                            .border_color(rgb(0xd4cee8))
+                                            .px_3()
+                                            .py_1()
+                                            .child("Dismiss")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if dismiss_transfer(&dismiss_id).is_ok() {
+                                                    this.transfers
+                                                        .retain(|saved| saved.id != dismiss_id);
+                                                    this.transfer_controls.remove(&dismiss_id);
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                })
+                        })),
+                )
+            })
             .when(self.new_folder_open, |browser| {
                 browser.child(
                     div()
@@ -755,6 +979,7 @@ impl LoploadApp {
                     .children(entries.into_iter().enumerate().map(|(index, entry)| {
                         let folder = matches!(entry.kind, RemoteEntryKind::Folder);
                         let key = entry.key.clone();
+                        let downloadable = entry.clone();
                         div()
                             .id(("entry", index))
                             .flex()
@@ -778,6 +1003,22 @@ impl LoploadApp {
                                     .text_color(rgb(0x766d91))
                                     .child(entry.size.map(format_bytes).unwrap_or_default()),
                             )
+                            .when(!folder, |row| {
+                                row.child(
+                                    div()
+                                        .id(("download-file", index))
+                                        .cursor_pointer()
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(rgb(0xd4cee8))
+                                        .px_3()
+                                        .py_1()
+                                        .child("Download")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.start_download(downloadable.clone(), cx);
+                                        })),
+                                )
+                            })
                             .when(folder, |row| {
                                 row.on_click(cx.listener(move |this, _, _, cx| {
                                     this.load_prefix(key.clone(), cx);
@@ -850,6 +1091,43 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} {}", bytes, UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn transfer_name(transfer: &Transfer) -> String {
+    match transfer.direction {
+        TransferDirection::Upload => std::path::Path::new(&transfer.local_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("File")
+            .to_string(),
+        TransferDirection::Download => transfer
+            .remote_key
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("File")
+            .to_string(),
+    }
+}
+
+fn transfer_state_label(state: &TransferState) -> String {
+    match state {
+        TransferState::Queued => "Waiting".into(),
+        TransferState::Sending { percent } => format!("Transferring… {percent:.0}%"),
+        TransferState::Checking => "Checking file…".into(),
+        TransferState::Uploaded => "Uploaded ✓".into(),
+        TransferState::Downloaded => "Downloaded ✓".into(),
+        TransferState::Failed { error_class } => match error_class {
+            ErrorClass::Offline => "Failed — you appear to be offline",
+            ErrorClass::Credentials => "Failed — check your credentials",
+            ErrorClass::StorageFull => "Failed — the destination is full",
+            ErrorClass::ConnectionDropped => "Failed — the connection was interrupted",
+            ErrorClass::Verification => "Failed — the file could not be verified",
+            ErrorClass::NotFound => "Failed — the file was not found",
+            ErrorClass::Unknown => "Failed — try again",
+        }
+        .into(),
     }
 }
 

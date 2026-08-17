@@ -1,7 +1,10 @@
 use crate::{StorageConnection, keychain};
 use aws_sdk_s3::{
     Client,
-    config::{Credentials as AwsCredentials, Region},
+    config::{
+        Credentials as AwsCredentials, Region, RequestChecksumCalculation,
+        ResponseChecksumValidation,
+    },
     primitives::ByteStream,
 };
 use aws_smithy_http_client::hyper_014::HyperClientBuilder;
@@ -198,7 +201,7 @@ async fn list_entries_with_client(
     Ok(entries)
 }
 
-fn client(connection: &StorageConnection) -> Result<Client, String> {
+pub(crate) fn client(connection: &StorageConnection) -> Result<Client, String> {
     let stored = keychain::get(&connection.id)
         .map_err(|_| "Stored credentials could not be read".to_string())?;
     Ok(client_with_credentials(
@@ -208,7 +211,7 @@ fn client(connection: &StorageConnection) -> Result<Client, String> {
     ))
 }
 
-fn client_with_credentials(
+pub(crate) fn client_with_credentials(
     connection: &StorageConnection,
     access_key: String,
     secret_key: String,
@@ -227,12 +230,14 @@ fn client_with_credentials(
         .endpoint_url(connection.endpoint.clone())
         .force_path_style(true)
         .credentials_provider(credentials)
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+        .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
         .http_client(http_client)
         .build();
     Client::from_conf(config)
 }
 
-fn runtime() -> Result<&'static Runtime, String> {
+pub(crate) fn runtime() -> Result<&'static Runtime, String> {
     static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
     RUNTIME
         .get_or_init(|| Runtime::new().map_err(|_| "Could not start networking".to_string()))
