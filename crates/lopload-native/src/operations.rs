@@ -22,6 +22,12 @@ pub struct TrashItem {
     pub size: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RemoteFile {
+    pub key: String,
+    pub size: u64,
+}
+
 #[derive(Clone)]
 struct ObjectRef {
     key: String,
@@ -40,6 +46,24 @@ pub fn folder_info(
             objects.iter().map(|object| object.size).sum(),
             objects.iter().filter_map(|object| object.modified).max(),
         ))
+    })
+}
+
+pub fn files_in_folder(
+    connection: &StorageConnection,
+    prefix: &str,
+) -> Result<Vec<RemoteFile>, String> {
+    let client = s3::client(connection)?;
+    s3::runtime()?.block_on(async {
+        Ok(list_objects(&client, connection, prefix)
+            .await?
+            .into_iter()
+            .filter(|object| !object.key.ends_with('/'))
+            .map(|object| RemoteFile {
+                key: object.key,
+                size: object.size,
+            })
+            .collect())
     })
 }
 

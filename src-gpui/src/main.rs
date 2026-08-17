@@ -13,8 +13,8 @@ use lopload_native::{
     NewStorageConnection, StorageConnection, UpdateStorageConnection, delete_connection,
     list_connections,
     operations::{
-        TrashItem, delete_trash_item, empty_trash, folder_info, list_trash, move_to_trash,
-        rename_file, rename_folder, restore_trash_item, share_link,
+        TrashItem, delete_trash_item, empty_trash, files_in_folder, folder_info, list_trash,
+        move_to_trash, rename_file, rename_folder, restore_trash_item, share_link,
     },
     s3::{RemoteEntry, RemoteEntryKind, create_folder as create_remote_folder, list_entries},
     save_connection, set_last_prefix,
@@ -28,7 +28,10 @@ use lopload_native::{
     },
     update_connection,
 };
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Component, Path, PathBuf},
+};
 
 #[derive(Clone, Copy)]
 enum Screen {
@@ -77,6 +80,8 @@ struct LoploadApp {
     operation_status: Option<String>,
     info_entry: Option<RemoteEntry>,
     info_loading: bool,
+    selected_keys: HashSet<String>,
+    pending_bulk_trash: Vec<RemoteEntry>,
     tuning: TransferTuning,
     auto_update_enabled: bool,
     default_download_dir: Option<String>,
@@ -139,6 +144,8 @@ impl LoploadApp {
             operation_status: None,
             info_entry: None,
             info_loading: false,
+            selected_keys: HashSet::new(),
+            pending_bulk_trash: Vec::new(),
             tuning,
             auto_update_enabled,
             default_download_dir,
@@ -702,6 +709,166 @@ impl LoploadApp {
             .detach();
     }
 
+    fn toggle_selection(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.selected_keys.remove(key) {
+            self.selected_keys.insert(key.to_string());
+        }
+        cx.notify();
+    }
+
+    fn selected_entries(&self) -> Vec<RemoteEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| self.selected_keys.contains(&entry.key))
+            .cloned()
+            .collect()
+    }
+
+    fn prepare_bulk_trash(&mut self, cx: &mut Context<Self>) {
+        self.pending_bulk_trash = self.selected_entries();
+        cx.notify();
+    }
+
+    fn confirm_bulk_trash(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let entries = std::mem::take(&mut self.pending_bulk_trash);
+        if entries.is_empty() {
+            return;
+        }
+        self.operation_status = Some("Moving selected items to Trash…".into());
+        let deleted_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or_default();
+        let operation = cx.background_executor().spawn(async move {
+            for entry in entries {
+                move_to_trash(
+                    &connection,
+                    &entry.key,
+                    matches!(entry.kind, RemoteEntryKind::Folder),
+                    deleted_at,
+                )?;
+            }
+            Ok::<_, String>(())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            if let Some(this) = this.upgrade() {
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(()) => {
+                        this.selected_keys.clear();
+                        this.operation_status = Some("Moved selected items to Trash".into());
+                        this.load_prefix(this.prefix.clone(), cx);
+                    }
+                    Err(error) => {
+                        this.operation_status = Some(error);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn start_bulk_download(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.current_connection.clone() else {
+            return;
+        };
+        let entries = self.selected_entries();
+        if entries.is_empty() {
+            return;
+        }
+        let default_download_dir = self.default_download_dir.clone();
+        let concurrency = self.tuning.concurrent_files.max(1) as usize;
+        let (sender, receiver) = async_channel::unbounded();
+        self.listen_for_transfers(receiver, cx);
+        cx.background_executor()
+            .spawn(async move {
+                let root = if let Some(folder) = default_download_dir {
+                    PathBuf::from(folder)
+                } else {
+                    let Some(folder) = rfd::FileDialog::new().pick_folder() else {
+                        return;
+                    };
+                    folder
+                };
+                let mut downloads = Vec::new();
+                let mut skipped = 0;
+                for entry in entries {
+                    if matches!(entry.kind, RemoteEntryKind::File) {
+                        if let Some(destination) = safe_destination(&root, &entry.name) {
+                            downloads.push((
+                                entry.key,
+                                entry.size.unwrap_or_default(),
+                                destination,
+                            ));
+                        } else {
+                            skipped += 1;
+                        }
+                        continue;
+                    }
+                    let folder_name = entry.name.clone();
+                    match files_in_folder(&connection, &entry.key) {
+                        Ok(files) => {
+                            for file in files {
+                                let suffix = file.key.strip_prefix(&entry.key).unwrap_or(&file.key);
+                                let relative = format!("{folder_name}/{suffix}");
+                                if let Some(destination) = safe_destination(&root, &relative) {
+                                    downloads.push((file.key, file.size, destination));
+                                } else {
+                                    skipped += 1;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = sender.send_blocking(TransferEvent::Status(error));
+                            return;
+                        }
+                    }
+                }
+                if skipped > 0 {
+                    let _ = sender.send_blocking(TransferEvent::Status(format!(
+                        "Skipped {skipped} unsafe file names"
+                    )));
+                }
+                for group in downloads.chunks(concurrency) {
+                    std::thread::scope(|scope| {
+                        for (key, size, destination) in group.iter().cloned() {
+                            let connection = connection.clone();
+                            let sender = sender.clone();
+                            scope.spawn(move || {
+                                let control = TransferControl::default();
+                                let event_control = control.clone();
+                                let mut transfer_id = None;
+                                let _ = download_file(
+                                    &connection,
+                                    &key,
+                                    &destination,
+                                    size,
+                                    &control,
+                                    |transfer| {
+                                        transfer_id = Some(transfer.id.clone());
+                                        let _ = sender.send_blocking(TransferEvent::Update(
+                                            transfer,
+                                            event_control.clone(),
+                                        ));
+                                    },
+                                );
+                                if control.is_cancelled() {
+                                    if let Some(id) = transfer_id {
+                                        let _ = sender.send_blocking(TransferEvent::Removed(id));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+            })
+            .detach();
+    }
+
     fn begin_add_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing_connection_id = None;
         self.form_error = None;
@@ -799,6 +966,9 @@ impl LoploadApp {
         let Some(connection) = self.current_connection.clone() else {
             return;
         };
+        if self.prefix != prefix {
+            self.selected_keys.clear();
+        }
         self.prefix = prefix.clone();
         self.browser_status = BrowserStatus::Loading;
         self.load_generation += 1;
@@ -1239,6 +1409,8 @@ impl LoploadApp {
         });
         let transfers = self.transfers.clone();
         let current_connection = self.current_connection.clone();
+        let selected_count = self.selected_keys.len();
+        let pending_bulk_count = self.pending_bulk_trash.len();
         let pending_trash = self.pending_trash.clone();
         let pending_rename = self.pending_rename.clone();
         let operation_status = self.operation_status.clone();
@@ -1334,6 +1506,56 @@ impl LoploadApp {
                             )),
                     )
                     .child(Input::new(&self.filter).w(px(180.0)))
+                    .when(selected_count > 0, |toolbar| {
+                        toolbar
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("{selected_count} selected")),
+                            )
+                            .child(
+                                div()
+                                    .id("bulk-download")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xd4cee8))
+                                    .px_3()
+                                    .py_2()
+                                    .child("Download")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.start_bulk_download(cx)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("bulk-trash")
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(0xe9b9c4))
+                                    .px_3()
+                                    .py_2()
+                                    .text_color(rgb(0xa33b53))
+                                    .child("Trash")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.prepare_bulk_trash(cx)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("clear-selection")
+                                    .cursor_pointer()
+                                    .px_3()
+                                    .py_2()
+                                    .child("Clear")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.selected_keys.clear();
+                                        cx.notify();
+                                    })),
+                            )
+                    })
                     .child(
                         div()
                             .id("upload-files")
@@ -1435,6 +1657,48 @@ impl LoploadApp {
                                     this.info_entry = None;
                                     cx.notify();
                                 })),
+                        ),
+                )
+            })
+            .when(pending_bulk_count > 0, |browser| {
+                browser.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_6()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(rgb(0xe9b9c4))
+                        .bg(rgb(0xffedf1))
+                        .child(div().flex_1().child(format!(
+                            "Move {pending_bulk_count} selected items to Trash?"
+                        )))
+                        .child(
+                            div()
+                                .id("cancel-bulk-trash")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_2()
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_bulk_trash.clear();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("confirm-bulk-trash")
+                                .cursor_pointer()
+                                .rounded_lg()
+                                .bg(rgb(0xa33b53))
+                                .px_3()
+                                .py_2()
+                                .text_color(rgb(0xffffff))
+                                .child("Move to Trash")
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.confirm_bulk_trash(cx)),
+                                ),
                         ),
                 )
             })
@@ -1745,6 +2009,8 @@ impl LoploadApp {
                     .children(entries.into_iter().enumerate().map(|(index, entry)| {
                         let folder = matches!(entry.kind, RemoteEntryKind::Folder);
                         let key = entry.key.clone();
+                        let select_key = entry.key.clone();
+                        let selected = self.selected_keys.contains(&entry.key);
                         let downloadable = entry.clone();
                         let shareable = entry.clone();
                         let trashable = entry.clone();
@@ -1762,10 +2028,25 @@ impl LoploadApp {
                             .py_3()
                             .when(folder, |row| row.cursor_pointer())
                             .child(div().w(px(28.0)).text_center().child(if folder {
-                                "▸"
+                                if selected { "✓" } else { "▸" }
                             } else {
-                                "·"
+                                if selected { "✓" } else { "·" }
                             }))
+                            .child(
+                                div()
+                                    .id(("select-entry", index))
+                                    .cursor_pointer()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(rgb(if selected { 0x5c4f8f } else { 0xd4cee8 }))
+                                    .px_2()
+                                    .py_1()
+                                    .child(if selected { "Selected" } else { "Select" })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.toggle_selection(&select_key, cx);
+                                    })),
+                            )
                             .child(div().flex_1().child(entry.name))
                             .child(
                                 div()
@@ -2406,6 +2687,25 @@ fn expand_upload_paths(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
+fn safe_destination(root: &Path, relative: &str) -> Option<PathBuf> {
+    let mut destination = root.to_path_buf();
+    let mut found_name = false;
+    for component in Path::new(relative).components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        found_name = true;
+        destination.push(name);
+        if std::fs::symlink_metadata(&destination)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return None;
+        }
+    }
+    found_name.then_some(destination)
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
@@ -2427,4 +2727,20 @@ fn main() {
         .expect("failed to open Lopload window");
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_bulk_downloads_inside_the_chosen_folder() {
+        let root = Path::new("/tmp/downloads");
+        assert_eq!(
+            safe_destination(root, "photos/cat.jpg"),
+            Some(root.join("photos/cat.jpg"))
+        );
+        assert_eq!(safe_destination(root, "../private.txt"), None);
+        assert_eq!(safe_destination(root, "/absolute.txt"), None);
+    }
 }
