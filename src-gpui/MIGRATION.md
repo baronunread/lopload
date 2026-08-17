@@ -5,6 +5,7 @@ This crate is the experimental native replacement for the Tauri and React applic
 ## Implemented
 
 - Native GPUI application lifecycle and window
+- First-run setup and post-connection celebration handoff
 - Lopload visual shell
 - Native Home → Add storage navigation and application state
 - Native connection form with masked secret entry and validation
@@ -46,6 +47,6 @@ of time on machines with full Xcode once native packaging is introduced.
 ## Required for parity
 
 - Guarded recursive folder drops, tray, and auto-updates
-- First-run celebration, system theme handling, and the remaining polished browser states
+- System theme handling and the remaining polished browser states
 - Scenario coverage equivalent to the current Host-seam suite
 - macOS, Linux, and Windows packaging and signing

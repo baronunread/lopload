@@ -40,10 +40,11 @@ use std::{
     time::Instant,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
     Home,
     AddStorage,
+    Celebration,
     Browser,
     Trash,
     Settings,
@@ -146,6 +147,7 @@ struct LoploadApp {
     folder_error: Option<String>,
     new_folder_open: bool,
     home_error: Option<String>,
+    celebration_connection: Option<StorageConnection>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -167,8 +169,9 @@ impl LoploadApp {
                 cx.notify();
             }
         });
+        let first_run = connections.is_empty();
         Self {
-            screen: Screen::Home,
+            screen: initial_screen(first_run),
             connections,
             current_connection: None,
             prefix: String::new(),
@@ -223,6 +226,7 @@ impl LoploadApp {
             folder_error: None,
             new_folder_open: false,
             home_error,
+            celebration_connection: None,
             _subscriptions: vec![filter_subscription],
         }
     }
@@ -1570,6 +1574,59 @@ impl LoploadApp {
         )
     }
 
+    fn render_celebration(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let connection = self.celebration_connection.clone();
+        div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_4()
+                    .w(px(560.0))
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgb(0xe3def2))
+                    .bg(rgb(0xffffff))
+                    .p_8()
+                    .child(div().text_2xl().child("✨"))
+                    .child(
+                        div()
+                            .text_2xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Your storage is ready"),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(0x766d91))
+                            .text_center()
+                            .child("You can upload, organize, and download files now."),
+                    )
+                    .child(
+                        div()
+                            .id("start-browsing")
+                            .cursor_pointer()
+                            .rounded_lg()
+                            .bg(rgb(0x5c4f8f))
+                            .px_5()
+                            .py_2()
+                            .text_color(rgb(0xffffff))
+                            .child("Start browsing")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(connection) = connection.clone() {
+                                    this.celebration_connection = None;
+                                    this.open_connection(connection, cx);
+                                }
+                            })),
+                    ),
+            )
+    }
+
     fn render_add_storage(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editing = self.editing_connection_id.is_some();
         div()
@@ -1700,6 +1757,8 @@ impl LoploadApp {
                                         let region = this.region.read(cx).value().to_string();
                                         let access_key = this.access_key.read(cx).value().to_string();
                                         let secret_key = this.secret_key.read(cx).value().to_string();
+                                        let first_connection = this.editing_connection_id.is_none()
+                                            && this.connections.is_empty();
                                         let result = if let Some(id) = this.editing_connection_id.clone() {
                                             let keep_credentials = access_key.is_empty() && secret_key.is_empty();
                                             update_connection(UpdateStorageConnection {
@@ -1740,7 +1799,10 @@ impl LoploadApp {
                                                 this.secret_key.update(cx, |input, cx| {
                                                     input.set_value("", window, cx)
                                                 });
-                                                this.screen = Screen::Home;
+                                                if first_connection {
+                                                    this.celebration_connection = Some(connection);
+                                                }
+                                                this.screen = screen_after_connection_save(first_connection);
                                             }
                                             Err(error) => this.form_error = Some(error),
                                         }
@@ -3178,6 +3240,7 @@ impl Render for LoploadApp {
         let content = match self.screen {
             Screen::Home => self.render_home(cx).into_any_element(),
             Screen::AddStorage => self.render_add_storage(cx).into_any_element(),
+            Screen::Celebration => self.render_celebration(cx).into_any_element(),
             Screen::Browser => self.render_browser(cx).into_any_element(),
             Screen::Trash => self.render_trash(cx).into_any_element(),
             Screen::Settings => self.render_settings(cx).into_any_element(),
@@ -3247,6 +3310,22 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} {}", bytes, UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn initial_screen(first_run: bool) -> Screen {
+    if first_run {
+        Screen::AddStorage
+    } else {
+        Screen::Home
+    }
+}
+
+fn screen_after_connection_save(first_connection: bool) -> Screen {
+    if first_connection {
+        Screen::Celebration
+    } else {
+        Screen::Home
     }
 }
 
@@ -3594,5 +3673,13 @@ mod tests {
         assert_eq!(image_format("diagram.svg"), Some(ImageFormat::Svg));
         assert_eq!(image_format("archive.zip"), None);
         assert_eq!(image_format("no-extension"), None);
+    }
+
+    #[test]
+    fn routes_the_first_connection_through_onboarding() {
+        assert_eq!(initial_screen(true), Screen::AddStorage);
+        assert_eq!(initial_screen(false), Screen::Home);
+        assert_eq!(screen_after_connection_save(true), Screen::Celebration);
+        assert_eq!(screen_after_connection_save(false), Screen::Home);
     }
 }
