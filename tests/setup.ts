@@ -1,15 +1,10 @@
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-
-// Bun's real fetch, captured before happy-dom replaces globalThis.fetch with
-// its browser-shaped one. That substitute enforces CORS, so the AWS SDK
-// running on top of it sends a preflight OPTIONS that S3 endpoints reject —
-// which is what made the old `test:e2e` suite fail against R2 regardless of
-// what it was testing. The Node host (tests/support/nodeHost.ts) hands this
-// binding to the S3 client so tests reach real storage over real HTTP, while
-// the DOM the UI renders into stays happy-dom's.
-export const nativeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
-
-GlobalRegistrator.register();
+// Registers happy-dom's `document` first, via its own preload file (see
+// bunfig.toml) — jest-dom's matchers module below pulls in @testing-library/dom
+// as a plain (non-lazy) import, which snapshots `document` the moment it's
+// required. Static imports in this file are hoisted above any statement here,
+// so calling GlobalRegistrator.register() in this same file, even textually
+// first, would still lose that race against the matchers import.
+export { nativeFetch } from "./domSetup";
 
 // Keep debug/info log lines off the test console. The suite drives real HTTP
 // against MinIO, and a printed line per request is enough terminal
