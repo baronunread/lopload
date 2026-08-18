@@ -96,13 +96,18 @@ function report(line: string): void {
   });
 }
 
-function isObjectValue(cause: unknown): cause is object {
-  return typeof cause === "object" && cause !== null;
+// Plain objects only — a Date, Map, or Set would compare "equal" by
+// Object.entries alone (they carry no own enumerable string-keyed
+// properties) regardless of the values they actually hold.
+function isPlainObjectValue(cause: unknown): cause is object {
+  if (typeof cause !== "object" || cause === null) return false;
+  const proto = Object.getPrototypeOf(cause);
+  return proto === Object.prototype || proto === null;
 }
 
 function stringify<T>(value: T): string {
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(value) ?? String(value);
   } catch {
     return String(value);
   }
@@ -113,7 +118,7 @@ function deepEqual<T>(a: T, b: T): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
   }
-  if (isObjectValue(a) && isObjectValue(b)) {
+  if (isPlainObjectValue(a) && isPlainObjectValue(b)) {
     // SAFETY: both narrowed to plain objects above; comparing arbitrary
     // test values by key needs a dynamic per-entry walk rather than a
     // concrete shape.

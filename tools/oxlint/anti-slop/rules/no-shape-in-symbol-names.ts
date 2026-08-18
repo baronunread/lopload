@@ -31,7 +31,17 @@ export const noForbiddenTermInSymbolNamesRule = defineRule({
     };
 
     return {
-      Identifier: reportForbiddenSymbolName,
+      Identifier(node) {
+        const { parent } = node;
+        // A property read/write off an external value (e.g. an SDK's
+        // response.shapeId) or an imported name isn't a symbol this
+        // codebase declares, so it can't be renamed here.
+        if (parent.type === "MemberExpression" && parent.property === node && !parent.computed) {
+          return;
+        }
+        if (parent.type === "ImportSpecifier" && parent.imported === node) return;
+        reportForbiddenSymbolName(node);
+      },
       PrivateIdentifier: reportForbiddenSymbolName,
       JSXIdentifier(node) {
         // JSX attribute names are dictated by the component they're passed

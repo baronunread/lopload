@@ -45,6 +45,13 @@ export async function setDefaultDownloadDir(path: string | null): Promise<void> 
   await store.set(DOWNLOAD_DIR_KEY, path);
 }
 
+/** Decodes the legacy concurrency store value, which — like anything read
+ * from a store.get<T>() call — is only statically typed as T; the file on
+ * disk could hold a string, null, or a stale shape from an older build. */
+function isFiniteNumber(cause: unknown): cause is number {
+  return typeof cause === "number" && Number.isFinite(cause);
+}
+
 /** Pure: derives a full TransferTuning from the legacy single-knob
  * concurrency setting, defaulting every other knob to Normal. Exported so
  * the migration mapping can be unit tested without a live store. */
@@ -63,7 +70,7 @@ export async function getTransferTuning(): Promise<TransferTuning> {
   if (stored) return stored;
 
   const legacy = await store.get<number>(LEGACY_CONCURRENT_KEY);
-  if (legacy !== undefined) {
+  if (isFiniteNumber(legacy)) {
     const migrated = tuningFromLegacyConcurrency(legacy);
     await store.set(TUNING_KEY, migrated);
     return migrated;

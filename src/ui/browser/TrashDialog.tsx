@@ -42,6 +42,10 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
    * control since there's no per-row spinner for "everything at once". */
   const [emptyProgress, setEmptyProgress] = useState<CopyProgress | null>(null);
   const toasts = useKumoToastManager();
+  /** Bumped on every refresh() call so an older request that resolves after a
+   * newer one (e.g. the initial mount listing racing a move-completion
+   * refresh) can tell it's stale and skip writing to items/loading. */
+  const refreshGenerationRef = useRef(0);
 
   function setItemProgress(id: string, progress: CopyProgress | undefined): void {
     setRowProgress((prev) => {
@@ -56,12 +60,14 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   }
 
   async function refresh() {
+    const generation = ++refreshGenerationRef.current;
     setLoading(true);
     try {
       const result = await services.trash.list(connectionId);
+      if (generation !== refreshGenerationRef.current) return;
       setItems(result);
     } finally {
-      setLoading(false);
+      if (generation === refreshGenerationRef.current) setLoading(false);
     }
   }
 

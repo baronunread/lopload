@@ -4,8 +4,8 @@ import { InjectedFetchHttpHandler } from "../../src/lib/s3/http-handler";
 import { addLogSink, type LogLevel } from "../../src/lib/logger";
 
 function baseRequest(overrides: Partial<HttpRequest> = {}): HttpRequest {
-  // SAFETY: these fields are every property InjectedFetchHttpHandler.handle
-  // actually reads off HttpRequest; overrides only ever narrows one further.
+  // SAFETY: this fixture supplies all fields needed by the default request.
+  // Optional fields remain undefined unless a test provides an override.
   return {
     protocol: "https:",
     hostname: "s3.example.com",
