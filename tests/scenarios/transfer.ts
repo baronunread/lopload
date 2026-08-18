@@ -148,6 +148,31 @@ export const transferScenarios: Scenario[] = [
   },
 
   {
+    name: "opening a file downloads it and hands the local copy to the OS",
+    async arrange(bucket) {
+      await bucket.put("notes.txt", "open me");
+    },
+    async run(ctx) {
+      const { services, connectionId, prefix, record, expect, waitFor } = ctx;
+
+      await waitFor(() => {
+        expect(screen.queryByText("notes.txt") !== null).toBe(true);
+      });
+
+      await services.openFile(connectionId, `${prefix}notes.txt`, "notes.txt");
+
+      const state = await settle(ctx, "notes.txt");
+      expect(state.kind).toBe("downloaded");
+      expect(record.opened.length).toBeGreaterThan(0);
+      expect(record.opened[record.opened.length - 1]?.endsWith("notes.txt")).toBe(true);
+      // Only the in-app runner reaches the real opener, and that's the one place
+      // an ACL that doesn't cover the temp folder can refuse the handoff. It
+      // used to do so silently; now it lands here.
+      expect(record.notifications.some((n) => n.body.startsWith("Couldn't open"))).toBe(false);
+    },
+  },
+
+  {
     name: "an OS drag shows the upload overlay and dropping on a folder row uploads into that folder",
     async arrange(bucket) {
       await bucket.put("docs/existing.txt", "already here");
