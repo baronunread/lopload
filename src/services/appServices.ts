@@ -690,19 +690,27 @@ class LoploadServices implements AppServices {
     const localPath = `${dir}/lopload-open-${crypto.randomUUID()}-${name}`;
     const engine = await this.getEngine(connectionId);
     const [transfer] = await engine.enqueueDownloads([{ key, localPath, size: 0 }]);
-    await new Promise<void>((resolve) => {
+    const downloaded = await new Promise<boolean>((resolve) => {
       const unsubscribe = engine.subscribe((event) => {
         if (event.type !== "transfer-updated" || event.transfer.id !== transfer.id) return;
         if (event.transfer.state.kind === "downloaded") {
           unsubscribe();
-          resolve();
-          void this.host.shell.openPath(localPath);
+          resolve(true);
         } else if (event.transfer.state.kind === "failed") {
           unsubscribe();
-          resolve();
+          resolve(false);
         }
       });
     });
+    // A failed download already reports itself through the batch notification;
+    // a refusal from the OS handoff has no other channel, so it gets its own.
+    if (!downloaded) return;
+    try {
+      await this.host.shell.openPath(localPath);
+    } catch (err) {
+      log.error("Failed to open downloaded file:", err);
+      this.notify("Lopload", `Couldn't open ${name} - the file was downloaded but not opened.`);
+    }
   }
 
   async revealInFinder(path: string): Promise<void> {
