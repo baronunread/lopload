@@ -296,17 +296,24 @@ function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
   return { host, control, record };
 }
 
-/** A real, empty directory under the Tauri temp dir — the in-app equivalent
- * of nodeHost's mkdtemp(). */
-async function makeWorkdir(_host: Host): Promise<string> {
-  // Under /tmp, not the OS temp dir. This runs through @tauri-apps/plugin-fs,
-  // which is governed by the capability scope in capabilities/default.json —
-  // and that scope already permits /tmp/** (for drag-drop), whereas the macOS
-  // temp dir (/var/folders/…) is not in it. Using /tmp keeps the selftest from
-  // forcing a capability grant into the shipped app that the app itself never
-  // needs. (The app's own temp writes go through the write_at command, which
-  // isn't scope-governed, so it's unaffected either way.)
-  const dir = `/tmp/lopload-selftest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+/** A real, empty scratch directory — the in-app equivalent of nodeHost's
+ * mkdtemp(). */
+async function makeWorkdir(host: Host): Promise<string> {
+  // The rule: pick a directory the shipped capability scope
+  // (capabilities/default.json) already covers, so the selftest never forces a
+  // grant into the app that the app itself never needs. On macOS/Linux that's
+  // /tmp (in scope for drag-drop; the macOS temp dir /var/folders/… is not).
+  // On Windows /tmp is drive-relative — it would resolve against whatever drive
+  // the process runs from and litter its root — while the OS temp dir sits under
+  // the user profile, which the $HOME/** entry covers. (The app's own temp
+  // writes go through the write_at command, which isn't scope-governed, so it's
+  // unaffected either way.)
+  const temp = await host.files.tempDir();
+  const onWindows = /^[A-Za-z]:/.test(temp);
+  const dir = await host.files.join(
+    onWindows ? temp : "/tmp",
+    `lopload-selftest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
   await mkdir(dir, { recursive: true });
   return dir;
 }
