@@ -39,6 +39,11 @@ mock.module("@tauri-apps/plugin-fs", () => ({
   readDir: mock(async () => []),
   stat: mock(async () => ({ isDirectory: false })),
   exists: mock(async () => true),
+  // Not used by anything under test here, but this mock.module call replaces
+  // the module for the whole test process — src/tauri/logSink.ts imports
+  // writeTextFile from the real module, and without a stub here its import
+  // breaks for every test file that runs after this one.
+  writeTextFile: mock(async () => {}),
   SeekMode: { Start: 0, Current: 1, End: 2 },
 }));
 
