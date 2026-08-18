@@ -521,9 +521,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
 
     let anyFailed = false;
     const batchTotal = moves.length;
+    const batchId = crypto.randomUUID();
     void mapWithConcurrency(moves, BULK_OP_CONCURRENCY, async (m) => {
       try {
-        await services.browser.move(connectionId, m.fromKey, m.toKey, undefined, batchTotal);
+        await services.browser.move(connectionId, m.fromKey, m.toKey, undefined, batchTotal, batchId);
       } catch (err) {
         anyFailed = true;
         toasts.add({
@@ -576,9 +577,10 @@ export function RemoteBrowser({ connectionId, prefix, onNavigate }: RemoteBrowse
     selection.clear();
     let anyFailed = false;
     const batchTotal = deleted.length;
+    const batchId = crypto.randomUUID();
     void mapWithConcurrency(deleted, BULK_OP_CONCURRENCY, async (entry) => {
       try {
-        await services.browser.delete(connectionId, entry.key, batchTotal);
+        await services.browser.delete(connectionId, entry.key, batchTotal, batchId);
       } catch (err) {
         anyFailed = true;
         toasts.add({

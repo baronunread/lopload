@@ -374,15 +374,23 @@ function widgetTitle(p: TitleParts): string {
   }
   if (p.movingMoves.length > 0) {
     const n = p.movingMoves.length;
+    const activeBatch = p.movingMoves.find((m) => m.batchId && (m.batchTotal ?? 0) > 1);
+    if (activeBatch?.batchId && activeBatch.batchTotal) {
+      const done = p.completedMoves.filter((m) => m.batchId === activeBatch.batchId).length;
+      const kinds = new Set(
+        [...p.movingMoves, ...p.completedMoves]
+          .filter((m) => m.batchId === activeBatch.batchId)
+          .map((m) => m.kind),
+      );
+      const verbed = kinds.size === 1 ? completedVerb(activeBatch.kind) : "moved";
+      return `${verbed.charAt(0).toUpperCase()}${verbed.slice(1)} ${done} of ${activeBatch.batchTotal} items…`;
+    }
     // A mixed batch (say, a rename alongside a Trash move) falls back to
     // the neutral "Moving" rather than picking one kind's verb arbitrarily.
     const kinds = new Set(p.movingMoves.map((m) => m.kind));
     const moveVerb = kinds.size === 1 ? movingVerb(p.movingMoves[0].kind) : "Moving";
     // n is capped at BULK_OP_CONCURRENCY for the whole batch's duration, so a
     // bulk move looks stalled at "3" unless the real queue size is shown too.
-    // ponytail: two distinct large batches in flight at once would show the
-    // larger total rather than a precise combined one — add a batchId if that
-    // ever comes up in practice.
     const batchTotal = Math.max(0, ...p.movingMoves.map((m) => m.batchTotal ?? 0));
     // batchTotal > n and n >= 1 (the guard above) mean batchTotal is always
     // at least 2 here, so no singular case to handle.

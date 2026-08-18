@@ -40,7 +40,7 @@ function renderWidget(harness: ServiceHarness) {
 
 describe("move progress in the transfer widget", () => {
   test(
-    "counts only the moves still running in the title, not the ones already done",
+    "does not count completed moves from an earlier batch in the active batch title",
     async () => {
       const harness = await createServiceHarness({
         wrapFetch: (inner) =>
@@ -63,14 +63,13 @@ describe("move progress in the transfer widget", () => {
 
         // Two moves run to completion while the widget is mounted and
         // subscribed, so it sees every event including the final "completed".
-        await harness.services.browser.move(CONN, "FolderA/", "ArchiveA/");
-        await harness.services.browser.move(CONN, "FolderB/", "ArchiveB/");
+        await harness.services.browser.move(CONN, "FolderA/", "ArchiveA/", undefined, 2, "old-batch");
+        await harness.services.browser.move(CONN, "FolderB/", "ArchiveB/", undefined, 2, "old-batch");
         // A third move whose copies are held open by the stall fault above.
-        void harness.services.browser.move(CONN, "FolderC/", "ArchiveC/");
+        void harness.services.browser.move(CONN, "FolderC/", "ArchiveC/", undefined, 5, "active-batch");
 
-        // "1" here counts moves still in flight (one), not the item count.
-        await screen.findByText("Moving 1 item…");
-        expect(screen.queryByText("Moving 3 items…")).not.toBeInTheDocument();
+        await screen.findByText("Moved 0 of 5 items…");
+        expect(screen.queryByText("Moved 2 of 5 items…")).not.toBeInTheDocument();
         // The two finished moves each render their own summary row. Their
         // "completed" events and the third move's "moving" event are separate
         // React updates, so the title above can be on screen a beat before both
@@ -100,14 +99,10 @@ describe("move progress in the transfer widget", () => {
 
         renderWidget(harness);
 
-        // Simulates a bulk move of 5 items where only these 2 are actually in
-        // flight — batchTotal (5) is passed straight through the way
-        // RemoteBrowser's handleMove does, ahead of the concurrency-limited
-        // pool starting the rest.
-        void harness.services.browser.move(CONN, "FolderA/", "ArchiveA/", undefined, 5);
-        void harness.services.browser.move(CONN, "FolderB/", "ArchiveB/", undefined, 5);
+        void harness.services.browser.move(CONN, "FolderA/", "ArchiveA/", undefined, 5, "batch-1");
+        void harness.services.browser.move(CONN, "FolderB/", "ArchiveB/", undefined, 5, "batch-1");
 
-        await screen.findByText("Moving 2 of 5 items…");
+        await screen.findByText("Moved 0 of 5 items…");
       } finally {
         await harness.dispose();
       }
