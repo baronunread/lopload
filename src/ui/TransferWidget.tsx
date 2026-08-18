@@ -375,22 +375,30 @@ function widgetTitle(p: TitleParts): string {
   }
   if (p.movingMoves.length > 0) {
     const n = p.movingMoves.length;
+    // For a real bulk batch, count *up* the items actually finished toward the
+    // batch total, rather than the in-flight count alone: that count sits
+    // pinned at BULK_OP_CONCURRENCY while the queue drains, then ticks
+    // 3 → 2 → 1 — a countdown that reads as the opposite of progress. Scoped
+    // by batchId so a finished earlier batch can't inflate a later one's count.
+    const activeBatch = p.movingMoves.find((m) => m.batchId && (m.batchTotal ?? 0) > 1);
+    if (activeBatch?.batchId && activeBatch.batchTotal) {
+      const done = p.completedMoves.filter((m) => m.batchId === activeBatch.batchId).length;
+      const kinds = new Set(
+        [...p.movingMoves, ...p.completedMoves]
+          .filter((m) => m.batchId === activeBatch.batchId)
+          .map((m) => m.kind),
+      );
+      const verbed = kinds.size === 1 ? completedVerb(activeBatch.kind) : "moved";
+      return `${verbed.charAt(0).toUpperCase()}${verbed.slice(1)} ${done} of ${activeBatch.batchTotal} items…`;
+    }
     // A mixed batch (say, a rename alongside a Trash move) falls back to
     // the neutral "Moving" rather than picking one kind's verb arbitrarily.
     const kinds = new Set(p.movingMoves.map((m) => m.kind));
     const moveVerb = kinds.size === 1 ? movingVerb(p.movingMoves[0].kind) : "Moving";
-    // For a real bulk batch, count *up* the items actually finished toward the
-    // batch total, rather than the in-flight count alone: that count sits
-    // pinned at BULK_OP_CONCURRENCY while the queue drains, then ticks
-    // 3 → 2 → 1 — a countdown that reads as the opposite of progress.
-    // ponytail: two distinct large batches in flight at once share one total
-    // (the larger) — add a batchId if that ever actually comes up.
     const batchTotal = Math.max(0, ...p.movingMoves.map((m) => m.batchTotal ?? 0));
-    if (batchTotal > 1) {
-      const done = p.completedMoves.length;
-      return `Moved ${done} of ${batchTotal} items…`;
-    }
-    return `${moveVerb} ${n} item${n === 1 ? "" : "s"}…`;
+    return batchTotal > n
+      ? `${moveVerb} ${n} of ${batchTotal} items…`
+      : `${moveVerb} ${n} item${n === 1 ? "" : "s"}…`;
   }
   if (p.inFlight.length > 0) {
     const n = p.visibleTransfers.length;

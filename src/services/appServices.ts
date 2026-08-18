@@ -282,6 +282,7 @@ class LoploadServices implements AppServices {
     kind: MoveProgress["kind"],
     fn: (emit: (progress: CopyProgress) => void) => Promise<void>,
     batchTotal?: number,
+    batchId?: string,
   ): Promise<void> {
     const moveId = crypto.randomUUID();
     const emit = (partial: Partial<MoveProgress>) => {
@@ -304,6 +305,7 @@ class LoploadServices implements AppServices {
       totalItems: 0,
       status: "moving",
       batchTotal,
+      batchId,
     };
     this.activeMoves.set(moveId, initial);
     for (const fn of this.moveSubscribers) fn(initial);
@@ -424,6 +426,7 @@ class LoploadServices implements AppServices {
       toKey: string,
       onProgress?: (progress: CopyProgress) => void,
       batchTotal?: number,
+      batchId?: string,
     ): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       await this.runTracked(
@@ -443,13 +446,14 @@ class LoploadServices implements AppServices {
           }
         },
         batchTotal,
+        batchId,
       );
     },
     subscribeMoves: (cb: (event: MoveProgress) => void): (() => void) => {
       this.moveSubscribers.add(cb);
       return () => this.moveSubscribers.delete(cb);
     },
-    delete: async (connectionId: string, key: string, batchTotal?: number): Promise<void> => {
+    delete: async (connectionId: string, key: string, batchTotal?: number, batchId?: string): Promise<void> => {
       const { client, conn } = await this.getClient(connectionId);
       const deletedAtMs = Date.now();
       await this.runTracked(
@@ -470,6 +474,7 @@ class LoploadServices implements AppServices {
           }
         },
         batchTotal,
+        batchId,
       );
     },
     copyLink: async (connectionId: string, key: string, expiresInSeconds: number): Promise<string> => {
