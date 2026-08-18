@@ -26,6 +26,16 @@ function clientWith(fetchFn: FetchFn = nativeFetch) {
   return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
+function urlOf(input: Parameters<FetchFn>[0]): string {
+  if (isStringValue(input)) return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
 describe("moveFileToTrash", () => {
   test("copies to the trash location, then deletes the original", async () => {
     const probe = bucketProbe(bucket.client, bucket.name);
@@ -104,7 +114,7 @@ describe("moveFolderToTrash", () => {
     type Event = { kind: "marker-put" | "child-copy"; url: string };
     const events: Event[] = [];
     const recordingFetch: FetchFn = async (input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = urlOf(input);
       const method = (init?.method ?? "GET").toUpperCase();
       if (method === "PUT" && url.includes(encodeURIComponent(destRoot).replace(/%2F/g, "/"))) {
         const headers = new Headers(init?.headers);

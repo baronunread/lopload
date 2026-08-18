@@ -44,6 +44,9 @@ async function mapPool<T>(
 
 describe("createS3Client", () => {
   test("uses forcePathStyle and the injected fetch", () => {
+    // SAFETY: createS3Client only calls `fetchFn(url, init)`, matching the
+    // subset of the global fetch signature used here; the request body is
+    // never read by these tests.
     const fetchFn = (async () => new Response("")) as typeof fetch;
     const c = createS3Client(
       { endpoint: "https://example.test", region: "us-east-1" },
@@ -54,6 +57,9 @@ describe("createS3Client", () => {
   });
 
   test("sets checksum config to WHEN_REQUIRED (R2/S3-compatible endpoints mishandle the default)", async () => {
+    // SAFETY: createS3Client only calls `fetchFn(url, init)`, matching the
+    // subset of the global fetch signature used here; the request body is
+    // never read by these tests.
     const fetchFn = (async () => new Response("")) as typeof fetch;
     const c = createS3Client(
       { endpoint: "https://example.test", region: "us-east-1" },
@@ -94,7 +100,7 @@ describe("listEntries", () => {
     });
     // lastModified is whatever MinIO really stamped the object with — a real
     // clock, not a value we can pin to an exact epoch the way the old mock did.
-    expect(typeof (files[0] as { lastModified?: number }).lastModified).toBe("number");
+    expect(files[0]?.lastModified).toEqual(expect.any(Number));
   });
 
   test("nested folder name strips full prefix path, not just trailing slash", async () => {

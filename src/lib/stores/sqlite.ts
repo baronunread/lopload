@@ -190,6 +190,9 @@ function rowToTransfer(row: TransferRow): Transfer {
     case "failed":
       state = {
         kind: "failed",
+        // SAFETY: error_class is only ever written by this store's upsert
+        // from an ErrorClass value, so a round-tripped row's column holds
+        // one of the ErrorClass literals or null.
         errorClass: (row.error_class as ErrorClass | null) ?? "unknown",
       };
       break;

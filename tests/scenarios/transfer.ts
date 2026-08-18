@@ -190,8 +190,11 @@ export const transferScenarios: Scenario[] = [
       // happy-dom runs no layout, so every element's rect is zero-size — and
       // the hit test skips zero-size rects. Give the docs row a real one so
       // the cursor can land on it.
+      // SAFETY: the preceding waitFor confirmed rowSelector matches a real element.
       const row = document.querySelector(rowSelector) as HTMLElement;
       row.getBoundingClientRect = () =>
+        // SAFETY: this stub only needs the numeric fields DOMRect consumers
+        // (the hit test) read; toJSON is DOMRect's only other member.
         ({
           left: 0, top: 100, right: 800, bottom: 156,
           width: 800, height: 56, x: 0, y: 100,
@@ -212,6 +215,8 @@ export const transferScenarios: Scenario[] = [
       control.dragFileHover({ x: 400, y: 128 });
       await waitFor(() => {
         expect(screen.getByText(/Drop to upload to/).textContent).toContain("docs");
+        // SAFETY: waitFor retries until this passes, and rowSelector is
+        // already known to match (asserted above), so it's still present.
         expect((document.querySelector(rowSelector) as HTMLElement).className).toContain(
           "ring-kumo-brand",
         );

@@ -13,6 +13,7 @@ import {
   HeadObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
+import type { StreamingBlobPayloadOutputTypes } from "@smithy/types";
 
 import type { Transfer, TransferPart, TransferStore } from "../types";
 import { Md5, bytesToHex } from "../md5";
@@ -105,21 +106,32 @@ interface TransformableBody {
   transformToWebStream(): ReadableStream<Uint8Array>;
 }
 
-function hasTransformToWebStream(body: unknown): body is TransformableBody {
-  return (
-    typeof body === "object" &&
-    body !== null &&
-    typeof (body as { transformToWebStream?: unknown }).transformToWebStream === "function"
-  );
+/** What a GetObject response body can actually be: the real SDK response
+ * (always `StreamingBlobPayloadOutputTypes`, which carries `.transformToWebStream()`
+ * via the SdkStream mixin) or, in tests, a plain ReadableStream/Uint8Array/Blob. */
+type RawGetObjectBody =
+  | StreamingBlobPayloadOutputTypes
+  | ReadableStream<Uint8Array>
+  | Uint8Array
+  | Blob;
+
+function hasTransformToWebStream(
+  body: RawGetObjectBody,
+): body is RawGetObjectBody & TransformableBody {
+  return "transformToWebStream" in body;
 }
 
 /** Normalizes a GetObject response body into a ReadableStream — the real SDK
  * response exposes `.transformToWebStream()`; tests may hand back a plain
  * ReadableStream or Uint8Array directly. The Tauri HTTP plugin may return a
  * Blob when the response body isn't available as a stream. */
-function bodyToWebStream(body: unknown): ReadableStream<Uint8Array> {
+function bodyToWebStream(body: RawGetObjectBody): ReadableStream<Uint8Array> {
   if (hasTransformToWebStream(body)) return body.transformToWebStream();
-  if (body instanceof ReadableStream) return body as ReadableStream<Uint8Array>;
+  if (body instanceof ReadableStream) {
+    // SAFETY: narrowed by `instanceof ReadableStream` above; this codebase
+    // only ever hands GetObject bodies (byte streams) through this path.
+    return body as ReadableStream<Uint8Array>;
+  }
   if (body instanceof Uint8Array) {
     return new ReadableStream({
       start(controller) {

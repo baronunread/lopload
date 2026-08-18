@@ -34,8 +34,16 @@ function clientWith(fetchFn: FetchFn = nativeFetch) {
   return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
+function isTransferUpdated(e: EngineEvent): e is Extract<EngineEvent, { type: "transfer-updated" }> {
+  return e.type === "transfer-updated";
+}
+
 function urlOf(input: Parameters<FetchFn>[0]): string {
-  if (typeof input === "string") return input;
+  if (isStringValue(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }
@@ -126,7 +134,7 @@ describe("state machine transition table", () => {
       case "failed":
         return { kind: "failed", errorClass: "unknown" };
       default:
-        return { kind } as TransferState;
+        return { kind };
     }
   }
 });
@@ -160,9 +168,7 @@ describe("TransferEngine — single-part upload", () => {
     const persisted = await store.get(transfer.id);
     expect(persisted?.state).toEqual({ kind: "uploaded" });
 
-    const seenKinds = events
-      .filter((e) => e.type === "transfer-updated")
-      .map((e) => (e as { transfer: Transfer }).transfer.state.kind);
+    const seenKinds = events.filter(isTransferUpdated).map((e) => e.transfer.state.kind);
     expect(seenKinds[0]).toBe("queued");
     expect(seenKinds).toContain("sending");
     expect(seenKinds).toContain("checking");
@@ -540,7 +546,7 @@ describe("TransferEngine — resumePending", () => {
     await engine.resumePending();
     await engine.resumePending();
 
-    const queue = engine["queue"] as string[];
+    const queue = engine["queue"];
     expect(queue.filter((id) => id === "resumable-seq-1")).toHaveLength(1);
     expect(store.listCallCount).toBe(2);
   });
@@ -574,7 +580,7 @@ describe("TransferEngine — resumePending", () => {
 
     await Promise.all([engine.resumePending(), engine.resumePending()]);
 
-    const queue = engine["queue"] as string[];
+    const queue = engine["queue"];
     expect(queue.filter((id) => id === "resumable-conc-1")).toHaveLength(1);
     expect(engine["active"].has("resumable-conc-1")).toBe(false);
   });
@@ -629,14 +635,7 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
     const live = engine.getTransfer(transfer.id)!;
     const tracker = { lastEmitTime: 0 };
     for (let i = 1; i <= 500; i++) {
-      (engine as unknown as {
-        updateProgress: (
-          t: Transfer,
-          percent: number,
-          speed: number | undefined,
-          tr: { lastEmitTime: number },
-        ) => void;
-      }).updateProgress(live, Math.min(100, Math.round((i / 500) * 100)), undefined, tracker);
+      engine["updateProgress"](live, Math.min(100, Math.round((i / 500) * 100)), undefined, tracker);
     }
 
     // Progress ticks must never call store.save — SqliteTransferStore.save
@@ -673,16 +672,7 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
     };
     const tracker = { lastEmitTime: fakeNow };
 
-    const updateProgress = (
-      engine as unknown as {
-        updateProgress: (
-          t: Transfer,
-          percent: number,
-          speed: number | undefined,
-          tr: { lastEmitTime: number },
-        ) => void;
-      }
-    ).updateProgress.bind(engine);
+    const updateProgress = engine["updateProgress"].bind(engine);
 
     // 500 ticks, 10ms apart in fake time (5000ms total) — at a 200ms
     // throttle that's at most ~26 emits, not 500.
@@ -692,15 +682,15 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
       updateProgress(transfer, percent, undefined, tracker);
     }
 
-    const progressEmits = events.filter(
-      (e) => e.type === "transfer-updated" && e.transfer.state.kind === "sending",
-    );
+    const progressEmits = events
+      .filter(isTransferUpdated)
+      .filter((e) => e.transfer.state.kind === "sending");
     expect(progressEmits.length).toBeGreaterThan(0);
     expect(progressEmits.length).toBeLessThan(50);
 
     // The final 100% tick must always emit immediately, regardless of the
     // throttle window, so the UI never sticks at 99%.
-    const last = progressEmits[progressEmits.length - 1] as { transfer: Transfer };
+    const last = progressEmits[progressEmits.length - 1]!;
     expect(last.transfer.state).toEqual({ kind: "sending", percent: 100, speedBytesPerSec: undefined });
   });
 
@@ -728,19 +718,10 @@ describe("TransferEngine — progress throttling (updateProgress vs persistState
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    (engine as unknown as { cancelledIds: Set<string> }).cancelledIds.add(transfer.id);
+    engine["cancelledIds"].add(transfer.id);
 
     const tracker = { lastEmitTime: 0 };
-    (
-      engine as unknown as {
-        updateProgress: (
-          t: Transfer,
-          percent: number,
-          speed: number | undefined,
-          tr: { lastEmitTime: number },
-        ) => void;
-      }
-    ).updateProgress(transfer, 50, undefined, tracker);
+    engine["updateProgress"](transfer, 50, undefined, tracker);
 
     expect(engine.getTransfer(transfer.id)).toBeUndefined();
     expect(events.filter((e) => e.type === "transfer-updated")).toEqual([]);

@@ -47,8 +47,8 @@ describe("errors", () => {
   });
 
   test("ECONNRESET / network error mid-part classifies as connection-dropped", () => {
-    const err1 = new Error("socket hang up");
-    (err1 as { code?: string }).code = "ECONNRESET";
+    const err1: NodeJS.ErrnoException = new Error("socket hang up");
+    err1.code = "ECONNRESET";
     expect(classifyError(err1)).toBe("connection-dropped");
 
     const err2 = new Error("network error occurred mid-transfer");

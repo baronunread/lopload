@@ -4,6 +4,10 @@ import type { Connection } from "../lib/types";
 const ADD_STORAGE = "__add-storage__";
 const MANAGE_STORAGE = "__manage-storage__";
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
 export interface ConnectionSwitcherProps {
   connections: Connection[];
   currentId: string | null;
@@ -41,7 +45,7 @@ export function ConnectionSwitcher({
           onAddStorage();
         } else if (value === MANAGE_STORAGE) {
           onManageStorage();
-        } else if (typeof value === "string") {
+        } else if (isStringValue(value)) {
           onSwitch(value);
         }
       }}

@@ -89,7 +89,11 @@ async function main(): Promise<number> {
   // shut down a `bun run tauri dev` you already have open. vite.config.ts reads
   // LOPLOAD_VITE_PORT (strictPort would otherwise make the collision fatal), and
   // Tauri needs its devUrl pointed at the same place.
-  const env: Record<string, string> = {
+  const env = {
+    // SAFETY: Bun.spawn's `env` option requires string values with no
+    // `undefined`; any env var actually unset is simply absent from
+    // process.env, not present with an undefined value, so this reflects
+    // the real runtime shape.
     ...(process.env as Record<string, string>),
     LOPLOAD_VITE_PORT: String(SELFTEST_PORT),
     VITE_LOPLOAD_SELFTEST: "1",
@@ -99,7 +103,7 @@ async function main(): Promise<number> {
     VITE_LOPLOAD_SELFTEST_ACCESS_KEY: bucket.credentials.accessKey,
     VITE_LOPLOAD_SELFTEST_SECRET_KEY: bucket.credentials.secretKey,
     VITE_LOPLOAD_SELFTEST_PREFIX: bucket.prefix,
-  };
+  } satisfies Record<string, string>;
 
   console.log(`selftest: launching \`bunx tauri dev\` on port ${SELFTEST_PORT}...`);
   const proc = Bun.spawn({

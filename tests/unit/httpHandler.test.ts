@@ -4,6 +4,8 @@ import { InjectedFetchHttpHandler } from "../../src/lib/s3/http-handler";
 import { addLogSink, type LogLevel } from "../../src/lib/logger";
 
 function baseRequest(overrides: Partial<HttpRequest> = {}): HttpRequest {
+  // SAFETY: these fields are every property InjectedFetchHttpHandler.handle
+  // actually reads off HttpRequest; overrides only ever narrows one further.
   return {
     protocol: "https:",
     hostname: "s3.example.com",
@@ -16,8 +18,18 @@ function baseRequest(overrides: Partial<HttpRequest> = {}): HttpRequest {
   } as HttpRequest;
 }
 
-function captureLogs(): { lines: { level: LogLevel; module: string; msg: string }[] } {
-  const lines: { level: LogLevel; module: string; msg: string }[] = [];
+interface CapturedLogLine {
+  level: LogLevel;
+  module: string;
+  msg: string;
+}
+
+interface CapturedLogs {
+  lines: CapturedLogLine[];
+}
+
+function captureLogs(): CapturedLogs {
+  const lines: CapturedLogLine[] = [];
   addLogSink((level, module, msg) => {
     if (module === "http-handler") lines.push({ level, module, msg });
   });

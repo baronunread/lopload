@@ -268,6 +268,20 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
     abortSignal?: AbortSignal;
   }
 
+  type FakeCommand =
+    | CreateMultipartUploadCommand
+    | ListPartsCommand
+    | UploadPartCommand
+    | CompleteMultipartUploadCommand
+    | HeadObjectCommand;
+
+  interface FakeSendOutput {
+    UploadId?: string;
+    Parts?: { PartNumber: number; ETag: string; Size: number }[];
+    ETag?: string;
+    ContentLength?: number;
+  }
+
   function makeFakeClient(handlers: {
     onUploadPart: (
       input: { PartNumber?: number },
@@ -279,8 +293,12 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
     }) => void;
     head?: { ETag: string; ContentLength: number };
   }): S3Client {
+    // SAFETY: this fake only ever needs to satisfy the `send` method
+    // multipart.ts actually calls; bridging the object literal through
+    // `unknown` is the standard way to stand a plain object in for a class
+    // with private fields (S3Client) that a structural type can't match.
     return {
-      async send(command: unknown, opts?: FakeSendOptions): Promise<unknown> {
+      async send(command: FakeCommand, opts?: FakeSendOptions): Promise<FakeSendOutput> {
         if (command instanceof CreateMultipartUploadCommand) {
           return { UploadId: uploadId };
         }
@@ -378,14 +396,14 @@ describe("uploadTransfer — parallel multipart (partsInFlight)", () => {
 
   test("CompleteMultipartUpload gets parts sorted by PartNumber despite out-of-order completion", async () => {
     // Part 1 finishes last, part 3 first.
-    const delays: Record<number, number> = { 1: 20, 2: 10, 3: 0 };
+    const delays = new Map([[1, 20], [2, 10], [3, 0]]);
     const completedOrder: number[] = [];
     let completeParts: { PartNumber?: number; ETag?: string }[] | undefined;
 
     const fake = makeFakeClient({
       onUploadPart: async (input) => {
         const n = input.PartNumber ?? 0;
-        await new Promise((r) => setTimeout(r, delays[n]));
+        await new Promise((r) => setTimeout(r, delays.get(n)));
         completedOrder.push(n);
         return { ETag: `"${partEtagHex(n)}"` };
       },

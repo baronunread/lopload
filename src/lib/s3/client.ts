@@ -420,10 +420,10 @@ async function deleteKeys(client: S3Client, bucket: string, keys: string[]): Pro
  * they can re-check their own condition. Used by the two page-streaming
  * functions below to let their worker pools block on "no work queued yet,
  * but the listing generator isn't done" without polling. */
-function createSignal(): { wait(): Promise<void>; notifyAll(): void } {
+function createSignal() {
   const waiters: Array<() => void> = [];
   return {
-    wait: () => new Promise((resolve) => waiters.push(resolve)),
+    wait: () => new Promise<void>((resolve) => waiters.push(resolve)),
     notifyAll: () => {
       while (waiters.length > 0) waiters.shift()!();
     },

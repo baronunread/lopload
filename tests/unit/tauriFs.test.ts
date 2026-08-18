@@ -7,8 +7,8 @@ import { describe, expect, mock, test } from "bun:test";
 
 const order: string[] = [];
 
-const invoke = mock(async (cmd: string, payload?: unknown): Promise<unknown> => {
-  order.push(`invoke:${cmd}:${JSON.stringify(payload)}`);
+const invoke = mock(async <T,>(cmd: string, cause?: unknown): Promise<T | undefined> => {
+  order.push(`invoke:${cmd}:${JSON.stringify(cause)}`);
   return undefined;
 });
 const writeFile = mock(async (path: string) => {

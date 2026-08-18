@@ -10,7 +10,14 @@ const PARTS_IN_FLIGHT_OPTIONS = range(1, 16);
 const DOWNLOAD_CONNECTIONS_OPTIONS = range(1, 16);
 const PART_SIZE_OPTIONS = [8, 16, 32, 64];
 
-const PRESET_LABELS: Record<TransferPreset, string> = {
+interface PresetLabels {
+  slow: string;
+  normal: string;
+  fast: string;
+  custom: string;
+}
+
+const PRESET_LABELS: PresetLabels = {
   slow: "Slow",
   normal: "Normal",
   fast: "Fast",
@@ -26,8 +33,8 @@ export type TuningKnob =
 export interface TransfersPaneProps {
   tuning: TransferTuning;
   currentPreset: TransferPreset;
-  onPresetChange: (value: unknown) => void;
-  onKnobChange: (knob: TuningKnob, value: unknown) => void;
+  onPresetChange: (value: TransferPreset) => void;
+  onKnobChange: (knob: TuningKnob, value: number) => void;
 }
 
 interface TuningFieldProps {
@@ -37,14 +44,31 @@ interface TuningFieldProps {
   options: readonly number[];
   suffix?: string;
   help: string;
-  onKnobChange: (knob: TuningKnob, value: unknown) => void;
+  onKnobChange: (knob: TuningKnob, value: number) => void;
+}
+
+/** Kumo's Select hands onValueChange a raw `unknown` — this is the one
+ * point where that untyped external value gets validated before flowing
+ * into our own number-typed onKnobChange contract. */
+function isValidKnobValue(cause: unknown): cause is number {
+  return typeof cause === "number";
+}
+
+function isValidPresetValue(cause: unknown): cause is TransferPreset {
+  return cause === "slow" || cause === "normal" || cause === "fast" || cause === "custom";
 }
 
 function TuningField({ label, knob, value, options, suffix, help, onKnobChange }: TuningFieldProps) {
   return (
     <div>
       <p className="mb-1 text-sm text-kumo-default">{label}</p>
-      <Select aria-label={label} value={value} onValueChange={(v) => onKnobChange(knob, v)}>
+      <Select
+        aria-label={label}
+        value={value}
+        onValueChange={(v) => {
+          if (isValidKnobValue(v)) onKnobChange(knob, v);
+        }}
+      >
         {options.map((n) => (
           <Select.Option key={n} value={n}>
             {suffix ? `${n} ${suffix}` : n}
@@ -67,7 +91,13 @@ export function TransfersPane({
     <div className="flex flex-col gap-4">
       <div>
         <p className="mb-1 text-sm text-kumo-default">Transfer speed</p>
-        <Select aria-label="Transfer speed" value={currentPreset} onValueChange={onPresetChange}>
+        <Select
+          aria-label="Transfer speed"
+          value={currentPreset}
+          onValueChange={(v) => {
+            if (isValidPresetValue(v)) onPresetChange(v);
+          }}
+        >
           <Select.Option value="slow">{PRESET_LABELS.slow}</Select.Option>
           <Select.Option value="normal">{PRESET_LABELS.normal}</Select.Option>
           <Select.Option value="fast">{PRESET_LABELS.fast}</Select.Option>

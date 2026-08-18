@@ -90,11 +90,18 @@ export async function createNodeHost(): Promise<NodeHost> {
   const connections: ConnectionStore = new MemoryConnectionStore();
   const transfers: TransferStore = new MemoryTransferStore();
 
-  const settings = {
+  interface MutableSettings {
+    autoUpdate: boolean;
+    downloadDir: string | null;
+    tuning: TransferTuning;
+    lastConnectionId: string | null;
+  }
+
+  const settings: MutableSettings = {
     autoUpdate: true,
-    downloadDir: null as string | null,
-    tuning: DEFAULT_TUNING as TransferTuning,
-    lastConnectionId: null as string | null,
+    downloadDir: null,
+    tuning: DEFAULT_TUNING,
+    lastConnectionId: null,
   };
 
   const dropSubscribers = new Set<(paths: string[]) => void>();

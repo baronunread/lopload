@@ -43,8 +43,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
 function urlOf(input: Parameters<FetchFn>[0]): string {
-  if (typeof input === "string") return input;
+  if (isStringValue(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }

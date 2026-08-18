@@ -63,7 +63,7 @@ export async function getTransferTuning(): Promise<TransferTuning> {
   if (stored) return stored;
 
   const legacy = await store.get<number>(LEGACY_CONCURRENT_KEY);
-  if (typeof legacy === "number") {
+  if (legacy !== undefined) {
     const migrated = tuningFromLegacyConcurrency(legacy);
     await store.set(TUNING_KEY, migrated);
     return migrated;

@@ -20,10 +20,18 @@ import {
 } from "./s3/multipart";
 import { downloadTransfer, type LocalFileWriter } from "./s3/download";
 
-export const STATE_TRANSITIONS: Record<
-  TransferState["kind"],
-  TransferState["kind"][]
-> = {
+type TransferStateKind = TransferState["kind"];
+
+interface StateTransitions {
+  queued: TransferStateKind[];
+  sending: TransferStateKind[];
+  checking: TransferStateKind[];
+  uploaded: TransferStateKind[];
+  downloaded: TransferStateKind[];
+  failed: TransferStateKind[];
+}
+
+export const STATE_TRANSITIONS: StateTransitions = {
   queued: ["sending", "failed"],
   sending: ["sending", "checking", "failed"],
   checking: ["uploaded", "downloaded", "failed"],

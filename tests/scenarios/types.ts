@@ -19,11 +19,11 @@ import type { HostControl, HostRecord } from "../support/nodeHost";
 
 /** Minimal assertion surface, so scenarios don't bind to a test runner. */
 export interface Expect {
-  (actual: unknown): {
-    toBe(expected: unknown): void;
-    toEqual(expected: unknown): void;
+  <T>(actual: T): {
+    toBe(expected: T): void;
+    toEqual(expected: T): void;
     toBeNull(): void;
-    toContain(expected: unknown): void;
+    toContain<U>(expected: U): void;
     toBeGreaterThan(expected: number): void;
   };
 }

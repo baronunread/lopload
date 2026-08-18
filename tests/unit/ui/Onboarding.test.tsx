@@ -46,7 +46,7 @@ describe("Onboarding", () => {
 
       await user.click(screen.getByRole("button", { name: "Start browsing" }));
       expect(done).not.toBeNull();
-      expect((done as unknown as Connection).name).toBe("Videos");
+      expect(done?.name).toBe("Videos");
     } finally {
       await harness.dispose();
     }

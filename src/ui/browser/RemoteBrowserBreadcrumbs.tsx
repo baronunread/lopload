@@ -32,10 +32,12 @@ const BREADCRUMB_COLLAPSE_THRESHOLD = 3;
 /** Splits path segments into the ones a collapsed breadcrumb trail hides
  * behind "…" and the ones it still shows (Home is rendered separately by
  * the caller and isn't part of either list). */
-function splitBreadcrumbSegments(segments: string[]): {
+interface BreadcrumbSegments {
   hidden: string[];
   visible: string[];
-} {
+}
+
+function splitBreadcrumbSegments(segments: string[]): BreadcrumbSegments {
   if (segments.length <= BREADCRUMB_COLLAPSE_THRESHOLD) {
     return { hidden: [], visible: segments };
   }

@@ -52,7 +52,7 @@ const log = createLogger("host");
  * member of the Host below needs that webview, so this is the guard that says
  * whether createTauriHost() can be called at all. */
 export function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return "window" in globalThis && "__TAURI_INTERNALS__" in window;
 }
 
 export function createTauriHost(): Host {

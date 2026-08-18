@@ -33,7 +33,7 @@ interface Reply {
  * so tests can drive it without bun's process-wide `mock.module` — see
  * tests/unit/tauriHttp.test.ts. */
 export interface TauriFetchDeps {
-  invoke: (cmd: string, payload?: InvokeArgs, options?: InvokeOptions) => Promise<unknown>;
+  invoke: <T>(cmd: string, payload?: InvokeArgs, options?: InvokeOptions) => Promise<T>;
   /** plugin-http's fetch, for every request without a byte body to send. */
   fetch: FetchFn;
 }
@@ -81,14 +81,14 @@ async function sendBytes(
     // The body is the entire invoke argument (Tauri's raw-bytes path); the rest
     // of the request rides along as headers, percent-encoded because HTTP
     // headers are ASCII-only and URLs and signatures are not.
-    const reply = (await deps.invoke("http_send", body, {
+    const reply = await deps.invoke<Reply>("http_send", body, {
       headers: {
         "x-request-id": String(id),
         "x-method": init.method ?? "PUT",
         "x-url": encodeURIComponent(url),
         "x-headers": encodeURIComponent(JSON.stringify(headers)),
       },
-    })) as Reply;
+    });
     return new Response(reply.body.length > 0 ? new Uint8Array(reply.body) : null, {
       status: reply.status,
       statusText: reply.statusText,

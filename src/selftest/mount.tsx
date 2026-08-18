@@ -96,7 +96,11 @@ function report(line: string): void {
   });
 }
 
-function stringify(value: unknown): string {
+function isObjectValue(cause: unknown): cause is object {
+  return typeof cause === "object" && cause !== null;
+}
+
+function stringify<T>(value: T): string {
   try {
     return JSON.stringify(value);
   } catch {
@@ -104,18 +108,20 @@ function stringify(value: unknown): string {
   }
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
+function deepEqual<T>(a: T, b: T): boolean {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
   }
-  if (a && b && typeof a === "object" && typeof b === "object") {
-    const ak = Object.keys(a as Record<string, unknown>);
-    const bk = Object.keys(b as Record<string, unknown>);
-    if (ak.length !== bk.length) return false;
-    return ak.every((k) =>
-      deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-    );
+  if (isObjectValue(a) && isObjectValue(b)) {
+    // SAFETY: both narrowed to plain objects above; comparing arbitrary
+    // test values by key needs a dynamic per-entry walk rather than a
+    // concrete shape.
+    const aEntries = Object.entries(a) as [string, unknown][];
+    // SAFETY: same as above — Object.entries always returns [string, T[keyof T]] pairs.
+    const bValues = new Map(Object.entries(b) as [string, unknown][]);
+    if (aEntries.length !== bValues.size) return false;
+    return aEntries.every(([k, v]) => bValues.has(k) && deepEqual(v, bValues.get(k)));
   }
   return false;
 }
@@ -123,7 +129,15 @@ function deepEqual(a: unknown, b: unknown): boolean {
 /** The Expect implementation ScenarioCtx needs. Deliberately tiny — scenarios
  * only use a handful of matchers (see tests/scenarios/types.ts), and this
  * has to have zero dependency on bun:test, which doesn't exist in a webview. */
-const expect: Expect = (actual: unknown) => ({
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
+function isNumberValue(cause: unknown): cause is number {
+  return typeof cause === "number";
+}
+
+const expect: Expect = (actual) => ({
   toBe(expected) {
     if (!Object.is(actual, expected)) {
       throw new Error(`expected ${stringify(actual)} to be ${stringify(expected)}`);
@@ -138,14 +152,13 @@ const expect: Expect = (actual: unknown) => ({
     if (actual !== null) throw new Error(`expected ${stringify(actual)} to be null`);
   },
   toContain(expected) {
-    const ok =
-      typeof actual === "string"
-        ? actual.includes(String(expected))
-        : Array.isArray(actual) && actual.includes(expected);
+    const ok = isStringValue(actual)
+      ? actual.includes(String(expected))
+      : Array.isArray(actual) && actual.includes(expected);
     if (!ok) throw new Error(`expected ${stringify(actual)} to contain ${stringify(expected)}`);
   },
   toBeGreaterThan(expected) {
-    if (!(typeof actual === "number" && actual > expected)) {
+    if (!(isNumberValue(actual) && actual > expected)) {
       throw new Error(`expected ${stringify(actual)} to be greater than ${expected}`);
     }
   },
@@ -194,7 +207,13 @@ function resetRecord(record: HostRecord): void {
 /** Builds the self-test Host: createTauriHost(), dialogs scripted, everything
  * else the real thing (see the module comment for why each piece is shaped
  * this way). */
-function buildHost(): { host: Host; control: HostControl; record: HostRecord } {
+interface BuiltHost {
+  host: Host;
+  control: HostControl;
+  record: HostRecord;
+}
+
+function buildHost(): BuiltHost {
   const base = createTauriHost();
   const record = emptyRecord();
   const dropSubscribers = new Set<(paths: string[]) => void>();
@@ -406,7 +425,7 @@ async function runScenario(
       waitFor,
       async makeLocalFile(name, bytes) {
         const path = `${workdir}/${name}`;
-        const data = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
+        const data = isStringValue(bytes) ? new TextEncoder().encode(bytes) : bytes;
         await writeFile(path, data);
         return path;
       },

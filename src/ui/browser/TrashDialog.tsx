@@ -70,6 +70,20 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 
+  // A folder move-to-trash started just before this dialog opened (e.g. right
+  // after the optimistic row removal in RemoteBrowser) can still be copying
+  // when refresh() above fires, so the initial listing misses it entirely —
+  // there's no polling to ever pick it up otherwise. Re-list once that move
+  // finishes so the row appears without the user having to close and reopen.
+  useEffect(() => {
+    return services.browser.subscribeMoves((event) => {
+      if (event.connectionId === connectionId && event.kind === "trash" && event.status === "completed") {
+        void refresh();
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId]);
+
   const lastPendingRef = useRef<PendingAction | null>(null);
   const dialogPending = pending ?? lastPendingRef.current;
 

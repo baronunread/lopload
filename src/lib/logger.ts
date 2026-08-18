@@ -9,7 +9,14 @@ export interface Logger {
 
 export type LogSink = (level: LogLevel, module: string, msg: string, args: unknown[]) => void;
 
-const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+interface LevelOrder {
+  debug: number;
+  info: number;
+  warn: number;
+  error: number;
+}
+
+const LEVEL_ORDER: LevelOrder = { debug: 0, info: 1, warn: 2, error: 3 };
 
 // Below this level, lines skip the console but still reach every sink (the
 // file log keeps full detail). Tests raise it to "warn": the suite makes

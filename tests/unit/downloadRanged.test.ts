@@ -26,8 +26,12 @@ function clientWith(fetchFn: FetchFn = nativeFetch) {
   return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
 function urlOf(input: Parameters<FetchFn>[0]): string {
-  if (typeof input === "string") return input;
+  if (isStringValue(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }
@@ -100,7 +104,12 @@ function trackedWriter() {
 
 /** Captures the Range header of every GET matching `key`, letting the
  * request through to real storage unmodified. */
-function captureRanges(inner: FetchFn, key: string): { fetchFn: FetchFn; ranges: string[] } {
+interface CapturedRanges {
+  fetchFn: FetchFn;
+  ranges: string[];
+}
+
+function captureRanges(inner: FetchFn, key: string): CapturedRanges {
   const ranges: string[] = [];
   const fetchFn: FetchFn = async (input, init) => {
     const url = urlOf(input);
@@ -116,7 +125,12 @@ function captureRanges(inner: FetchFn, key: string): { fetchFn: FetchFn; ranges:
 
 /** Records every request's method + URL, matching `key` — used to assert a
  * request kind (e.g. HEAD) never happened. */
-function captureRequests(inner: FetchFn, key: string): { fetchFn: FetchFn; requests: string[] } {
+interface CapturedRequests {
+  fetchFn: FetchFn;
+  requests: string[];
+}
+
+function captureRequests(inner: FetchFn, key: string): CapturedRequests {
   const requests: string[] = [];
   const fetchFn: FetchFn = async (input, init) => {
     const url = urlOf(input);
@@ -130,11 +144,16 @@ function captureRequests(inner: FetchFn, key: string): { fetchFn: FetchFn; reque
 /** Delays every matching GET by `delayMs` while tracking how many are ever
  * concurrently in flight — the real-backend equivalent of the old mock's
  * inline concurrency counter. */
+interface ConcurrencyTrackingDelay {
+  fetchFn: FetchFn;
+  maxInFlight: () => number;
+}
+
 function concurrencyTrackingDelay(
   inner: FetchFn,
   key: string,
   delayMs: number,
-): { fetchFn: FetchFn; maxInFlight: () => number } {
+): ConcurrencyTrackingDelay {
   let inFlight = 0;
   let maxInFlight = 0;
   const fetchFn: FetchFn = async (input, init) => {
@@ -499,12 +518,13 @@ describe("downloadTransfer — ranged parallel path", () => {
     })();
     controller.abort();
 
-    const err = await done.then(
+    const err: unknown = await done.then(
       () => null,
-      (e: unknown) => e,
+      (cause: unknown) => cause,
     );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("AbortError");
+    if (!(err instanceof Error)) throw err;
+    expect(err.name).toBe("AbortError");
 
     // Temp file kept for resume; nothing committed or discarded.
     expect(discarded).toHaveLength(0);
