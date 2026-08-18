@@ -8,6 +8,7 @@ import { Toasty } from "@cloudflare/kumo";
 import { SetupForm } from "../../../src/ui/SetupForm";
 import { ServicesProvider } from "../../../src/ui/services";
 import { createServiceHarness, type ServiceHarness } from "../../support/serviceHarness";
+import type { Connection } from "../../../src/lib/types";
 
 afterEach(cleanup);
 
@@ -120,7 +121,7 @@ describe("SetupForm", () => {
   test("saving calls onSaved with the new connection", async () => {
     const harness = await createServiceHarness();
     const user = userEvent.setup();
-    let saved: unknown = null;
+    let saved: Connection | null = null;
     try {
       render(
         <Toasty>

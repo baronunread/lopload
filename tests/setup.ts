@@ -17,6 +17,9 @@ setConsoleLogLevel("warn");
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { expect } from "bun:test";
 
+// SAFETY: @testing-library/jest-dom's matchers are written against Jest's
+// expect.extend shape, which bun:test's is deliberately compatible with at
+// runtime even though the two packages' types don't structurally align.
 expect.extend(matchers as Parameters<typeof expect.extend>[0]);
 
 // happy-dom never runs real layout, so every element's offsetHeight/offsetWidth

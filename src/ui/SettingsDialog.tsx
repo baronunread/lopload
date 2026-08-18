@@ -4,7 +4,7 @@ import { XIcon } from "@phosphor-icons/react";
 import { useServices } from "./services";
 import { useAutoUpdateContext } from "./AutoUpdateContext";
 import { isPortable } from "../tauri/isPortable";
-import type { TransferTuning } from "../lib/types";
+import type { TransferPreset, TransferTuning } from "../lib/types";
 import { DEFAULT_TUNING, PRESETS, presetMatching } from "./settings/presets";
 import { GeneralPane } from "./settings/GeneralPane";
 import { TransfersPane, type TuningKnob } from "./settings/TransfersPane";
@@ -90,13 +90,12 @@ export function SettingsDialog({ onClose, connectionId }: SettingsDialogProps) {
     await services.settings.setTransferTuning(next);
   }
 
-  async function handlePresetChange(value: unknown) {
+  async function handlePresetChange(value: TransferPreset) {
     if (value !== "slow" && value !== "normal" && value !== "fast") return;
     await saveTuning(PRESETS[value]);
   }
 
-  async function handleKnobChange(knob: TuningKnob, value: unknown) {
-    if (typeof value !== "number") return;
+  async function handleKnobChange(knob: TuningKnob, value: number) {
     const knobs = { ...tuning, [knob]: value };
     await saveTuning({ ...knobs, preset: presetMatching(knobs) });
   }

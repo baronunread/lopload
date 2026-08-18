@@ -108,7 +108,13 @@ export function usingRemoteStorage(): boolean {
   return remoteConfig() !== null;
 }
 
-function docker(...args: string[]): { status: number; stdout: string; stderr: string } {
+interface DockerResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+function docker(...args: string[]): DockerResult {
   const res = spawnSync("docker", args, { encoding: "utf-8" });
   return { status: res.status ?? 1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }

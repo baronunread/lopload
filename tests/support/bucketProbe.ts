@@ -37,6 +37,10 @@ export interface BucketProbe {
  *   stays correct under both, and cannot reach outside its prefix even by
  *   mistake.
  */
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
 export function bucketProbe(client: S3Client, bucket: string, scope = ""): BucketProbe {
   const scoped = (key: string) => `${scope}${key}`;
 
@@ -46,7 +50,7 @@ export function bucketProbe(client: S3Client, bucket: string, scope = ""): Bucke
         new PutObjectCommand({
           Bucket: bucket,
           Key: scoped(key),
-          Body: typeof body === "string" ? new TextEncoder().encode(body) : body,
+          Body: isStringValue(body) ? new TextEncoder().encode(body) : body,
         }),
       );
     },

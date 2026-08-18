@@ -213,6 +213,8 @@ export const folderAndTrashScenarios: Scenario[] = [
         expect(screen.queryByText("bulkcap-00.txt") !== null).toBe(true);
       });
 
+      // SAFETY: rowFor is only ever called with a filename already asserted
+      // present on screen, so the .closest("tr") match is always a real row.
       const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
       fireEvent.click(rowFor("bulkcap-00.txt"));
       fireEvent.click(rowFor("bulkcap-11.txt"), { shiftKey: true }); // selects all 12

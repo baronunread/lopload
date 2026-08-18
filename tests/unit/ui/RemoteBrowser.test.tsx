@@ -68,6 +68,21 @@ function renderBrowser(harness: ServiceHarness) {
   );
 }
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
+function asElement(node: Element | null): HTMLElement {
+  // SAFETY: every call site queries a fixture the test just rendered and
+  // asserted the presence of (via a preceding findByText/querySelector on a
+  // known row/container), so the match is always a real element.
+  return node as HTMLElement;
+}
+
+function rowFor(name: string): HTMLElement {
+  return asElement(screen.getByText(name).closest("tr"));
+}
+
 async function currentLastPrefix(harness: ServiceHarness): Promise<string | undefined> {
   const list = await harness.services.connections.list();
   return list.find((c) => c.id === CONN)?.lastPrefix;
@@ -277,7 +292,6 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
       // Before any menu is open, idle rows carry the plain hover class.
       expect(rowFor("a.txt").className).toContain("hover:bg-kumo-tint");
@@ -315,8 +329,7 @@ describe("RemoteBrowser", () => {
       const { container } = renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
-      const background = container.querySelector(".relative.flex.h-full") as HTMLElement;
+      const background = asElement(container.querySelector(".relative.flex.h-full"));
 
       fireEvent.contextMenu(background);
       const menu = await screen.findByRole("menu");
@@ -410,12 +423,7 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("readme.txt");
 
-      const fileRow = screen.getByText("readme.txt").closest("tr");
-      const folderRow = screen.getByText("photos").closest("tr");
-      expect(fileRow).toBeTruthy();
-      expect(folderRow).toBeTruthy();
-
-      dragRowTo(fileRow as HTMLElement, folderRow as HTMLElement);
+      dragRowTo(rowFor("readme.txt"), rowFor("photos"));
 
       await waitFor(async () => {
         expect(await harness.bucket.has("photos/readme.txt")).toBe(true);
@@ -437,7 +445,6 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
       // Select a.txt, then shift-click c.txt: selects a, b, c (not "photos").
       fireEvent.click(rowFor("a.txt"));
@@ -466,7 +473,6 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
       // cmd-click both a.txt and b.txt into the selection.
       fireEvent.click(rowFor("a.txt"));
@@ -498,7 +504,6 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
       fireEvent.click(rowFor("a.txt"));
       fireEvent.click(rowFor("c.txt"), { shiftKey: true }); // selects a, b, c
@@ -533,7 +538,6 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
       fireEvent.click(rowFor("photos"));
       fireEvent.click(rowFor("a.txt"), { metaKey: true });
@@ -654,10 +658,8 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt");
 
-      fireEvent.click(screen.getByText("a.txt").closest("tr") as HTMLElement);
-      expect((screen.getByText("a.txt").closest("tr") as HTMLElement).className).toContain(
-        "bg-kumo-brand",
-      );
+      fireEvent.click(rowFor("a.txt"));
+      expect(rowFor("a.txt").className).toContain("bg-kumo-brand");
 
       const filterInput = screen.getByLabelText("Filter this folder");
       await user.type(filterInput, "b.txt");
@@ -671,20 +673,14 @@ describe("RemoteBrowser", () => {
       await screen.findByText("a.txt");
       expect(filterInput).toHaveValue("");
 
-      dragRowTo(
-        screen.getByText("a.txt").closest("tr") as HTMLElement,
-        screen.getByText("photos").closest("tr") as HTMLElement,
-      );
+      dragRowTo(rowFor("a.txt"), rowFor("photos"));
 
       await waitFor(async () => expect(await harness.bucket.has("photos/a.txt")).toBe(true));
 
       // A second Escape (filter already empty) clears the selection.
-      fireEvent.click(screen.getByText("b.txt").closest("tr") as HTMLElement);
+      fireEvent.click(rowFor("b.txt"));
       fireEvent.keyDown(document, { key: "Escape" });
-      dragRowTo(
-        screen.getByText("c.txt").closest("tr") as HTMLElement,
-        screen.getByText("photos").closest("tr") as HTMLElement,
-      );
+      dragRowTo(rowFor("c.txt"), rowFor("photos"));
 
       await waitFor(async () => expect(await harness.bucket.has("photos/c.txt")).toBe(true));
       expect(await harness.bucket.has("photos/b.txt")).toBe(false);
@@ -837,7 +833,7 @@ describe("RemoteBrowser", () => {
     });
     function wrapFetch(inner: FetchFn): FetchFn {
       return async (input, init) => {
-        const url = typeof input === "string" ? input : input.toString();
+        const url = isStringValue(input) ? input : input.toString();
         const method = (init?.method ?? "GET").toUpperCase();
         // "delimiter=" narrows this to the folder-browse listing (Delimiter:
         // "/" in listEntries) — the folder-info background effect also fires
@@ -878,7 +874,6 @@ describe("RemoteBrowser", () => {
       renderBrowser(harness);
       await screen.findByText("a.txt"); // list call #1 — not stalled
 
-      const rowFor = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
       // First mutation kicks off refreshSilently's list call #2, which this
       // test holds open until told to release it.

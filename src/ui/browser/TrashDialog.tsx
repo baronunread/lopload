@@ -42,6 +42,10 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
    * control since there's no per-row spinner for "everything at once". */
   const [emptyProgress, setEmptyProgress] = useState<CopyProgress | null>(null);
   const toasts = useKumoToastManager();
+  /** Bumped on every refresh() call so an older request that resolves after a
+   * newer one (e.g. the initial mount listing racing a move-completion
+   * refresh) can tell it's stale and skip writing to items/loading. */
+  const refreshGenerationRef = useRef(0);
 
   function setItemProgress(id: string, progress: CopyProgress | undefined): void {
     setRowProgress((prev) => {
@@ -56,17 +60,33 @@ export function TrashDialog({ connectionId, onClose, onRestored }: TrashDialogPr
   }
 
   async function refresh() {
+    const generation = ++refreshGenerationRef.current;
     setLoading(true);
     try {
       const result = await services.trash.list(connectionId);
+      if (generation !== refreshGenerationRef.current) return;
       setItems(result);
     } finally {
-      setLoading(false);
+      if (generation === refreshGenerationRef.current) setLoading(false);
     }
   }
 
   useEffect(() => {
     void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId]);
+
+  // A folder move-to-trash started just before this dialog opened (e.g. right
+  // after the optimistic row removal in RemoteBrowser) can still be copying
+  // when refresh() above fires, so the initial listing misses it entirely —
+  // there's no polling to ever pick it up otherwise. Re-list once that move
+  // finishes so the row appears without the user having to close and reopen.
+  useEffect(() => {
+    return services.browser.subscribeMoves((event) => {
+      if (event.connectionId === connectionId && event.kind === "trash" && event.status === "completed") {
+        void refresh();
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
 

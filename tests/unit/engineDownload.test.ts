@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { TransferEngine } from "../../src/lib/engine";
 import { MemoryTransferStore } from "../../src/lib/stores/memory";
 import type { LocalFileWriter } from "../../src/lib/s3/download";
-import type { EngineEvent, Transfer } from "../../src/lib/types";
+import type { EngineEvent } from "../../src/lib/types";
 import { DEFAULT_TUNING } from "../../src/lib/tuning";
 import { createS3Client } from "../../src/lib/s3/client";
 import type { FetchFn } from "../../src/lib/s3/http-handler";
@@ -29,8 +29,16 @@ function clientWith(fetchFn: FetchFn = nativeFetch) {
   return createS3Client(bucket.connection, bucket.credentials, fetchFn);
 }
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
+function isTransferUpdated(e: EngineEvent): e is Extract<EngineEvent, { type: "transfer-updated" }> {
+  return e.type === "transfer-updated";
+}
+
 function urlOf(input: Parameters<FetchFn>[0]): string {
-  if (typeof input === "string") return input;
+  if (isStringValue(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }
@@ -68,7 +76,12 @@ function hangUntilAborted(
 
 /** Wraps the real localFileWriter, recording every discard() call — so
  * cancel/dismiss cleanup can be asserted on without a fake in-memory writer. */
-function instrumentedWriter(): { writer: LocalFileWriter; discarded: string[] } {
+interface InstrumentedWriter {
+  writer: LocalFileWriter;
+  discarded: string[];
+}
+
+function instrumentedWriter(): InstrumentedWriter {
   const discarded: string[] = [];
   const writer: LocalFileWriter = {
     ...localFileWriter,
@@ -126,9 +139,7 @@ describe("TransferEngine — download state machine", () => {
     expect(persisted?.state).toEqual({ kind: "downloaded" });
     expect(persisted?.direction).toBe("download");
 
-    const seenKinds = events
-      .filter((e) => e.type === "transfer-updated")
-      .map((e) => (e as { transfer: { state: { kind: string } } }).transfer.state.kind);
+    const seenKinds = events.filter(isTransferUpdated).map((e) => e.transfer.state.kind);
     expect(seenKinds[0]).toBe("queued");
     expect(seenKinds).toContain("sending");
     expect(seenKinds).toContain("checking");

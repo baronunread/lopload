@@ -52,7 +52,7 @@ describe("expandDroppedPaths", () => {
   });
 
   test("a dropped folder expands to its files, prefixed by the folder name", async () => {
-    const tree: Record<string, DropDirEntry[]> = {
+    const tree = {
       "/drop/Vacation": [
         { name: "beach.jpg", isDirectory: false },
         { name: "clips", isDirectory: true },
@@ -94,7 +94,7 @@ describe("expandDroppedPaths", () => {
   });
 
   test("mixes loose files and folders dropped together", async () => {
-    const tree: Record<string, DropDirEntry[]> = {
+    const tree = {
       "/drop/Docs": [{ name: "readme.txt", isDirectory: false }],
     };
     const sizes = {
@@ -122,7 +122,7 @@ describe("expandDroppedPaths", () => {
   });
 
   test("recurses through nested empty subdirectories without producing entries for them", async () => {
-    const tree: Record<string, DropDirEntry[]> = {
+    const tree = {
       "/drop/Empty": [{ name: "sub", isDirectory: true }],
       "/drop/Empty/sub": [],
     };
@@ -136,7 +136,7 @@ describe("expandDroppedPaths", () => {
   });
 
   test("filters out OS junk files like .DS_Store at any depth", async () => {
-    const tree: Record<string, DropDirEntry[]> = {
+    const tree = {
       "/drop/Photos": [
         { name: ".DS_Store", isDirectory: false },
         { name: "cat.jpg", isDirectory: false },
@@ -175,7 +175,7 @@ describe("expandDroppedPaths", () => {
   });
 
   test("an unreadable file is skipped without failing the rest of the batch", async () => {
-    const tree: Record<string, DropDirEntry[]> = {
+    const tree = {
       "/drop/Mixed": [
         { name: "ok.txt", isDirectory: false },
         { name: "broken.txt", isDirectory: false },
@@ -201,7 +201,7 @@ describe("expandDroppedPaths", () => {
   });
 
   test("an unreadable subdirectory is skipped without failing sibling files", async () => {
-    const tree: Record<string, DropDirEntry[]> = {
+    const tree = {
       "/drop/Root": [
         { name: "file.txt", isDirectory: false },
         { name: "locked", isDirectory: true },

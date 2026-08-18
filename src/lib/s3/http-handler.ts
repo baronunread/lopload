@@ -24,17 +24,8 @@ export type FetchFn = (
 ) => Promise<Response>;
 
 function buildAbortError(abortSignal?: AbortSignal): Error {
-  const reason =
-    abortSignal && typeof abortSignal === "object" && "reason" in abortSignal
-      ? (abortSignal as { reason?: unknown }).reason
-      : undefined;
-  if (reason instanceof Error) {
-    const abortError = new Error("Request aborted");
-    abortError.name = "AbortError";
-    (abortError as { cause?: unknown }).cause = reason;
-    return abortError;
-  }
-  const abortError = new Error("Request aborted");
+  const reason = abortSignal?.reason;
+  const abortError = new Error("Request aborted", reason instanceof Error ? { cause: reason } : undefined);
   abortError.name = "AbortError";
   return abortError;
 }
@@ -66,8 +57,9 @@ export class InjectedFetchHttpHandler
     request: HttpRequest,
     options: HttpHandlerOptions = {},
   ): Promise<{ response: HttpResponse }> {
-    // @smithy/types unions AbortSignal with a deprecated internal interface
-    // of the same shape; at runtime it's always the real platform AbortSignal.
+    // SAFETY: @smithy/types unions AbortSignal with a deprecated internal
+    // interface of the same shape; at runtime it's always the real platform
+    // AbortSignal.
     const abortSignal = options.abortSignal as AbortSignal | undefined;
     const requestTimeoutMs = options.requestTimeout;
     if (abortSignal?.aborted) {
@@ -148,11 +140,11 @@ export class InjectedFetchHttpHandler
     return Promise.race([doFetch, requestTimeout(timeoutMs)]);
   }
 
-  updateHttpClientConfig(
-    key: keyof FetchHttpHandlerOptions,
-    value: FetchHttpHandlerOptions[typeof key],
+  updateHttpClientConfig<K extends keyof FetchHttpHandlerOptions>(
+    key: K,
+    value: FetchHttpHandlerOptions[K],
   ): void {
-    (this.config as Record<string, unknown>)[key] = value;
+    this.config[key] = value;
   }
 
   httpHandlerConfigs(): FetchHttpHandlerOptions {

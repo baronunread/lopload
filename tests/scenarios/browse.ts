@@ -26,8 +26,12 @@ const LONG_PARENT =
 const LONG_CHILD =
   "[Anime Time] Neon Genesis Evangelion + The End of Evangelion [BD][1080p][HEVC 10bit x265]";
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
 function requestUrl(input: Parameters<FetchFn>[0]): string {
-  if (typeof input === "string") return input;
+  if (isStringValue(input)) return input;
   if (input instanceof URL) return input.toString();
   return input.url;
 }
@@ -141,6 +145,8 @@ export const browseScenarios: Scenario[] = [
 
       let firstSrc = "";
       await waitFor(() => {
+        // SAFETY: queryByAltText matches elements with an alt attribute,
+        // which only <img> renders in this app.
         const img = screen.queryByAltText("Preview of cat.png") as HTMLImageElement | null;
         expect(img !== null).toBe(true);
         firstSrc = img!.src;
@@ -166,6 +172,8 @@ export const browseScenarios: Scenario[] = [
       });
       await user.dblClick(screen.getByText("pics"));
       await waitFor(() => {
+        // SAFETY: queryByAltText matches elements with an alt attribute,
+        // which only <img> renders in this app.
         const img = screen.queryByAltText("Preview of cat.png") as HTMLImageElement | null;
         expect(img !== null).toBe(true);
         expect(img!.src).toBe(firstSrc);

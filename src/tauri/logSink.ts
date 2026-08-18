@@ -18,6 +18,14 @@ export interface LogEntry {
   mtime: number;
 }
 
+interface LogFileEntry {
+  timestamp: string;
+  level: string;
+  module: string;
+  msg: string;
+  args?: unknown[];
+}
+
 /**
  * Pure "which files to delete" decision, split out from the directory I/O
  * below so it can be unit tested without a real filesystem. Always keeps
@@ -99,13 +107,14 @@ export async function initFileLogSink(): Promise<void> {
   // actually matters. Console still gets everything, for local dev.
   addLogSink((level, module, msg, args) => {
     if (level === "debug" || !logPath) return;
-    const line = JSON.stringify({
+    const entry: LogFileEntry = {
       timestamp: new Date().toISOString(),
       level: level.toUpperCase(),
       module,
       msg,
-      ...(args.length ? { args } : {}),
-    }) + "\n";
+    };
+    if (args.length) entry.args = args;
+    const line = JSON.stringify(entry) + "\n";
     writeTextFile(logPath, line, { append: true }).catch(() => {});
   });
 

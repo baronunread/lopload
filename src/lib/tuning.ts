@@ -27,7 +27,13 @@ const FAST: TuningKnobs = {
   partSizeMiB: 8,
 };
 
-export const PRESETS: Record<Exclude<TransferPreset, "custom">, TransferTuning> = {
+interface TuningPresets {
+  slow: TransferTuning;
+  normal: TransferTuning;
+  fast: TransferTuning;
+}
+
+export const PRESETS: TuningPresets = {
   slow: { preset: "slow", ...SLOW },
   normal: { preset: "normal", ...NORMAL },
   fast: { preset: "fast", ...FAST },

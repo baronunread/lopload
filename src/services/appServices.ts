@@ -92,6 +92,13 @@ function renameKey(fromKey: string, newName: string): string {
   return folder ? `${parent}${newName}/` : `${parent}${newName}`;
 }
 
+interface TrayAggregate {
+  uploading: number;
+  totalBytes: number;
+  doneBytes: number;
+  failed: number;
+}
+
 class LoploadServices implements AppServices {
   constructor(private readonly host: Host) {}
 
@@ -227,12 +234,7 @@ class LoploadServices implements AppServices {
   /** Tallies in-flight/failed transfers across every connection's engine —
    * shared by the tray tooltip (updateTrayProgress) and the tray menu status
    * line/Quit label/failure icon (updateTrayStatus). */
-  private computeTrayAggregate(): {
-    uploading: number;
-    totalBytes: number;
-    doneBytes: number;
-    failed: number;
-  } {
+  private computeTrayAggregate(): TrayAggregate {
     let uploading = 0;
     let totalBytes = 0;
     let doneBytes = 0;

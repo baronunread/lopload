@@ -15,12 +15,18 @@
 // them. The filter is deliberately narrow — it matches only this one message,
 // and every other console.error still goes straight through, so a genuine
 // React error (a bad hook call, a render crash) is as loud as ever.
+// SAFETY: IS_REACT_ACT_ENVIRONMENT is a React Testing Library convention, not
+// a declared global — this is the documented way to set it.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
 
 const ACT_WARNING = "was not wrapped in act";
 const realError = console.error.bind(console);
 
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
 console.error = (...args: unknown[]) => {
-  if (typeof args[0] === "string" && args[0].includes(ACT_WARNING)) return;
+  if (isStringValue(args[0]) && args[0].includes(ACT_WARNING)) return;
   realError(...args);
 };

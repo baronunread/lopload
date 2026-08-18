@@ -2,26 +2,37 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { createTauriFetch, type TauriFetchDeps } from "../../src/tauri/http";
 
-type InvokeOptions = { headers: Record<string, string> };
+interface InvokeOptions {
+  headers: Record<string, string>;
+}
+
+interface CancelPayload {
+  id: number;
+}
 
 const OK_REPLY = { status: 200, statusText: "OK", headers: [["etag", '"abc123"']], body: [] };
 
 // Injected rather than mock.module'd: bun's module mocks are process-wide and
 // would put this test at the mercy of file ordering across the whole suite.
-const invoke = mock(
-  async (_cmd: string, _payload?: unknown, _options?: InvokeOptions): Promise<unknown> => OK_REPLY,
-);
-const pluginFetch = mock(async (): Promise<Response> => new Response("from plugin-http"));
+//
+// SAFETY: `invoke<T>` is generic because it stands in for a Tauri command
+// whose reply shape depends on which command is called; this test double
+// always resolves with OK_REPLY (or whatever mockImplementation below
+// substitutes), so it's the caller's `invoke<Reply>("http_send", ...)` that
+// establishes the real contract being tested — the mock body itself doesn't
+// need to check `cmd` to pick a shape.
+const invoke: TauriFetchDeps["invoke"] = mock(async <T,>(): Promise<T> => OK_REPLY as T);
+const pluginFetch: TauriFetchDeps["fetch"] = mock(async () => new Response("from plugin-http"));
 
-const tauriFetch = createTauriFetch({
-  invoke,
-  fetch: pluginFetch as unknown as TauriFetchDeps["fetch"],
-});
+const tauriFetch = createTauriFetch({ invoke, fetch: pluginFetch });
 
-function lastCall(cmd: string): [string, unknown, InvokeOptions] | undefined {
-  return invoke.mock.calls.findLast((call) => call[0] === cmd) as
-    | [string, unknown, InvokeOptions]
-    | undefined;
+type InvokeCall = [string, unknown, InvokeOptions];
+
+function lastCall(cmd: string): InvokeCall | undefined {
+  // SAFETY: invoke.mock.calls records every argument tuple this test's
+  // `invoke` mock was called with; createTauriFetch always calls it as
+  // (cmd, payload, { headers }), matching InvokeCall.
+  return invoke.mock.calls.findLast((call) => call[0] === cmd) as InvokeCall | undefined;
 }
 
 describe("tauri/http", () => {
@@ -122,7 +133,10 @@ describe("tauri/http", () => {
       expect(cmd).toBe("http_cancel");
       // Rust keys its cancel registry by the id the send announced.
       const sent = lastCall("http_send");
-      expect((payload as { id: number }).id).toBe(Number(sent![2].headers["x-request-id"]));
+      // SAFETY: sendBytes's cancel callback always invokes http_cancel with
+      // exactly `{ id }` (src/tauri/http.ts).
+      const cancelPayload = payload as CancelPayload;
+      expect(cancelPayload.id).toBe(Number(sent![2].headers["x-request-id"]));
       failSend?.(new Error("http_send: request cancelled"));
       return undefined;
     });
@@ -135,9 +149,7 @@ describe("tauri/http", () => {
     });
     controller.abort();
 
-    await expect(pending).rejects.toThrow(
-      expect.objectContaining({ name: "AbortError" }) as unknown as Error,
-    );
+    await expect(pending).rejects.toThrow(expect.objectContaining({ name: "AbortError" }));
     expect(lastCall("http_cancel")).toBeDefined();
   });
 
@@ -148,9 +160,7 @@ describe("tauri/http", () => {
       signal: AbortSignal.abort(),
     });
 
-    await expect(pending).rejects.toThrow(
-      expect.objectContaining({ name: "AbortError" }) as unknown as Error,
-    );
+    await expect(pending).rejects.toThrow(expect.objectContaining({ name: "AbortError" }));
     expect(invoke).not.toHaveBeenCalled();
   });
 });

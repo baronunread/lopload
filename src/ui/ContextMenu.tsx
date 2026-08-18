@@ -42,6 +42,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
   useEffect(() => {
     function handlePointerDown(e: MouseEvent) {
+      // SAFETY: a MouseEvent's target is always a DOM Node in a browser/webview.
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     }
     function handleKey(e: KeyboardEvent) {

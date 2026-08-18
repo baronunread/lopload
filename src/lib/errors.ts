@@ -6,7 +6,17 @@
 
 import type { ErrorClass, PlainError } from "./types";
 
-const MESSAGES: Record<ErrorClass, string> = {
+interface ErrorMessages {
+  offline: string;
+  credentials: string;
+  "storage-full": string;
+  "connection-dropped": string;
+  verification: string;
+  "not-found": string;
+  unknown: string;
+}
+
+const MESSAGES: ErrorMessages = {
   offline:
     "You're offline - we'll be ready when the connection is back.",
   credentials:
@@ -26,13 +36,42 @@ export function plainMessageFor(errorClass: ErrorClass): string {
   return MESSAGES[errorClass];
 }
 
+interface SdkMetadata {
+  httpStatusCode?: number;
+  requestId?: string;
+}
+
 /** Shape AWS SDK v3 errors expose for HTTP status + error code. */
 interface SdkLikeError {
   name?: string;
   Code?: string;
   code?: string;
   message?: string;
-  $metadata?: { httpStatusCode?: number; requestId?: string };
+  $metadata?: SdkMetadata;
+}
+
+interface SdkDetails {
+  status?: number;
+  code?: string;
+  requestId?: string;
+}
+
+function isSdkLikeError(cause: unknown): cause is SdkLikeError {
+  return typeof cause === "object" && cause !== null;
+}
+
+function isStringValue(cause: unknown): cause is string {
+  return typeof cause === "string";
+}
+
+interface CtorLike {
+  constructor?: { name?: string };
+}
+
+/** Any non-nullish value has a `.constructor` via autoboxing, even a
+ * primitive string/number/boolean — only null/undefined don't. */
+function hasConstructor(cause: unknown): cause is CtorLike {
+  return cause != null;
 }
 
 function httpStatusOf(err: SdkLikeError): number | undefined {
@@ -57,16 +96,14 @@ function requestIdOf(err: SdkLikeError): string | undefined {
  * "TypeError"), which `codeOf` would otherwise happily report as if it were
  * an S3 error code. `$metadata` only exists on genuine AWS SDK errors, so
  * it's the one reliable signal that this is actually SDK-shaped. */
-function sdkDetailsOf(err: unknown): { status?: number; code?: string; requestId?: string } {
-  if (err == null || typeof err !== "object") return {};
-  const e = err as SdkLikeError;
-  if (!e.$metadata) return {};
-  const details: { status?: number; code?: string; requestId?: string } = {};
-  const status = httpStatusOf(e);
+function sdkDetailsOf(cause: unknown): SdkDetails {
+  if (!isSdkLikeError(cause) || !cause.$metadata) return {};
+  const details: SdkDetails = {};
+  const status = httpStatusOf(cause);
   if (status !== undefined) details.status = status;
-  const code = codeOf(e);
+  const code = codeOf(cause);
   if (code !== undefined) details.code = code;
-  const requestId = requestIdOf(e);
+  const requestId = requestIdOf(cause);
   if (requestId !== undefined) details.requestId = requestId;
   return details;
 }
@@ -109,18 +146,18 @@ const CONNECTION_DROPPED_CODES = new Set([
  * network-shape checks first (they can appear on plain Error/TypeError with
  * no $metadata), then HTTP status, then SDK error codes, then a fallback.
  */
-export function classifyError(err: unknown): ErrorClass {
-  if (err == null) return "unknown";
+export function classifyError(cause: unknown): ErrorClass {
+  if (cause == null) return "unknown";
 
   // tauri-plugin-http's response stream can reject with a raw string from
   // Rust IPC rather than an Error — wrap it so the message-substring checks
   // below still apply instead of silently falling through to "unknown".
-  if (typeof err === "string") return classifyError(new Error(err));
+  if (isStringValue(cause)) return classifyError(new Error(cause));
 
   // Browser/runtime fetch failures: TypeError("Failed to fetch") / "fetch
   // failed" / "Load failed" (Safari) with no network at all reads as offline.
-  if (err instanceof TypeError) {
-    const msg = err.message.toLowerCase();
+  if (cause instanceof TypeError) {
+    const msg = cause.message.toLowerCase();
     if (
       msg.includes("failed to fetch") ||
       msg.includes("fetch failed") ||
@@ -131,7 +168,7 @@ export function classifyError(err: unknown): ErrorClass {
     }
   }
 
-  const e = err as SdkLikeError;
+  const e: SdkLikeError = isSdkLikeError(cause) ? cause : {};
   const code = codeOf(e);
   const msg = (e.message ?? "").toLowerCase();
 
@@ -171,8 +208,8 @@ export function classifyError(err: unknown): ErrorClass {
 }
 
 /** Classify and produce the full PlainError (class + one sentence). */
-export function toPlainError(err: unknown): PlainError {
-  const errorClass = classifyError(err);
+export function toPlainError(cause: unknown): PlainError {
+  const errorClass = classifyError(cause);
   return { errorClass, message: plainMessageFor(errorClass) };
 }
 
@@ -187,29 +224,35 @@ export function toPlainError(err: unknown): PlainError {
  * are included too — this is what turns a bare "Error: Access Denied" log
  * line into one that actually explains what happened.
  */
-export function describeThrown(err: unknown): {
+interface ThrownDescription {
   message: string;
   type: string;
   ctor: string | null;
   status?: number;
   code?: string;
   requestId?: string;
-} {
-  const details = sdkDetailsOf(err);
-  if (err instanceof Error) {
-    return { message: err.message, type: "Error", ctor: err.constructor?.name ?? null, ...details };
+}
+
+function runtimeTypeOf(cause: unknown): string {
+  return typeof cause;
+}
+
+export function describeThrown(cause: unknown): ThrownDescription {
+  const details = sdkDetailsOf(cause);
+  if (cause instanceof Error) {
+    return { message: cause.message, type: "Error", ctor: cause.constructor?.name ?? null, ...details };
   }
   let ctor: string | null = null;
   try {
-    ctor = err != null ? (err as { constructor?: { name?: string } }).constructor?.name ?? null : null;
+    ctor = hasConstructor(cause) ? (cause.constructor?.name ?? null) : null;
   } catch {
     ctor = null;
   }
   let message: string;
   try {
-    message = String(err).slice(0, 500);
+    message = String(cause).slice(0, 500);
   } catch {
     message = "<unstringifiable>";
   }
-  return { message, type: typeof err, ctor, ...details };
+  return { message, type: runtimeTypeOf(cause), ctor, ...details };
 }

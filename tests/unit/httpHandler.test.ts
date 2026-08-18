@@ -4,6 +4,8 @@ import { InjectedFetchHttpHandler } from "../../src/lib/s3/http-handler";
 import { addLogSink, type LogLevel } from "../../src/lib/logger";
 
 function baseRequest(overrides: Partial<HttpRequest> = {}): HttpRequest {
+  // SAFETY: this fixture supplies all fields needed by the default request.
+  // Optional fields remain undefined unless a test provides an override.
   return {
     protocol: "https:",
     hostname: "s3.example.com",
@@ -16,8 +18,18 @@ function baseRequest(overrides: Partial<HttpRequest> = {}): HttpRequest {
   } as HttpRequest;
 }
 
-function captureLogs(): { lines: { level: LogLevel; module: string; msg: string }[] } {
-  const lines: { level: LogLevel; module: string; msg: string }[] = [];
+interface CapturedLogLine {
+  level: LogLevel;
+  module: string;
+  msg: string;
+}
+
+interface CapturedLogs {
+  lines: CapturedLogLine[];
+}
+
+function captureLogs(): CapturedLogs {
+  const lines: CapturedLogLine[] = [];
   addLogSink((level, module, msg) => {
     if (module === "http-handler") lines.push({ level, module, msg });
   });

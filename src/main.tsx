@@ -19,6 +19,8 @@ import App from "./App";
 // and need to keep rendering their custom UI.
 if (!import.meta.env.DEV) {
   window.addEventListener("contextmenu", (e) => {
+    // SAFETY: a contextmenu event's target is always a DOM element (or null
+    // if the event fired outside the document) in a browser/webview.
     const target = e.target as HTMLElement | null;
     const editable = target?.closest("input, textarea, [contenteditable]");
     if (editable || target?.isContentEditable) return;
@@ -38,6 +40,7 @@ if (!import.meta.env.DEV) {
 if (import.meta.env.VITE_LOPLOAD_SELFTEST) {
   void import("./selftest/mount");
 } else {
+  // SAFETY: index.html always defines <div id="root">.
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App />

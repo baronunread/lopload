@@ -17,6 +17,9 @@ for (const scenario of allScenarios) {
   test(
     scenario.name,
     async () => {
+      // SAFETY: bun:test's `expect` implements every matcher this app's
+      // Expect interface (tests/scenarios/types.ts) declares; the two
+      // types don't structurally align beyond that shared subset.
       const app = await mountApp(expect as never, {
         arrange: scenario.arrange,
         wrapFetch: scenario.wrapFetch,

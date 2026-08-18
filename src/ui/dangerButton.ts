@@ -1,5 +1,9 @@
 import type { CSSProperties } from "react";
 
+/** CSSProperties plus arbitrary CSS custom properties (`--foo`), which the
+ * upstream type doesn't declare individually. */
+type CSSVars = CSSProperties & Record<`--${string}`, string>;
+
 /**
  * Kumo's `variant="destructive"` computes its background/ring off
  * `--color-kumo-danger` — which in this app's dark theme itself resolves to
@@ -9,12 +13,12 @@ import type { CSSProperties } from "react";
  * spreads its own `style` prop after its computed ones) with a solid
  * Tailwind red instead, for every "Delete"/"Remove" button in the app.
  */
-export const SOLID_DANGER_BUTTON_STYLE: CSSProperties = {
+export const SOLID_DANGER_BUTTON_STYLE: CSSVars = {
   "--kumo-button-emphasis-bg": "var(--color-red-600)",
   "--kumo-button-emphasis-ring": "var(--color-red-700)",
   "--kumo-button-emphasis-gradient-start": "var(--color-red-500)",
   "--kumo-button-emphasis-gradient-end": "var(--color-red-600)",
-} as CSSProperties;
+};
 
 /**
  * Same fix for text-only danger elements (icon buttons using
@@ -25,4 +29,4 @@ export const SOLID_DANGER_BUTTON_STYLE: CSSProperties = {
  */
 export const SOLID_DANGER_TEXT_STYLE: CSSProperties = {
   color: "var(--color-red-600) !important",
-} as CSSProperties;
+};
