@@ -49,14 +49,39 @@ export const tauriFileReader: LocalFileReader = {
   },
 };
 
-function dirnameOf(path: string): string {
-  const idx = path.lastIndexOf("/");
-  return idx <= 0 ? "/" : path.slice(0, idx);
+/** Parent of a native path, so both separators count. A root keeps its
+ * separator: "/x" → "/", "D:\\x" → "D:\\". */
+export function dirnameOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (idx < 0) return ".";
+  if (idx === 0 || path[idx - 1] === ":") return path.slice(0, idx + 1);
+  return path.slice(0, idx);
+}
+
+// Tauri's fs scope grants exactly the paths the user pointed at: the save
+// dialog allows the destination file, not the `.lopload-download` sibling
+// written next to it, and a download folder remembered from a previous run was
+// never picked in this session at all. Neither is covered by the static scope
+// in capabilities/default.json unless the destination happens to sit under
+// $HOME — on Windows a destination on any drive other than the user profile's
+// is forbidden outright. So the destination folder is granted (in memory, for
+// this run only) before the app touches anything inside it. Memoized because
+// every write goes through here and only the first one needs the IPC.
+const allowedDirs = new Set<string>();
+
+async function allowDirOf(path: string): Promise<string> {
+  const dir = dirnameOf(path);
+  if (!allowedDirs.has(dir)) {
+    await invoke("allow_fs_dir", { path: dir });
+    allowedDirs.add(dir);
+  }
+  return dir;
 }
 
 async function ensureParentDir(path: string): Promise<void> {
+  const dir = await allowDirOf(path);
   try {
-    await mkdir(dirnameOf(path), { recursive: true });
+    await mkdir(dir, { recursive: true });
   } catch {
     // Already exists — fine.
   }
@@ -69,6 +94,7 @@ export const tauriFileWriter: LocalFileWriter = {
 
   async writeChunk(tempPath: string, chunk: Uint8Array, isFirst: boolean): Promise<void> {
     if (isFirst) await ensureParentDir(tempPath);
+    else await allowDirOf(tempPath);
     // append:false truncates, which is exactly the isFirst contract.
     await writeFile(tempPath, chunk, { create: true, append: !isFirst });
   },
@@ -80,6 +106,7 @@ export const tauriFileWriter: LocalFileWriter = {
 
   async discard(tempPath: string): Promise<void> {
     try {
+      await allowDirOf(tempPath);
       await remove(tempPath);
     } catch {
       // Temp file may never have been created (e.g. failure before the first chunk).
@@ -112,6 +139,9 @@ export const tauriFileWriter: LocalFileWriter = {
 
   async sizeOf(tempPath: string): Promise<number | null> {
     try {
+      // Without the grant this throws, which reads as "no temp file" and
+      // silently restarts a resumable download from byte zero.
+      await allowDirOf(tempPath);
       return await fileSize(tempPath);
     } catch {
       return null;

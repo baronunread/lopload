@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod fastfs;
 mod fasthttp;
+mod fsscope;
 mod keychain;
 #[cfg(debug_assertions)]
 mod selftest;
@@ -40,6 +41,7 @@ pub fn run() {
             greet,
             is_portable_app,
             fastfs::write_at,
+            fsscope::allow_fs_dir,
             fasthttp::http_send,
             fasthttp::http_cancel,
             keychain::keychain_set,

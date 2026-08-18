@@ -112,6 +112,15 @@ export interface MoveProgress extends CopyProgress {
   kind: "move" | "trash" | "restore" | "purge";
   status: "moving" | "completed" | "failed";
   errorMessage?: string;
+  /** Size of the bulk selection this move is part of, e.g. 76 when the user
+   * moved 76 items at once — set only by batched call sites (RemoteBrowser's
+   * handleMove/handleBulkDeleteToTrash), left undefined for single-item
+   * operations. Lets the widget show progress toward the whole selection while
+   * BULK_OP_CONCURRENCY caps how many are actually in flight. */
+  batchTotal?: number;
+  /** Identifies the bulk selection so retained results from earlier batches
+   * cannot affect the active batch's progress count. */
+  batchId?: string;
 }
 
 export interface BrowserService {
@@ -132,10 +141,12 @@ export interface BrowserService {
     key: string,
     toKey: string,
     onProgress?: (progress: CopyProgress) => void,
+    batchTotal?: number,
+    batchId?: string,
   ): Promise<void>;
   /** Moves a file or folder into the Trash rather than deleting it outright —
    * see TrashService for restoring it or removing it for good. */
-  delete(connectionId: string, key: string): Promise<void>;
+  delete(connectionId: string, key: string, batchTotal?: number, batchId?: string): Promise<void>;
   /** A shareable, presigned link to the file, valid for `expiresInSeconds`
    * (capped at 7 days — SigV4's hard maximum), shown via "Copy link…" in the
    * context menu. */
