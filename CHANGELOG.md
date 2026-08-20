@@ -2,6 +2,20 @@
 
 All notable changes to Lopload are documented here. Release binaries and full notes live on the [releases page](https://github.com/baronunread/lopload/releases).
 
+## [0.2.1] — 2026-08-20
+
+Windows download fixes, plus transfer widget and trash polish.
+
+- Fixed: downloading to a folder on a different drive than your user profile no longer fails with a "forbidden path" error, and an interrupted ranged download now resumes instead of restarting from byte zero.
+- Fixed: "Open" on a downloaded file now actually hands it to the OS instead of failing silently.
+- Fixed: the self-test workdir no longer resolves to the wrong drive on Windows.
+- Fixed: the Trash dialog no longer shows a stale, incomplete list if you open it right after trashing a large folder while the move is still finishing in the background.
+- Fixed: bulk-deleting files to Trash now always shows up in the transfer widget, and a partial failure only rolls back the items that actually failed.
+- The move/trash progress header now counts up toward the batch total ("Moved 12 of 76") instead of pinning at 3 and counting down, and no longer mixes counts from a finished batch into a new one.
+- Added a broom button to the transfer widget to clear finished rows while leaving in-progress ones alone.
+
+Thanks to [@f4nu](https://github.com/f4nu) for the Windows download and opener fixes in this release.
+
 ## [0.2.0] — 2026-07-19
 
 Faster browsing, faster trash, and a lot of UI polish.
