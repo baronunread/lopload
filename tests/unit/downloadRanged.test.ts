@@ -177,14 +177,23 @@ function concurrencyTrackingDelay(
  * no `Fault` for "succeed N times, then fail" (faultyFetch's `times` counts
  * down how many times a fault itself fires, the opposite order), so this is
  * implemented locally. */
-function failAfter(inner: FetchFn, key: string, passCount: number, message: string): FetchFn {
+function failAfter(
+  inner: FetchFn,
+  key: string,
+  passCount: number,
+  message: string,
+  waitBeforeFailing?: Promise<void>,
+): FetchFn {
   let calls = 0;
   return async (input, init) => {
     const url = urlOf(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (method !== "GET" || !url.includes(key)) return inner(input, init);
     calls++;
-    if (calls > passCount) throw new Error(message);
+    if (calls > passCount) {
+      await waitBeforeFailing;
+      throw new Error(message);
+    }
     return inner(input, init);
   };
 }
@@ -386,17 +395,35 @@ describe("downloadTransfer — ranged parallel path", () => {
   test("network error keeps the temp file and part rows (they are the resume state)", async () => {
     const data = makeData();
     await bucketProbe(bucket.client, bucket.name).put("ranged/network-error.bin", data);
-    // First GET (whichever part a worker starts with) succeeds; every GET
-    // after that fails — connections: 2 guarantees at least one succeeds
-    // before the failure hits.
-    const fetchFn = failAfter(nativeFetch, "ranged/network-error.bin", 1, "socket hang up");
-
     const transfer = makeTransfer({
       key: "ranged/network-error.bin",
       localPath: freshLocalPath("network-error.bin"),
     });
     const { writer, discarded } = trackedWriter();
     const store = new MemoryTransferStore();
+
+    // First GET succeeds, every GET after that fails — but the failing calls
+    // wait for a part to actually be saved first. Without that gate, the
+    // failure (a synchronous throw) can race ahead of the success (a real
+    // network round-trip): the sibling worker's abort can cancel the
+    // succeeding part's in-flight fetch before its bytes are ever persisted,
+    // which makes the assertions below flaky depending on scheduling.
+    let partSaved: () => void;
+    const partSavedPromise = new Promise<void>((resolve) => {
+      partSaved = resolve;
+    });
+    const originalSaveParts = store.saveParts.bind(store);
+    store.saveParts = async (parts) => {
+      await originalSaveParts(parts);
+      partSaved();
+    };
+    const fetchFn = failAfter(
+      nativeFetch,
+      "ranged/network-error.bin",
+      1,
+      "socket hang up",
+      partSavedPromise,
+    );
 
     await expect(
       downloadTransfer(transfer, {

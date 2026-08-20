@@ -9,4 +9,16 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 // the DOM the UI renders into stays happy-dom's.
 export const nativeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
+// happy-dom also replaces AbortController/AbortSignal with its own classes.
+// nativeFetch stays bound to Bun's original fetch, which validates its
+// `signal` option against Bun's *native* AbortSignal — so an AbortController
+// created anywhere after registration (e.g. TransferEngine) would produce a
+// signal nativeFetch rejects with "signal is not of type AbortSignal".
+// Restoring the native classes keeps every other global browser-shaped.
+const nativeAbortController = globalThis.AbortController;
+const nativeAbortSignal = globalThis.AbortSignal;
+
 GlobalRegistrator.register();
+
+globalThis.AbortController = nativeAbortController;
+globalThis.AbortSignal = nativeAbortSignal;
