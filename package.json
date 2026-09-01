@@ -44,7 +44,7 @@
     "@tauri-apps/plugin-store": "^2.4.3",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "hash-wasm": "^4.12.0",
-    "motion": "^12.42.2",
+    "motion": "^13.1.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
