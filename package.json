@@ -50,7 +50,7 @@
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.10.6",
-    "@oxlint/plugins": "1.78.0",
+    "@oxlint/plugins": "1.80.0",
     "@smithy/types": "^4.15.1",
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/cli": "^2",
@@ -62,7 +62,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.3",
     "aws-sdk-client-mock": "^4.1.0",
-    "oxlint": "1.78.0",
+    "oxlint": "1.80.0",
     "tailwindcss": "^4.3.2",
     "typescript": "~7.0.2",
     "vite": "^8.1.4"
