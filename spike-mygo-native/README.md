@@ -1,79 +1,96 @@
-# Lopload native MyGo spike
+# Lopload native storage manager spike
 
-A real, standalone native file browser on MyGo **v0.3.7**, on branch `spike/mygo`. It uses Go widgets drawn by MyGo, without React, JavaScript, or a webview. The production Tauri app is unchanged.
+MyGo **v0.3.7** draws the native UI. Embedded **rclone v1.75.2** provides the storage engine. There is no webview, JavaScript runtime, rclone sidecar, or local HTTP control server. Provider sessions outlive individual transfer contexts and are canceled when changing storage or closing the window. Production Lopload remains unchanged on `main`.
 
-Implemented: keychain-backed connection, hierarchical storage listing, virtualized file list with keyboard selection, search, native file picker, streaming single-request upload, throttled progress, cancellation, and local MD5 verification against the upload response and a subsequent remote stat. The storage implementation is MinIO's Go S3 client, not rclone; additional providers have not been evaluated in this continuation.
+The macOS build registers **69 rclone backends**, including virtual backends such as aliases. Registration is not a claim that every provider has been tested: this spike exercises real S3-compatible storage (MinIO), local storage, and a configured alias.
+
+## What works
+
+- Browse folders, search, keyboard selection, and a virtualized file list.
+- Connect directly to S3-compatible storage, select a local folder, or open an existing named rclone connection.
+- Upload with progress and cancellation. The direct S3 connection uses multipart uploads above 8 MiB, two workers, and 8 MiB parts; the previous 5 GiB single-request restriction is removed. Configured connections use their own rclone options.
+- Verify uploads with a local SHA-256 and a complete remote readback before showing `Uploaded ✓`. This deliberately replaces the earlier S3-specific ETag check in the spike; it also works with providers without a suitable exposed checksum. It costs an additional full download of each uploaded file.
+- Download files through a native save dialog, compare size when available and provider MD5 when available, and publish the temporary download only after checks succeed.
+- Copy and rename individual files. rclone can use server-side copying or its fallback. Both paths verify the destination through SHA-256 readback. Rename removes the original only after destination verification; it is not an atomic transaction.
+- Create folders and delete individual files. The native delete dialog defaults to Cancel.
+- Reject existing destination files during preflight rather than silently replace them. Downloads also reject an existing local destination. These checks are not a lock against another process writing concurrently.
 
 ## Run
 
-From this directory, with Go 1.27.2 or newer:
+With Go 1.27.2 or newer, from this directory:
 
 ```sh
 go tool mygo dev
 go tool mygo build
 ```
 
-The build uses the existing local `Lopload Dev` signing identity. Use `go tool mygo build -sign -` for ad hoc signing on another machine. This is a locally signed development app, not notarized or ready for public distribution.
+The build uses the local `Lopload Dev` signing identity. On another machine, `go tool mygo build -sign -` produces an ad hoc signature. This development build is not notarized for public distribution.
 
-The connection screen stores credentials in the OS keychain under `lopload-native-spike`, independently of production Lopload. It defaults to the local MinIO address; enter your storage name and credentials. Double-click a folder or select it and press Enter to browse. `Up` returns to the parent.
+For local storage, choose **Local folder**, then select or enter a folder and connect. For an existing rclone connection, choose **Configured storage**, select **Reload configured storage**, and enter a location such as `my-drive:Documents`. Set up that profile and provider authorization with `rclone config` first; the running app does not require the rclone executable. The shared configuration path and any encrypted-config password follow rclone's normal configuration rules. Interactive terminal password prompts are disabled.
+
+Select a file, enter a new name, and use Copy or Rename. New folder uses the same name field. Folder recursion and bulk selection are not implemented.
+
+## Credential storage
+
+The direct S3 connection still uses this spike's OS keychain service, `lopload-native-spike`. Selecting a local folder or named profile saves its connection descriptor through the same existing persistence path. Existing production credentials are not migrated.
+
+Named rclone connections obtain credentials from rclone's shared configuration. Provider token refresh may update that configuration through rclone. This integration does not create a new app-owned plaintext credential file or replace the direct S3 keychain implementation. The earlier discussion of a complete plaintext migration remains a separate product decision.
 
 ## Tests
 
-Start the repository's persistent test MinIO on port 9400. From the repository root, `bun test` starts it if needed; Docker must be running. Then:
+Start the repository's persistent test MinIO on port 9400 (`bun test` from the repository root starts it when Docker is running). Then:
 
 ```sh
 cd spike-mygo-native
 go test -race -v ./...
 ```
 
-The tests use real MinIO and the real OS keychain. Every test owns a fresh storage container and deletes only its own files. The keychain test uses a disposable dummy connection at this spike's service name; it replaces and removes the spike's saved connection, never production credentials.
+Tests use real MinIO, real temporary local folders, the real OS keychain, and the actual native view. There are no storage or engine doubles. Each S3 test owns a fresh test bucket and cleans it up. The dummy keychain round-trip restores any pre-existing spike connection; production credentials are never accessed.
 
-Assertions cover stored bytes read back with a separate S3 client, checksum verification, progress, cancellation before and during upload, folder listings, the same native view displaying real storage results, search, and keyboard selection in a 10,000-row virtualized list. No storage or engine doubles.
+Scenarios verify stored bytes through a separate MinIO SDK client, real multipart ETags, multipart cancellation without orphaned parts, folder listings, download bytes, copy/rename/delete, empty-folder creation, collision rejection, unsafe destination names, a temporary configured rclone alias, native search, and keyboard selection in a virtualized 10,000-row list. A proxy corrupts one byte of a genuine MinIO GET response to check that readback verification fails.
 
-Cross-compilation checked successfully, without cgo:
+Linux and Windows also compile with all providers and without cgo:
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/lopload-native-linux .
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /tmp/lopload-native-windows.exe .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/lopload-rclone-linux .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /tmp/lopload-rclone-windows.exe .
 ```
 
-## Reproduce the loaded-app benchmark
+Those platforms have not been launched. Native file dialogs, delete confirmation, provider OAuth refresh, and full manual click-through have not been driven; the corresponding storage operations and the native search/selection view are tested.
+
+## Loaded-app benchmark
 
 ```sh
 go tool mygo build
-python3 measure.py build/darwin-arm64/spike-mygo-native.app/Contents/MacOS/spike-mygo-native /tmp/lopload-native-results
+python3 measure.py build/darwin-arm64/spike-mygo-native.app/Contents/MacOS/spike-mygo-native /tmp/lopload-rclone-results
 ```
 
-`--benchmark` is an explicit test mode. It connects only to MinIO at `127.0.0.1:9400` with the repository's local test credentials, creates a unique temporary storage container with 1,000 real empty files, opens their native list, idles for 15 seconds, uploads a generated 1 GiB file through the application's upload flow, reads the entire remote file back, idles for ten more seconds, and deletes its fixtures. It never loads or writes a saved connection. The app captures its rendered window to the OS temporary directory as `lopload-native-window.png`.
+`--benchmark` creates a unique local MinIO bucket with 1,000 real empty files, displays the native file list, idles for 15 seconds, uploads a generated 1 GiB file through the application's multipart upload flow, verifies it by reading the entire remote file, idles for ten more seconds, then cleans up before quitting. It does not load or change a saved connection.
 
-`measure.py` samples process RSS every ~100 ms with `ps`, and also records macOS `footprint` snapshots. The reported upload interval includes local hashing, sending, stat/list verification, and full remote readback; it is not a pure network throughput measurement. The sampler requires permission to inspect processes. Do not interrupt the benchmark if you want its cleanup to finish.
+`measure.py` samples process RSS every ~100 ms and records macOS `footprint` snapshots. The upload interval includes hashing, upload, full readback verification, and refreshing the list. It is not a pure network-throughput figure. The sampler needs permission to inspect processes. The screenshot is captured by the app's native renderer.
 
-## Measurements
+| Measurement | Earlier S3-only native spike | Native + all rclone backends |
+| --- | ---: | ---: |
+| App bundle, apparent bytes | 13.9 MB | 73.6 MB |
+| Disk image | 4.3 MB | 18.1 MB |
+| macOS physical footprint, idle snapshot | 60.2 MB | 78.4 MB |
+| macOS recorded peak physical footprint | 81.9 MB | 104.6 MB |
+| Median idle RSS, latest run | 62.7 MB | 54.8 MB |
+| Maximum sampled upload RSS, latest run | 97.2 MB | 88.4 MB |
+| Hash/upload/full verification interval, latest run | 8.84 s | 19.96 s |
 
-Measured on this Apple Silicon Mac on 2026-10-09, release build, locally signed. MB below means decimal MB.
+Across the three rclone runs, median idle RSS ranged from 55–81 MB and maximum sampled upload RSS from 88–127 MB. Transfer intervals ranged from 16.8–31.8 seconds. RSS and physical footprint are different measures; retain this variability when evaluating the result rather than interpreting the latest lower RSS as an improvement over the older engine. Earlier rclone samples are preserved under `results/rclone/preliminary/` and `results/rclone/before-session-fix/`.
 
-| Measurement | Result |
-| --- | ---: |
-| App bundle, apparent bytes | 13.9 MB |
-| Disk image | 4.3 MB |
-| Median idle RSS with 1,000 real files | 62.7 MB |
-| Maximum sampled RSS during 1 GiB transfer/readback | 97.2 MB |
-| macOS physical footprint at idle snapshot | 60.2 MB |
-| macOS recorded peak physical footprint | 81.9 MB |
-| 1 GiB hash/upload/verification/readback interval | 8.84 s |
+Measurements are from the same Apple Silicon Mac, macOS 15.3.1, on 2026-10-09. MB means decimal MB; the MyGo CLI labels MiB as MB. The earlier S3-only result is a different implementation and UI scope, and machine load affects RAM/timing. These figures describe this spike, not a matched production Tauri comparison. All-provider dependencies increase disk size substantially; the 1 GiB MinIO transfer completes without buffering the entire file in RAM.
 
-Bundle sizes above use actual apparent bytes (the MyGo CLI labels MiB as MB). RSS and physical footprint measure different things, so their peaks need not match.
+Current raw results and a native window capture are in `results/rclone/`. The previous S3-only report is preserved in `S3-ONLY.md` with its original measurements under `results/`.
 
-Raw measurements are in `results/`, and a capture of the real rendered native window is `results/native-window.png`. The full Tauri app was **not remeasured** in this continuation. Earlier Claude numbers used Activity Monitor, different UI states, and a full application; do not subtract them from RSS measurements or treat this as feature parity.
+## What this enables next
 
-The first loaded benchmark exposed a whole-file SDK buffer: `SendContentMd5` on our non-seekable progress wrapper allocated approximately 1 GiB. Removing that redundant SDK calculation, while retaining our own MD5 and remote verification, reduced sampled upload peak RSS from 1,121 MB to 95–97 MB across two corrected runs. The failed design's raw RSS data is retained in `results/buffered-before-fix.json`. The corrected version streams signed requests without loading the file into memory.
+The engine now presents the same file operations for different storage systems. Lopload can concentrate on the desktop workflows instead of maintaining a separate S3 implementation and adding a custom engine for every provider.
 
-## Decision and remaining work
+The next product work is a connection library with native provider setup/sign-in, durable transfer jobs/history, restart/resume, recursive folder transfers and bulk actions, transfers between saved connections, capability-aware controls for read-only providers, production error categories, and updater/tray/distribution parity. A provider being compiled in does not mean all its features work through this UI.
 
-MyGo native UI is viable enough to continue evaluating: the actual file list renders, keyboard/search behavior is tested, a large upload completes with bounded memory, and macOS packaging works. These measurements supersede the earlier 25 MB hello-world figure for this larger spike. They do not establish a production migration recommendation.
+Only one operation runs at a time. Upload verification incurs download bandwidth; copy and rename read both original and destination for verification. Cancellation after the server has already committed a file does not remove that file. Process termination and durable multipart resume remain untested and unimplemented in the application.
 
-Still missing: multipart uploads and durable resume, download/delete/rename/copy actions, SQLite-backed transfer state, multiple connections, updater/tray parity, production error categories, and additional providers. Files above 5 GiB are rejected. Cancellation cannot guarantee an upload that the server has already committed will disappear.
-
-The existing `go-keyring` dependency is retained. Its macOS backend invokes Apple's security CLI; app-specific keychain access control remains unresolved. No plaintext credential storage was introduced.
-
-Linux and Windows were compiled, not launched. The real native macOS window was inspected and captured; the file picker and complete manual connection/upload click-through have not been driven. Screen reader behavior, drag and drop, interrupted uploads after process restart, and signing/notarization for distribution remain untested.
+References: [rclone configuration](https://rclone.org/commands/rclone_config/), [rclone source](https://github.com/rclone/rclone), [MIT license](https://rclone.org/licence/).

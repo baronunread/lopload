@@ -41,7 +41,7 @@ if process.poll() is None:
     process.terminate()
 reader.join(timeout=10)
 log.close()
-completed = 'BENCHMARK_DONE' in (out / 'benchmark.log').read_text() and 'BENCHMARK_FAILED' not in (out / 'benchmark.log').read_text()
+completed = 'BENCHMARK_DONE' in (out / 'benchmark.log').read_text() and 'BENCHMARK_FAILED' not in (out / 'benchmark.log').read_text() and 'BENCHMARK_CLEANUP_FAILED' not in (out / 'benchmark.log').read_text()
 report = {'completed': completed, 'metric': 'RSS bytes from ps (not Activity Monitor physical footprint)', 'exit_code': process.wait(), 'samples': samples, 'summary': {}}
 for label in ('idle', 'upload', 'after-upload'):
     values = sorted(s['rss_bytes'] for s in samples if s['phase']==label)

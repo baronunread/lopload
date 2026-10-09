@@ -11,6 +11,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/rclone/rclone/fs"
 )
 
 type app struct {
@@ -25,10 +26,14 @@ type app struct {
 	busy                   bool
 	sent, total            int64
 	cancel                 context.CancelFunc
+	mode                   string
+	remotes                []string
+	actionName             string
+	dialogBusy             bool
 }
 
 func newApp() *app {
-	a := &app{conn: connection{Endpoint: "http://127.0.0.1:9400"}, selected: -1, status: "Connect to your storage to browse files."}
+	a := &app{conn: connection{Endpoint: "http://127.0.0.1:9400"}, mode: "s3", selected: -1, status: "Connect to your storage to browse files."}
 	a.list.Selected = &a.selected
 	a.list.Key = func(i int) any { return a.visible[i].Key }
 	a.list.Label = func(i int) string { return a.visible[i].Key }
@@ -48,7 +53,9 @@ func (a *app) run(message string, work func(context.Context) error, done func())
 	if a.busy {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cfg := fs.AddConfig(context.Background())
+	cfg.LowLevelRetries = 1
+	ctx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
 	a.busy = true
 	a.status = message
@@ -60,6 +67,10 @@ func (a *app) run(message string, work func(context.Context) error, done func())
 			a.cancel = nil
 			if errors.Is(err, context.Canceled) {
 				a.status = "Canceled."
+			} else if errors.Is(err, errExists) {
+				a.status = "A file with that name already exists. Choose another name."
+			} else if errors.Is(err, errVerification) {
+				a.status = "Verification failed. The transferred file could not be confirmed."
 			} else if err != nil {
 				a.status = "Could not complete the action. Check your connection and access permissions."
 			} else {
@@ -77,19 +88,43 @@ func (a *app) refresh() {
 	a.run("Loading files…", func(ctx context.Context) error { var err error; entries, err = s.list(ctx, p); return err }, func() { a.entries = entries; a.filter() })
 }
 func (a *app) connect() {
-	s, err := newStorage(a.conn)
-	if err != nil {
-		a.status = "Enter a valid storage address and storage name."
+	conn := a.conn
+	if a.mode == "local" && conn.LocalPath == "" {
+		a.status = "Choose a local folder first."
 		return
 	}
-	conn := a.conn
+	if a.mode == "configured" && conn.Remote == "" {
+		a.status = "Choose a configured storage location first."
+		return
+	}
+	var s *storage
+	var entries []entry
 	a.run("Connecting…", func(ctx context.Context) error {
-		_, err := s.list(ctx, "")
+		var err error
+		s, err = newStorageContext(ctx, conn)
 		if err != nil {
 			return err
 		}
-		return saveConnection(conn)
-	}, func() { a.storage = s; a.conn.AccessKey = ""; a.conn.SecretKey = ""; a.refresh() })
+		entries, err = s.list(ctx, "")
+		if err != nil {
+			s.close()
+			return err
+		}
+		if err = saveConnection(conn); err != nil {
+			s.close()
+			return err
+		}
+		return nil
+	}, func() {
+		a.storage = s
+		a.conn.Bucket = s.bucket
+		a.conn.AccessKey = ""
+		a.conn.SecretKey = ""
+		a.prefix = ""
+		a.search = ""
+		a.entries = entries
+		a.filter()
+	})
 }
 func (a *app) startUpload(file string) {
 	s, p := a.storage, a.prefix
@@ -98,7 +133,14 @@ func (a *app) startUpload(file string) {
 	var listErr error
 	a.run("Checking "+path.Base(file)+"…", func(ctx context.Context) error {
 		err := s.upload(ctx, file, p, func(sent, total int64) {
-			a.win.Update(func() { a.sent, a.total = sent, total; a.status = "Uploading " + path.Base(file) + "…" })
+			a.win.Update(func() {
+				a.sent, a.total = sent, total
+				if total >= 0 && sent >= total {
+					a.status = "Verifying file…"
+				} else {
+					a.status = "Uploading " + path.Base(file) + "…"
+				}
+			})
 		})
 		if err != nil {
 			return err
@@ -127,19 +169,51 @@ func (a *app) view(c *ui.Context) {
 	ui.Column(c).Fill().Padding(24).Gap(16).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
 			ui.Text(c, "Lopload").FontSize(26).Bold()
-			ui.Text(c, "Native MyGo spike").TextColor(t.TextMuted)
+			ui.Text(c, "Native storage manager").TextColor(t.TextMuted)
 		})
 		if a.storage == nil {
 			ui.Text(c, "Connect to storage").FontSize(18).Bold()
-			ui.TextInput(c, &a.conn.Endpoint).Label("Storage address").Placeholder("https://storage.example.com").Width(480)
-			ui.TextInput(c, &a.conn.Bucket).Label("Storage name").Width(480)
-			ui.TextInput(c, &a.conn.AccessKey).Label("Access ID").Width(480)
-			ui.TextInput(c, &a.conn.SecretKey).Label("Secret").Password().Width(480)
+			ui.Row(c).Gap(10).Children(func() {
+				for _, mode := range []string{"s3", "local", "configured"} {
+					label := map[string]string{"s3": "S3 storage", "local": "Local folder", "configured": "Configured storage"}[mode]
+					if ui.Button(c, label).Disabled(a.busy).Clicked() {
+						a.mode = mode
+						a.conn.Remote = ""
+						a.conn.LocalPath = ""
+					}
+				}
+			})
+			switch a.mode {
+			case "local":
+				ui.TextInput(c, &a.conn.LocalPath).Label("Folder location").Width(480)
+				if ui.Button(c, "Choose folder…").Disabled(a.busy || a.dialogBusy).Clicked() {
+					a.chooseLocal()
+				}
+			case "configured":
+				ui.Text(c, "Choose storage already set up with rclone.").TextColor(t.TextMuted)
+				ui.Row(c).Gap(8).Children(func() {
+					for _, name := range a.remotes {
+						if ui.Button(c, name).Clicked() {
+							a.conn.Remote = name + ":"
+						}
+					}
+				})
+				ui.TextInput(c, &a.conn.Remote).Label("Storage location").Placeholder("my-storage:folder").Width(480)
+				if ui.Button(c, "Reload configured storage").Disabled(a.busy).Clicked() {
+					a.loadRemotes()
+				}
+			default:
+				ui.TextInput(c, &a.conn.Endpoint).Label("Storage address").Placeholder("https://storage.example.com").Width(480)
+				ui.TextInput(c, &a.conn.Bucket).Label("Storage name").Width(480)
+				ui.TextInput(c, &a.conn.AccessKey).Label("Access ID").Width(480)
+				ui.TextInput(c, &a.conn.SecretKey).Label("Secret").Password().Width(480)
+			}
+
 			if ui.PrimaryButton(c, "Connect and save").Disabled(a.busy).Clicked() {
 				a.connect()
 			}
 		} else {
-			ui.Text(c, a.conn.Bucket+" / "+a.prefix).FontSize(18).Bold()
+			ui.Text(c, a.storage.bucket+" / "+a.prefix).FontSize(18).Bold()
 			ui.Row(c).Gap(10).Children(func() {
 				if ui.Button(c, "Up").Disabled(a.busy || a.prefix == "").Clicked() {
 					parent := path.Dir(strings.TrimSuffix(a.prefix, "/"))
@@ -152,23 +226,25 @@ func (a *app) view(c *ui.Context) {
 				if ui.Button(c, "Refresh").Disabled(a.busy).Clicked() {
 					a.refresh()
 				}
-				if ui.PrimaryButton(c, "Upload a file…").Disabled(a.busy).Clicked() {
-					go func() {
-						files, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "Upload a file"})
-						a.win.Update(func() {
-							if err != nil {
-								a.status = "Could not open the file picker."
-							} else if len(files) > 0 {
-								a.startUpload(files[0])
-							}
-						})
-					}()
+				if ui.PrimaryButton(c, "Upload a file…").Disabled(a.busy || a.dialogBusy).Clicked() {
+					a.chooseUpload()
 				}
+				if ui.Button(c, "Change storage").Disabled(a.busy || a.dialogBusy).Clicked() {
+					a.storage.close()
+					a.storage = nil
+					a.entries = nil
+					a.visible = nil
+					a.prefix = ""
+					a.conn = connection{Endpoint: "http://127.0.0.1:9400"}
+					a.status = "Connect to your storage to browse files."
+				}
+
 				ui.TextInput(c, &a.search).Label("Search files").Placeholder("Search files").Grow(1)
 				if a.filteredSearch != a.search {
 					a.filter()
 				}
 			})
+			a.actions(c)
 			ui.Row(c).Children(func() {
 				ui.Text(c, "Name").Grow(1).TextColor(t.TextMuted)
 				ui.Text(c, "Size").Width(120).TextColor(t.TextMuted)
@@ -185,7 +261,7 @@ func (a *app) view(c *ui.Context) {
 					}
 					ui.Text(c, name).Grow(1)
 					size := "—"
-					if !e.Folder {
+					if !e.Folder && e.Size >= 0 {
 						size = formatBytes(e.Size)
 					}
 					ui.Text(c, size).Width(120).TextColor(t.TextMuted)
@@ -209,7 +285,11 @@ func (a *app) view(c *ui.Context) {
 					value = float64(a.sent) / float64(a.total)
 				}
 				ui.Progress(c, value).Grow(1)
-				ui.Text(c, formatBytes(a.sent)+" / "+formatBytes(a.total))
+				if a.total >= 0 {
+					ui.Text(c, formatBytes(a.sent)+" / "+formatBytes(a.total))
+				} else {
+					ui.Text(c, formatBytes(a.sent))
+				}
 				if ui.Button(c, "Cancel").Clicked() && a.cancel != nil {
 					a.cancel()
 				}
@@ -235,6 +315,9 @@ func main() {
 			if a.cancel != nil {
 				a.cancel()
 			}
+			if a.storage != nil {
+				a.storage.close()
+			}
 		})
 		if benchmark {
 			go a.benchmark()
@@ -242,18 +325,25 @@ func main() {
 		}
 		go func() {
 			conn, err := loadConnection()
+			var s *storage
+			if err == nil {
+				s, err = newStorage(conn)
+			}
 			a.win.Update(func() {
 				if err == nil {
 					a.conn = conn
-					s, err := newStorage(conn)
-					if err == nil {
-						a.storage = s
-						a.conn.AccessKey = ""
-						a.conn.SecretKey = ""
-						a.refresh()
+					a.storage = s
+					a.conn.AccessKey = ""
+					a.conn.SecretKey = ""
+					if conn.Remote != "" {
+						a.mode = "configured"
+					} else if conn.LocalPath != "" {
+						a.mode = "local"
 					}
+					a.refresh()
 				}
 			})
+
 		}()
 	})
 	if err := mygo.App.Run(); err != nil {

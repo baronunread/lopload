@@ -1,0 +1,6 @@
+2026-10-09 23:30:08.765 spike-mygo-native[4911:286328056] +[IMKClient subclass]: chose IMKClient_Modern
+2026-10-09 23:30:08.765 spike-mygo-native[4911:286328056] +[IMKInputSession subclass]: chose IMKInputSession_Modern
+BENCHMARK_IDLE
+BENCHMARK_UPLOAD_START
+BENCHMARK_UPLOAD_DONE bytes=1073741824 elapsed=16.7553625s
+BENCHMARK_DONE

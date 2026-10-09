@@ -3,37 +3,36 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/minio/minio-go/v7"
+	"github.com/rclone/rclone/fs/object"
+	"github.com/rclone/rclone/fs/operations"
 )
 
 // This opt-in fixture uses only a fresh local MinIO bucket and temporary files.
 func (a *app) benchmark() {
+	defer mygo.App.Quit()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	s, err := newStorage(connection{"http://127.0.0.1:9400", fmt.Sprintf("lopload-native-bench-%d", time.Now().UnixNano()), "minioadmin", "minioadmin"})
+	s, err := newStorage(connection{Endpoint: "http://127.0.0.1:9400", Bucket: fmt.Sprintf("lopload-native-bench-%d", time.Now().UnixNano()), AccessKey: "minioadmin", SecretKey: "minioadmin"})
 	if err != nil {
 		logBenchmarkError(err)
 		return
 	}
-	if err = s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
+	if err = s.backend.Mkdir(ctx, ""); err != nil {
 		logBenchmarkError(err)
 		return
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		for o := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
-			if o.Err == nil {
-				s.client.RemoveObject(ctx, s.bucket, o.Key, minio.RemoveObjectOptions{})
-			}
+		if err := operations.Purge(ctx, s.backend, ""); err != nil {
+			fmt.Printf("BENCHMARK_CLEANUP_FAILED %T\n", err)
 		}
-		s.client.RemoveBucket(ctx, s.bucket)
 	}()
 	dir, err := os.MkdirTemp("", "lopload-native-bench-")
 	if err != nil {
@@ -43,7 +42,7 @@ func (a *app) benchmark() {
 	defer os.RemoveAll(dir)
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("documents/file-%04d.txt", i)
-		if _, err = s.client.PutObject(ctx, s.bucket, key, nil, 0, minio.PutObjectOptions{DisableMultipart: true}); err != nil {
+		if _, err = s.backend.Put(ctx, strings.NewReader(""), object.NewStaticObjectInfo(key, time.Now(), 0, true, nil, nil)); err != nil {
 			logBenchmarkError(err)
 			return
 		}
@@ -102,20 +101,14 @@ func (a *app) benchmark() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	obj, err := s.client.GetObject(ctx, s.bucket, "documents/large.bin", minio.GetObjectOptions{})
-	if err != nil {
-		logBenchmarkError(err)
+	result := make(chan string, 1)
+	a.win.Update(func() { result <- a.status })
+	if !strings.HasPrefix(<-result, "Uploaded ✓") {
+		logBenchmarkError(fmt.Errorf("upload did not verify"))
 		return
 	}
-	n, err := io.Copy(io.Discard, obj)
-	obj.Close()
-	if err != nil || n != 1<<30 {
-		logBenchmarkError(fmt.Errorf("remote read: %d bytes, %v", n, err))
-		return
-	}
-	fmt.Printf("BENCHMARK_UPLOAD_DONE bytes=%d elapsed=%s\n", n, time.Since(started))
+	fmt.Printf("BENCHMARK_UPLOAD_DONE bytes=%d elapsed=%s\n", 1<<30, time.Since(started))
 	time.Sleep(10 * time.Second)
 	fmt.Println("BENCHMARK_DONE")
-	go func() { time.Sleep(time.Second); mygo.App.Quit() }()
 }
-func logBenchmarkError(err error) { fmt.Printf("BENCHMARK_FAILED %T\n", err); mygo.App.Quit() }
+func logBenchmarkError(err error) { fmt.Printf("BENCHMARK_FAILED %T\n", err) }

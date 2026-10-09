@@ -13,33 +13,44 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/zalando/go-keyring"
 )
 
-func testStorage(t *testing.T) *storage {
+func probeClient(t *testing.T) *minio.Client {
 	t.Helper()
-	s, err := newStorage(connection{"http://127.0.0.1:9400", fmt.Sprintf("lopload-native-%d", time.Now().UnixNano()), "minioadmin", "minioadmin"})
+	c, err := minio.New("127.0.0.1:9400", &minio.Options{Creds: credentials.NewStaticV4("minioadmin", "minioadmin", "")})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+func testStorage(t *testing.T) *storage {
+	t.Helper()
+	s, err := newStorage(connection{Endpoint: "http://127.0.0.1:9400", Bucket: fmt.Sprintf("lopload-native-%d", time.Now().UnixNano()), AccessKey: "minioadmin", SecretKey: "minioadmin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.close)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err = s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
+	if err = probeClient(t).MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		for o := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
+		for o := range probeClient(t).ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
 			if o.Err != nil {
 				t.Error(o.Err)
 				continue
 			}
-			if err := s.client.RemoveObject(ctx, s.bucket, o.Key, minio.RemoveObjectOptions{}); err != nil {
+			if err := probeClient(t).RemoveObject(ctx, s.bucket, o.Key, minio.RemoveObjectOptions{}); err != nil {
 				t.Error(err)
 			}
 		}
-		if err := s.client.RemoveBucket(ctx, s.bucket); err != nil {
+		if err := probeClient(t).RemoveBucket(ctx, s.bucket); err != nil {
 			t.Error(err)
 		}
 	})
@@ -73,11 +84,11 @@ func TestNativeStorage(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Size != int64(len(data)) {
 		t.Fatalf("folder %+v, %v", entries, err)
 	}
-	probe, err := newStorage(connection{"http://127.0.0.1:9400", s.bucket, "minioadmin", "minioadmin"})
+	probe := probeClient(t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote, err := probe.client.GetObject(ctx, s.bucket, "folder/sample.bin", minio.GetObjectOptions{})
+	remote, err := probe.GetObject(ctx, s.bucket, "folder/sample.bin", minio.GetObjectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +136,7 @@ func TestNativeStorage(t *testing.T) {
 	}
 }
 func TestKeychainRoundTrip(t *testing.T) {
-	s := connection{"http://127.0.0.1:9400", "native-test", "dummy-access", "dummy-secret"}
+	s := connection{Endpoint: "http://127.0.0.1:9400", Bucket: "native-test", AccessKey: "dummy-access", SecretKey: "dummy-secret"}
 	if err := saveConnection(s); err != nil {
 		t.Fatal(err)
 	}
