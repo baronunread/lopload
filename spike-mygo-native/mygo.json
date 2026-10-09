@@ -1,0 +1,6 @@
+{
+  "name": "spike-mygo-native",
+  "identifier": "com.example.spikemygonative",
+  "version": "0.1.0",
+  "out": "build"
+}
