@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lopload (MyGo spike)</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Lopload · MyGo spike</h1>
+      <p id="status" class="muted">Not connected</p>
+      <form id="connect">
+        <input name="endpoint" placeholder="Endpoint" value="http://127.0.0.1:9400" />
+        <input name="bucket" placeholder="Folder" value="spike" />
+        <input name="accessKey" placeholder="Access key" autocomplete="off" />
+        <input name="secretKey" placeholder="Secret key" type="password" autocomplete="off" />
+        <button type="submit">Save to keychain</button>
+      </form>
+      <p><button id="upload" type="button">Upload a file…</button> <progress id="bar" value="0" max="1"></progress></p>
+      <p id="result" class="card"></p>
+      <ul id="files"></ul>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
