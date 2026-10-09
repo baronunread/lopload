@@ -1,0 +1,10 @@
+{
+  "app_apparent_bytes": 13878777,
+  "dmg_bytes": 4257640,
+  "platform": "macOS-15.3.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "mygo": "0.3.7",
+  "go": "1.27.2",
+  "signing_identity": "Lopload Dev",
+  "notarized": false
+}

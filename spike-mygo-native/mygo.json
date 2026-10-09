@@ -1,6 +1,9 @@
 {
   "name": "spike-mygo-native",
-  "identifier": "com.example.spikemygonative",
+  "identifier": "com.lopload.native-spike",
   "version": "0.1.0",
-  "out": "build"
+  "out": "build",
+  "macos": {
+    "signingIdentity": "Lopload Dev"
+  }
 }
