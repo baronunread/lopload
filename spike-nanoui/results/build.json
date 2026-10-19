@@ -1,0 +1,10 @@
+{
+  "nanoui": "0.1.0 @ 89689589abdd1d2e1ac13b240c1c2a3655788c0c",
+  "zig": "0.17.0",
+  "platform": "macOS 15.3.1 arm64",
+  "binary_bytes_releasesmall": 725184,
+  "binary_bytes_releasesmall_gzip": 351484,
+  "binary_bytes_releasefast": 1412048,
+  "signing": "ad hoc, linker-signed; not notarized; no .app bundle (nanoui has no bundler)",
+  "dynamic_libraries": 13
+}

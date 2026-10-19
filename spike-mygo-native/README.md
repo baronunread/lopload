@@ -56,7 +56,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/lopload-rclone-linux .
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /tmp/lopload-rclone-windows.exe .
 ```
 
-Those platforms have not been launched. Native file dialogs, delete confirmation, provider OAuth refresh, and full manual click-through have not been driven; the corresponding storage operations and the native search/selection view are tested.
+The Windows build (`go tool mygo build -platform windows/amd64`, a 75.2 MB windowed exe) was later launched by the owner on a Windows machine against the same MinIO and reported working; the individual checks (keychain, dialogs, upload, cancel) were not itemized or recorded. Linux has still not been launched. Native file dialogs, delete confirmation, provider OAuth refresh, and full manual click-through have not been driven; the corresponding storage operations and the native search/selection view are tested.
 
 ## Loaded-app benchmark
 

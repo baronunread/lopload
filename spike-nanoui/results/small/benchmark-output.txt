@@ -1,0 +1,6 @@
+2026-10-19 01:12:56.755 lopload-nanoui[45187:345033849] +[IMKClient subclass]: chose IMKClient_Modern
+2026-10-19 01:12:56.755 lopload-nanoui[45187:345033849] +[IMKInputSession subclass]: chose IMKInputSession_Modern
+BENCHMARK_IDLE
+BENCHMARK_UPLOAD_START
+BENCHMARK_UPLOAD_DONE bytes=1073741824 elapsed_ms=4595
+BENCHMARK_DONE
